@@ -321,7 +321,15 @@ func (c *connector) Connect(ctx context.Context, sampleRate int) (stt.Stream, er
 	}
 	// The pipeline closes turns, by having the session finalize when its VAD
 	// reports the speech over.
-	return &externalStream{stream: s}, nil
+	return &externalStream{stream: s, requestFinalize: c.requestFinalize}, nil
+}
+
+// requestFinalize records with the service that Speechmatics was asked to
+// close the turn, so the segment answering it confirms the finalize.
+func (c *connector) requestFinalize() {
+	if c.svc != nil {
+		c.svc.RequestFinalize()
+	}
 }
 
 // startRecognition is the StartRecognition message a session opens with. The
@@ -503,13 +511,20 @@ type stream struct {
 // when the VAD reports the speech over.
 type externalStream struct {
 	*stream
+	// requestFinalize records a finalize asked for with the service; nil for a
+	// stream built outside Connect.
+	requestFinalize func()
 }
 
 // Finalize closes the current turn, implementing stt.Finalizer. It sends
 // ForceEndOfUtterance stamped with the audio sent so far, so Speechmatics
 // closes the turn where the VAD heard the speech end rather than wherever the
-// message lands. The segment it flushes arrives as a normal AddSegment.
+// message lands. The segment it flushes arrives as a normal AddSegment, and
+// confirms the finalize recorded with the service before the message goes out.
 func (s *externalStream) Finalize() error {
+	if s.requestFinalize != nil {
+		s.requestFinalize()
+	}
 	seconds := float64(s.audioBytes.Load()) / float64(s.sampleRate*bytesPerSample)
 	return s.writeJSON(map[string]any{fieldMessage: "ForceEndOfUtterance", "timestamp": seconds})
 }

@@ -314,12 +314,14 @@ func WithToolChangeMessages() Option {
 // overrule that, on for a service that does not announce itself and off to keep
 // the cascaded behavior with one that does.
 //
-// The mode changes two things. The turn strategies lose their transcript
+// The mode changes three things. The turn strategies lose their transcript
 // dependence, since the service is answering the audio and a transcript only
-// delays the turn. And the user's message is written to the conversation when
-// the assistant starts responding rather than when the turn ends, because a
+// delays the turn. The user's message is written to the conversation when the
+// assistant starts responding rather than when the turn ends, because a
 // realtime service delivers the user's transcript late, sometimes only after it
-// has begun answering.
+// has begun answering. And an LLMMessagesAppendFrame goes on to the service,
+// which takes its messages into its session, and to the assistant aggregator,
+// which adds them to the context and decides when the model answers them.
 func WithRealtimeServiceMode(on bool) Option {
 	return func(o *options) { o.realtime = &on }
 }
@@ -723,11 +725,13 @@ func (u *UserAggregator) handleFrame(ctx context.Context, f frames.Frame, dir pr
 	}
 
 	switch fr := f.(type) {
-	case *frames.InterimTranscriptionFrame, *frames.TranslationFrame, *frames.EagerTranscriptionFrame:
+	case *frames.InterimTranscriptionFrame, *frames.TranscriptionFinalizedFrame,
+		*frames.TranslationFrame, *frames.EagerTranscriptionFrame:
 		// Consumed here, like the final transcript below: partial speech is not
 		// aggregated either, and the turn strategies that read it run inside this
 		// processor. What is downstream is the model, which is given the
-		// conversation rather than the transcripts it was built from.
+		// conversation rather than the transcripts it was built from. A
+		// finalization confirmed without text is consumed for the same reason.
 		//
 		// A translation is consumed for the same reason and never aggregated:
 		// only the transcription is the user's own words, so a provider that
@@ -970,7 +974,9 @@ func (u *UserAggregator) warnOnDiscardedInterruptionSetting(
 // would never learn that the tools it may call had changed, so that one frame
 // travels on. The message changes are consumed: the aggregators share the
 // context, so a frame that reached one of them has already been applied, and
-// forwarding it would let the other apply it a second time.
+// forwarding it would let the other apply it a second time. The one exception
+// is an append in realtime mode, which goes on to the service instead of being
+// applied here (see realtimeHandleMessagesAppend).
 func (u *UserAggregator) handleContextUpdate(
 	ctx context.Context, f frames.Frame, dir processor.Direction,
 ) error {
@@ -978,6 +984,9 @@ func (u *UserAggregator) handleContextUpdate(
 
 	switch fr := f.(type) {
 	case *frames.LLMMessagesAppendFrame:
+		if u.realtimeMode() {
+			return u.realtimeHandleMessagesAppend(ctx, fr)
+		}
 		// The turn-completion re-prompt appends a message to the context before a
 		// follow-up LLMRunFrame; a conversation flow appends the node's objective
 		// on entry.
@@ -1013,6 +1022,36 @@ func (u *UserAggregator) handleContextUpdate(
 		return u.PushFrame(ctx, frames.NewLLMContextFrame(u.context), processor.Downstream)
 	}
 	return nil
+}
+
+// realtimeHandleMessagesAppend passes appended messages on, so the realtime
+// service can take them in straight away.
+//
+// In a cascade pipeline, the user aggregator handles an appended message: it
+// adds it to the context and triggers an LLM run. In a realtime pipeline, it
+// passes the append on. The realtime service takes the messages into its
+// session straight away, and the assistant aggregator adds them to the context
+// and decides when the model should answer them, waiting for the bot and the
+// user to stop talking. (The paths differ because a cascade LLM only reads new
+// messages when it runs, while a realtime service takes them in without
+// answering, so they are already in its session for whatever it answers next.)
+//
+// Why the service takes the messages from the frame, not from the context:
+//
+//   - Timing. A realtime service does not wait for a context frame before it
+//     answers the user. It answers as soon as the user stops talking, using only
+//     what is already in its session. The assistant aggregator may send the
+//     context much later (after the bot finishes speaking, for example), or not
+//     at all (when the append does not ask the model to answer). Messages that
+//     only arrived with the context could miss the model's next answer.
+//   - Telling messages apart. The user's own speech also ends up in the
+//     context, sometimes late. The service has already heard that speech, so it
+//     must not send it again, but in the context it looks just like an appended
+//     message.
+func (u *UserAggregator) realtimeHandleMessagesAppend(
+	ctx context.Context, fr *frames.LLMMessagesAppendFrame,
+) error {
+	return u.PushFrame(ctx, fr, processor.Downstream)
 }
 
 // appendMessages adds messages to the context as they were written. The role
@@ -1194,7 +1233,8 @@ func (u *UserAggregator) runLLM(ctx context.Context, feed func(frames.Frame)) er
 // AssistantAggregator collects the LLM's streamed text into a single assistant
 // message and appends it to the context when the response completes. If the
 // response is interrupted (barge-in), the partial text gathered so far is
-// committed so the context reflects what the bot actually said. The response
+// committed so the context reflects what the bot actually said, including the
+// words already queued behind the point the interruption overtook. The response
 // fields are touched from both the process goroutine (text frames) and the
 // input goroutine (the InterruptionFrame system frame), so they are
 // mutex-guarded.
@@ -1241,6 +1281,9 @@ type AssistantAggregator struct {
 	// that speech. It doubles as the flag because a turn is reported with the
 	// moment it began, so the two can never disagree.
 	turnStartedAt string
+	// turnInterrupted is set when an interruption cuts the open turn short, until
+	// the turn closes.
+	turnInterrupted bool
 	// inProgress holds every tool call of the current turn that has not reported
 	// a final result yet, keyed by tool call id. The value is nil between the
 	// FunctionCallsStartedFrame that announced the call and the
@@ -1432,7 +1475,8 @@ func (a *AssistantAggregator) route(ctx context.Context, f frames.Frame, dir pro
 		a.routeThought(ctx, f)
 		return nil
 	case *frames.LLMAssistantPushAggregationFrame, *frames.LLMFullResponseEndFrame,
-		*frames.EndFrame, *frames.CancelFrame, *frames.InterruptionFrame:
+		*frames.EndFrame, *frames.CancelFrame, *frames.InterruptionFrame,
+		*assistantTurnInterruptedFrame:
 		a.writeUserMessageBeforeClosing(ctx, f)
 		if err := a.closeTurn(ctx, f); err != nil {
 			return err
@@ -1489,7 +1533,7 @@ func (a *AssistantAggregator) pass(ctx context.Context, f frames.Frame, dir proc
 func consumedHere(f frames.Frame) bool {
 	switch f.(type) {
 	case *frames.LLMFullResponseStartFrame, *frames.LLMFullResponseEndFrame,
-		*frames.LLMAssistantPushAggregationFrame,
+		*frames.LLMAssistantPushAggregationFrame, *assistantTurnInterruptedFrame,
 		*frames.TextFrame, *frames.LLMTextFrame, *frames.TTSTextFrame, *frames.AggregatedTextFrame:
 		return true
 	}
@@ -1535,7 +1579,9 @@ func (a *AssistantAggregator) userHalfResolves(f frames.Frame) bool {
 //
 // A response ending and an utterance ending are the turn finishing. An
 // interruption and a cancellation cut it off, so what the bot said is not what
-// it meant to say, and the turn is reported as interrupted. The session ending
+// it meant to say, and the turn is reported as interrupted. An interruption
+// closes the turn only once the words queued ahead of it are in: it queues the
+// frame that closes it behind them (see handleInterruptions). The session ending
 // closes the turn out where it stands rather than losing it with the processor.
 func (a *AssistantAggregator) closeTurn(ctx context.Context, f frames.Frame) error {
 	switch f.(type) {
@@ -1552,7 +1598,9 @@ func (a *AssistantAggregator) closeTurn(ctx context.Context, f frames.Frame) err
 		// left alone: each already has a placeholder result in the context, so the
 		// turn is balanced as it stands, and the LLM service resolves them by
 		// canceling the calls it registered to cancel.
-		return a.commitInterrupted(ctx)
+		return a.handleInterruptions(ctx)
+	case *assistantTurnInterruptedFrame:
+		return a.handleAssistantTurnInterrupted(ctx)
 	default:
 		return a.commit(ctx, false)
 	}
@@ -1607,7 +1655,7 @@ func (a *AssistantAggregator) routeText(f frames.Frame) {
 func (a *AssistantAggregator) startThought(fr *frames.LLMThoughtStartFrame) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.thought = nil
+	a.resetThought()
 	a.thoughtToContext = fr.AppendToContext
 	a.thoughtLLM = fr.LLM
 	a.thoughtStarted = frames.NowTimestamp()
@@ -1742,7 +1790,9 @@ func (a *AssistantAggregator) handleContextUpdate(ctx context.Context, f frames.
 // pipeline, and runs the model on them when asked. It is what the LLM service's
 // own re-prompt reaches: the service pushes it downstream, so it arrives here
 // rather than at the user aggregator, and the run it asks for has to travel back
-// upstream to the service.
+// upstream to the service. In realtime mode it is also where an append queued
+// upstream of the user aggregator lands, since the user half passes it on to
+// the service rather than applying it.
 //
 // A run it asks for is treated as a tool result's is: held while the bot speaks,
 // owed while the user speaks, and bundled with the appends and results queued
@@ -1750,8 +1800,9 @@ func (a *AssistantAggregator) handleContextUpdate(ctx context.Context, f frames.
 // a conversation that lacks the answer in progress, and the model would answer
 // it again.
 //
-// The frame is consumed, like its counterpart on the user side, so a
-// conversation both halves share is never appended to twice.
+// The frame is consumed, so a conversation both halves share is never appended
+// to twice: the user half applies an append and consumes it, or, in realtime
+// mode, passes it on without applying it.
 func (a *AssistantAggregator) handleMessagesAppend(ctx context.Context, fr *frames.LLMMessagesAppendFrame) error {
 	for _, m := range fr.Messages {
 		a.context.AddMessage(m)
@@ -2332,6 +2383,12 @@ func (a *AssistantAggregator) commit(ctx context.Context, interrupted bool) erro
 	a.mu.Lock()
 	startedAt := a.turnStartedAt
 	a.turnStartedAt = ""
+	if startedAt != "" {
+		// Whichever frame closes it, a turn cut short by an interruption is
+		// reported as interrupted.
+		interrupted = interrupted || a.turnInterrupted
+		a.turnInterrupted = false
+	}
 	a.mu.Unlock()
 	if startedAt == "" {
 		return nil
@@ -2508,10 +2565,54 @@ func (a *AssistantAggregator) maybeAppendImageToContext(ctx context.Context, fr 
 	return true
 }
 
-// commitInterrupted closes out a turn cut off by an interruption: whatever the
-// bot had said by then is committed, so the context reflects what was actually
-// heard, and anything left over is dropped rather than carried into the next
-// turn.
+// assistantTurnInterruptedFrame closes an interrupted assistant turn after the
+// text queued ahead of it.
+//
+// The assistant aggregator queues this to itself on an interruption, so the
+// words already played to the user are added to the turn before it closes.
+type assistantTurnInterruptedFrame struct {
+	frames.BaseControlFrame
+}
+
+func newAssistantTurnInterruptedFrame() *assistantTurnInterruptedFrame {
+	return &assistantTurnInterruptedFrame{
+		BaseControlFrame: frames.NewBaseControlFrame("AssistantTurnInterruptedFrame"),
+	}
+}
+
+// handleInterruptions starts closing out a turn cut off by an interruption.
+//
+// The output transport releases each word downstream as it is played, and the
+// InterruptionFrame is a system frame, so it jumps ahead of the text frames
+// already waiting in this processor's queue. The user already heard those
+// words. Instead of closing the turn now, a frame is queued behind them, so they
+// are added to this turn before it closes. With no turn open, the aggregation is
+// reset straight away.
+func (a *AssistantAggregator) handleInterruptions(ctx context.Context) error {
+	a.mu.Lock()
+	// The output transport sends a BotStoppedSpeakingFrame right after the
+	// interruption, and it is handled before the turn closes. Drop the context
+	// push waiting for it: it belongs to the canceled response.
+	a.pushOnBotStopped = false
+	open := a.turnStartedAt != ""
+	if open {
+		a.turnInterrupted = true
+	}
+	a.mu.Unlock()
+
+	if !open {
+		a.reset()
+		return nil
+	}
+	return a.QueueFrame(ctx, newAssistantTurnInterruptedFrame(), processor.Downstream)
+}
+
+// handleAssistantTurnInterrupted closes out the interrupted turn once the words
+// queued ahead of the interruption are in: whatever the bot had said by then is
+// committed, so the context reflects what was actually heard, and anything left
+// over is dropped rather than carried into the next turn. The turn's own end
+// frame may have been waiting in the queue too, and already closed it, in which
+// case there is nothing left to do.
 //
 // It does no tool balancing. Every call in flight already has a message
 // answering it, written when the call started, so the context is valid as it
@@ -2519,14 +2620,34 @@ func (a *AssistantAggregator) maybeAppendImageToContext(ctx context.Context, fr 
 // which marks that message canceled where it sits. Appending anything here
 // instead would put it after whatever a new user turn has meanwhile added,
 // separating a result from the call it answers for the rest of the session.
-func (a *AssistantAggregator) commitInterrupted(ctx context.Context) error {
+func (a *AssistantAggregator) handleAssistantTurnInterrupted(ctx context.Context) error {
+	a.mu.Lock()
+	interrupted := a.turnInterrupted
+	a.mu.Unlock()
+	if !interrupted {
+		return nil
+	}
 	err := a.commit(ctx, true)
+	a.reset()
+	return err
+}
+
+// reset drops what the turn has gathered and not written, the thought being
+// collected, and any run a tool result or an appended message deferred or owes.
+func (a *AssistantAggregator) reset() {
 	a.mu.Lock()
 	a.aggregation = nil
+	a.resetThought()
 	a.pushOnBotStopped = false
 	a.contextPushOwed = false
 	a.mu.Unlock()
-	return err
+}
+
+// resetThought drops the thought being collected. The caller holds mu.
+func (a *AssistantAggregator) resetThought() {
+	a.thought = nil
+	a.thoughtToContext = false
+	a.thoughtLLM = ""
 }
 
 // suppressed runs the mute strategies and reports whether this user-input frame
@@ -2583,7 +2704,8 @@ func isUserInput(f frames.Frame) bool {
 		*frames.UserStartedSpeakingFrame, *frames.UserStoppedSpeakingFrame,
 		frames.InputAudioFrame,
 		*frames.InterimTranscriptionFrame, *frames.TranscriptionFrame,
-		*frames.EagerTranscriptionFrame, *frames.UserBackchannelFrame:
+		*frames.TranscriptionFinalizedFrame, *frames.EagerTranscriptionFrame,
+		*frames.UserBackchannelFrame:
 		return true
 	}
 	return false
@@ -2594,12 +2716,17 @@ func isUserInput(f frames.Frame) bool {
 // aggregation and the strategies on its way out, while the upstream copy goes
 // straight to the neighbor.
 //
-// The two copies are unrelated frames rather than a paired broadcast. The
-// downstream one has not been sent anywhere yet: it still has to be handled
-// here, and whether it travels on at all is for that handling to decide.
+// The two copies are marked as broadcast siblings, as Broadcast marks them, so
+// observers report the moment once. The downstream one has not been sent
+// anywhere yet: it still has to be handled here, and whether it travels on at
+// all is for that handling to decide. A muted user's copy is dropped there,
+// and observers skip the upstream sibling, so the moment goes unreported.
 func (u *UserAggregator) queuedBroadcast(ctx context.Context, build func() frames.Frame) {
-	_ = u.QueueFrame(ctx, build(), processor.Downstream)
-	_ = u.PushFrame(ctx, build(), processor.Upstream)
+	down, up := build(), build()
+	down.Base().SetBroadcastSiblingID(up.ID())
+	up.Base().SetBroadcastSiblingID(down.ID())
+	_ = u.QueueFrame(ctx, down, processor.Downstream)
+	_ = u.PushFrame(ctx, up, processor.Upstream)
 }
 
 // Push implements turns.Emitter.

@@ -106,6 +106,23 @@ func TestAnAppendedMessageGoesInAsTextInteractiveAsAsked(t *testing.T) {
 	}
 }
 
+func TestNothingIsAppendedBeforeTheSessionIsSetUp(t *testing.T) {
+	h, st := liveStream(t)
+	// A stream and a prompt, but the audio input not opened yet.
+	h.s.mu.Lock()
+	h.s.audioInputStarted = false
+	h.s.mu.Unlock()
+	before := len(st.texts())
+
+	run := frames.NewLLMMessagesAppendFrame([]frames.Message{{Role: frames.RoleDeveloper, Text: "Backend: On it."}})
+	run.RunLLM = true
+	h.s.handleMessagesAppend(context.Background(), run)
+
+	if got := textsAfterSetup(st, before); len(got) != 0 {
+		t.Errorf("texts = %+v, want none", got)
+	}
+}
+
 // Ports of tests/test_nova_sonic_usage_metrics.py: a usage event reports its
 // delta, the speech and text tokens of each direction added together.
 

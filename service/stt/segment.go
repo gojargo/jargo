@@ -153,12 +153,10 @@ func NewSegment(name string, tr Transcriber, sampleRate int) *SegmentService {
 			VADEnabled: true,
 		}
 	})
-	s.ttfb.onReport = func(d time.Duration, end time.Time) {
-		s.tracer.recordTTFB(d)
-		// A wait that ended without the transcript it was for leaves a segment
-		// nothing will close, so it is closed here at the moment measured to.
-		s.tracer.abandon(end)
-	}
+	s.ttfb.onReport = s.tracer.recordTTFB
+	// A wait that ended without the transcript it was for leaves a segment
+	// nothing will close, so it is closed here at the moment measured to.
+	s.ttfb.onGiveUp = s.tracer.abandon
 	return s
 }
 
@@ -441,21 +439,30 @@ func (s *SegmentService) segmentTask(ctx context.Context) {
 //
 // The segment's span is opened before the transcript is pushed and written after
 // it. Opening first is what lets the metrics frame that the timing raises, which
-// is pushed from inside this call, find the span it belongs to already open.
+// is pushed from inside this call, find the span it belongs to already open. A
+// TranscriptionFinalizedFrame ends the wait and closes the span the way a
+// finalized transcript does.
 func (s *SegmentService) PushFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
-	tf, isTranscript := f.(*frames.TranscriptionFrame)
-	if isTranscript {
+	switch fr := f.(type) {
+	case *frames.TranscriptionFrame:
 		s.mu.Lock()
-		tf.Finalized = s.transcribingSegment == s.segmentCount && !s.hasMoreTranscripts
+		fr.Finalized = s.transcribingSegment == s.segmentCount && !s.hasMoreTranscripts
 		s.mu.Unlock()
 		s.tracer.open()
-		s.ttfb.transcript(ctx, tf.Finalized)
+		s.ttfb.transcript(ctx, fr.Finalized)
+		err := s.Base.PushFrame(ctx, f, dir)
+		s.tracer.record(fr)
+		return err
+	case *frames.TranscriptionFinalizedFrame:
+		// A confirmation that nothing more is coming ends the wait and the span
+		// the way a finalized transcript does.
+		s.ttfb.reportNow(ctx)
+		err := s.Base.PushFrame(ctx, f, dir)
+		s.tracer.finalized()
+		return err
+	default:
+		return s.Base.PushFrame(ctx, f, dir)
 	}
-	err := s.Base.PushFrame(ctx, f, dir)
-	if isTranscript {
-		s.tracer.record(tf)
-	}
-	return err
 }
 
 // ServiceMetadataFrame implements service.MetadataDescriber, describing this

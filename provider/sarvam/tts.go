@@ -600,8 +600,8 @@ type ttsMessage struct {
 // a message belongs to, so it is taken to be the context playing.
 //
 // The final event says the context's synthesis is complete, which ends it at
-// once rather than after the stop-frame timeout. An error is reported, and
-// handed to the context playing.
+// once rather than after the stop-frame timeout. An error is reported, with the
+// request ID Sarvam gives it, and handed to the context playing.
 func (s *synthesizer) handleMessage(ctx context.Context, data []byte) error {
 	var m ttsMessage
 	if err := json.Unmarshal(data, &m); err != nil {
@@ -613,7 +613,6 @@ func (s *synthesizer) handleMessage(ctx context.Context, data []byte) error {
 	contextID := s.svc.ActiveAudioContextID()
 	switch {
 	case m.Type == "audio":
-		slog.Debug("sarvam tts: audio", "request", m.Data.RequestID, "context", contextID)
 		pcm, err := base64.StdEncoding.DecodeString(m.Data.Audio)
 		if err != nil {
 			return fmt.Errorf("sarvam tts: decode audio: %w", err)
@@ -631,6 +630,9 @@ func (s *synthesizer) handleMessage(ctx context.Context, data []byte) error {
 		}
 	case m.Type == "error":
 		msg := "TTS Error: " + m.Data.Message
+		if m.Data.RequestID != "" {
+			msg += " (request ID: " + m.Data.RequestID + ")"
+		}
 		s.host.PushError(ctx, msg, nil, false)
 		if lower := strings.ToLower(m.Data.Message); strings.Contains(lower, "too long") ||
 			strings.Contains(lower, "timeout") {

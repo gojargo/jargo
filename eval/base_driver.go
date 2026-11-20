@@ -46,6 +46,10 @@ type baseDriver struct {
 	progress func(Progress)
 }
 
+// botMetrics is the metrics reports the bot sent during the run, for the
+// result: each one's time and data.
+func (d *baseDriver) botMetrics() []BotMetricsReport { return botMetricsOf(d.stream) }
+
 // close closes the judge, once the run has ended.
 func (d *baseDriver) close(ctx context.Context) {
 	if d.judge != nil {

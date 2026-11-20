@@ -146,7 +146,12 @@ func NewSTT(cfg Config) *stt.StreamService {
 	if cfg.BaseURL == "" {
 		cfg.BaseURL = defaultHost
 	}
-	return stt.NewStream("DeepgramSTT", &connector{cfg: cfg, live: newSettings(cfg)}, cfg.SampleRate)
+	c := &connector{cfg: cfg, live: newSettings(cfg)}
+	svc := stt.NewStream("DeepgramSTT", c, cfg.SampleRate)
+	// The connector is handed the service it drives, so a session can record
+	// the finalize it asks for, which Deepgram's answer then confirms.
+	c.svc = svc
+	return svc
 }
 
 // deepgramLanguage maps a Language to Deepgram's code. Deepgram uses BCP-47
@@ -337,6 +342,17 @@ type connector struct {
 	// closeStreamTimeout bounds telling Deepgram a session is ending; zero
 	// takes wsutil.DefaultCloseTimeout. Held here so a test can shorten it.
 	closeStreamTimeout time.Duration
+	// svc is the service this connector drives, for recording the finalizes
+	// its sessions ask for. It is nil for a connector built outside NewSTT.
+	svc *stt.StreamService
+}
+
+// requestFinalize records with the service that Deepgram was asked to
+// finalize, so the answer marked from_finalize confirms it.
+func (c *connector) requestFinalize() {
+	if c.svc != nil {
+		c.svc.RequestFinalize()
+	}
 }
 
 // Metadata reports the model transcription is billed against, and the
@@ -377,7 +393,10 @@ func (c *connector) Connect(ctx context.Context, sampleRate int) (stt.Stream, er
 	if err != nil {
 		return nil, err
 	}
-	s := &stream{conn: conn, ctx: ctx, stop: make(chan struct{}), closeWait: c.closeStreamTimeout}
+	s := &stream{
+		conn: conn, ctx: ctx, stop: make(chan struct{}), closeWait: c.closeStreamTimeout,
+		requestFinalize: c.requestFinalize,
+	}
 	s.wg.Go(s.keepAlive)
 	return s, nil
 }
@@ -393,6 +412,9 @@ type stream struct {
 	closeOnce sync.Once
 	// closeWait bounds telling Deepgram the session is ending.
 	closeWait time.Duration
+	// requestFinalize records a finalize asked for with the service; nil for a
+	// stream built outside Connect.
+	requestFinalize func()
 }
 
 // dgMessage is the subset of Deepgram's live transcription result we use.
@@ -451,23 +473,31 @@ func (s *stream) Recv() ([]stt.Result, error) {
 		}
 		text := m.Channel.Alternatives[0].Transcript
 		// A finalize Deepgram answers with nothing left to say still confirms
-		// the flush, and the confirmation is what closes the utterance the
-		// transcript already sent belongs to.
+		// the flush: its own endpointing sent the transcript before the
+		// finalize was asked for, and the confirmation is what closes the
+		// utterance that transcript belongs to.
 		confirms := m.IsFinal && m.FromFinalize
 		if text == "" && !confirms {
 			continue
 		}
-		return []stt.Result{{Text: text, Final: m.IsFinal, FromFinalize: m.FromFinalize}}, nil
+		return []stt.Result{{
+			Text: text, Final: m.IsFinal, FromFinalize: m.FromFinalize,
+			PushFinalized: text == "" && confirms,
+		}}, nil
 	}
 }
 
 // Finalize asks Deepgram to transcribe what it is holding rather than wait on
 // its own endpointing, which is what the VAD reporting the speech ended calls
-// for. Deepgram answers with a result marked from_finalize, and that answer is
+// for. The request is recorded with the service before it goes out, and
+// Deepgram answers with a result marked from_finalize, which confirms it and is
 // what closes the utterance.
 //
 // https://developers.deepgram.com/docs/finalize
 func (s *stream) Finalize() error {
+	if s.requestFinalize != nil {
+		s.requestFinalize()
+	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	return s.conn.Write(s.ctx, websocket.MessageText, []byte(`{"type":"Finalize"}`))

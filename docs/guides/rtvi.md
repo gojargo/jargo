@@ -83,9 +83,10 @@ bot's response, is not sent them.
 | `client-ready` → `bot-ready` | The handshake. |
 | `user-transcription` | What the user said (interim and final). Deprecated: read `user-input` or `stt-raw-text`. |
 | `user-input` | What the user said or typed: transcriptions (interim and final), backchannels, and the text sent with `send-text`, acknowledged with its id and, when the transport knows, its sender. In an [expressive conversation](expressive-conversation.md#perception) (alpha), a transcription with a reading of how the user spoke carries it in `perception`. |
-| `bot-transcription` | What the bot said. |
+| `bot-transcription` | What the bot's LLM said, a sentence at a time. Deprecated: read `bot-output`, which carries the same sentences along with whether and how far the bot has spoken them. |
 | `bot-llm-text` / `bot-tts-text` | Streamed response text, per stage. Deprecated: read `llm-raw-text` and `tts-raw-text`. |
 | `stt-raw-text` / `llm-raw-text` / `tts-raw-text` | The text each service produced, as it produced it. Off by default, and only sent to clients of protocol 2.2.0 or later. |
+| `bot-output` | What the bot says, a segment at a time, with whether and how far it has spoken it. |
 | `user-started-speaking` / `user-stopped-speaking` | Turn boundaries. |
 | `vad-user-started-speaking` / `vad-user-stopped-speaking` | The raw VAD signal, off by default. |
 | `bot-started-speaking` / `bot-stopped-speaking` | Bot speech boundaries. |
@@ -97,7 +98,7 @@ bot's response, is not sent them.
 | `dtmf` | Client presses keypad keys. |
 | `metrics` | TTFB, processing time, token usage. |
 | `send-text` | Client sends text instead of speech. |
-| `raw-audio` / `raw-audio-batch` | Client sends audio it captured itself. |
+| `raw-audio` / `raw-audio-batch` | Client sends audio it captured itself: 16-bit PCM, base64-encoded, with its `sampleRate` and `numChannels`. A malformed one gets an `error-response`, and a batch with a bad chunk pushes none of its audio. |
 | `disconnect-bot` | Client hangs up; the pipeline ends gracefully. |
 | `llm-function-call-result` | Result of a tool the client ran for the bot. |
 | `client-message` → `server-response` | Anything else the client asks, and the answer. |
@@ -107,6 +108,27 @@ bot's response, is not sent them.
 
 The constants live in `processor/rtvi` (`rtvi.TypeUserTranscription` and so on),
 so you do not hand-write the strings.
+
+With an STT service's diarization on, the `user-input` and `stt-raw-text`
+messages of a transcription carry who said it in `speaker`: the provider's
+label and the speaker's number, 1 for whoever spoke first, such as
+`"speaker": {"label": "B", "number": 2}`. It is left out when diarization is
+off. `user_id` is the transport's participant, not the speaker. The deprecated
+`user-transcription` does not carry it.
+
+### What the server accepts
+
+A client message the server cannot carry out, of an unknown type or with data
+that does not match its payload (a required field missing, or a field of the
+wrong type), gets an `error-response` carrying its id. A message labeled
+`rtvi-ai` that is not an RTVI message at all, such as one without an id, gets an
+`error`, since there is no id to answer. A message without the label is
+ignored.
+
+A receiver ignores the fields and message types it does not know, so a later
+protocol version can add them: the server ignores an unknown field in a client
+message's data, and the client side (`transport/wsclient/rtviclient`) skips a
+server message it has no mapping for.
 
 ### Messages of your own
 

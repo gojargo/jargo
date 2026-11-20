@@ -1,12 +1,15 @@
 package eval
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -54,6 +57,11 @@ import (
 //	user_backchannel           user-input of type backchannel: a short acknowledgment
 //	                           the user said while the bot talked, which neither
 //	                           interrupted it nor reached the LLM
+//	metrics                    metrics: what the bot's processors measured (TTFB,
+//	                           processing time, usage), as sent, under "data";
+//	                           kept in Metrics and out of the events seen
+//	server_message             server-message: a message of the bot's own making,
+//	                           with its "data" and, as "text", the data as JSON
 //	expression                 bot-output in expressive conversation: the expression
 //	                           the bot's TTS performed, in the tags the LLM writes
 //
@@ -143,6 +151,10 @@ type EventStream struct {
 	claimed map[int]bool
 	// Every event in arrival order, for the result's diagnostics.
 	eventsSeen []map[string]any
+	// Every metrics event the bot sent, in arrival order. Kept apart from
+	// eventsSeen: a bot reports several per turn, and they are measurements to
+	// read rather than the behavior a failed run is diagnosed from.
+	metrics []map[string]any
 	// When each event type last arrived, for send_after anchoring.
 	latestEventTimes map[string]time.Time
 	// The bot's LLM text for the current response, emitted as one llm_response
@@ -394,6 +406,7 @@ func (s *EventStream) WaitBotQuiet(ctx context.Context, timeout time.Duration) b
 
 // Append queues an event for the drivers. It stamps its arrival time as "at"
 // (seconds since the stream began) unless it has one, records it, and logs it.
+// A metrics event is recorded in Metrics rather than EventsSeen.
 func (s *EventStream) Append(event map[string]any) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -405,11 +418,19 @@ func (s *EventStream) appendLocked(event map[string]any) {
 		event["at"] = s.elapsedLocked()
 	}
 	s.lastActivity = time.Now()
-	s.eventsSeen = append(s.eventsSeen, event)
 	eventType, _ := event[keyType].(string)
+	var preview string
+	if eventType == EventMetrics {
+		s.metrics = append(s.metrics, event)
+		kinds, _ := event[keyData].(map[string]any)
+		preview = strings.Join(slices.Sorted(maps.Keys(kinds)), ", ")
+	} else {
+		s.eventsSeen = append(s.eventsSeen, event)
+		preview = eventPreview(event)
+	}
 	s.latestEventTimes[eventType] = time.Now()
 	line := "event: " + eventType
-	if preview := eventPreview(event); preview != "" {
+	if preview != "" {
 		line += fmt.Sprintf("  %q", preview)
 	}
 	s.trace.Log(line)
@@ -623,6 +644,13 @@ func (s *EventStream) EventsSeen() []map[string]any {
 	return slices.Clone(s.eventsSeen)
 }
 
+// Metrics is every metrics event the bot sent, in arrival order.
+func (s *EventStream) Metrics() []map[string]any {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.metrics)
+}
+
 // LatestEventTime is when an event of eventType last arrived, and whether one
 // has at all.
 func (s *EventStream) LatestEventTime(eventType string) (time.Time, bool) {
@@ -661,7 +689,7 @@ func (s *EventStream) FrameToEvent(f frames.Frame) map[string]any {
 		if err := json.Unmarshal(fr.Message, &message); err != nil {
 			return nil
 		}
-		event := s.messageToEventLocked(message)
+		event := s.messageToEventLocked(message, fr.Message)
 		if event != nil && slices.ContainsFunc(interruptionEvents, func(t string) bool { return event[keyType] == t }) {
 			s.interruptedLocked()
 		}
@@ -760,6 +788,9 @@ const (
 	keyText       = "text"
 	keyTranscript = "transcript"
 	keyArgs       = "args"
+	// keyData is what a metrics or server_message event carries, as the bot
+	// sent it: the data of its message.
+	keyData = "data"
 	// keyCanceled says, in a call event's args, whether the call was canceled,
 	// as the protocol spells it.
 	keyCanceled = "cancelled" //nolint:misspell // the protocol's spelling
@@ -860,11 +891,11 @@ func (s *EventStream) interruptedLocked() {
 	s.signalLocked()
 }
 
-// messageToEventLocked maps one of the bot's reports about the harness to its
-// event, if any.
-func (s *EventStream) messageToEventLocked(message map[string]any) map[string]any {
+// messageToEventLocked maps one of the bot's messages to its event, if any. raw
+// is the message as it arrived, message the same decoded.
+func (s *EventStream) messageToEventLocked(message map[string]any, raw []byte) map[string]any {
 	msgType, _ := message[keyType].(string)
-	data, _ := message["data"].(map[string]any)
+	data, _ := message[keyData].(map[string]any)
 	switch msgType {
 	case rtvi.TypeUserStartedSpeaking:
 		return map[string]any{keyType: EventUserStartedSpeaking}
@@ -883,12 +914,127 @@ func (s *EventStream) messageToEventLocked(message map[string]any) map[string]an
 		return s.expressionEventLocked(data)
 	case rtvi.TypeUserInput:
 		return userInputEvent(data)
+	case rtvi.TypeMetrics:
+		if data == nil {
+			data = map[string]any{}
+		}
+		return map[string]any{keyType: EventMetrics, keyData: data}
+	case rtvi.TypeServerMessage:
+		return serverMessageEvent(message[keyData], raw)
 	case evalws.BotImageType:
 		return map[string]any{
 			keyType: EventImage, "width": data["width"], "height": data["height"], "format": data["format"],
 		}
 	}
 	return nil
+}
+
+// serverMessageEvent is a message of the bot's own making, from a
+// server-message: data, in any JSON shape, and raw, the message it came in.
+//
+// Its text is what a scenario's content checks read and what a match records:
+// the data itself when it is a string, else the data as JSON, laid out with a
+// space after each comma and colon and its keys in the order the bot sent
+// them.
+func serverMessageEvent(data any, raw []byte) map[string]any {
+	text, ok := data.(string)
+	if !ok {
+		var message struct {
+			Data json.RawMessage `json:"data"`
+		}
+		_ = json.Unmarshal(raw, &message)
+		text = jsonText(message.Data)
+	}
+	return map[string]any{keyType: EventServerMessage, keyData: data, keyText: text}
+}
+
+// jsonText is raw JSON laid out with a space after each comma and colon, its
+// keys in the order they came and its text as it is, unescaped beyond what
+// JSON requires. Empty raw JSON is null.
+func jsonText(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return "null"
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var b strings.Builder
+	if err := writeJSONText(&b, dec); err != nil {
+		return string(raw)
+	}
+	return b.String()
+}
+
+// writeJSONText writes the next JSON value dec holds to b, as jsonText lays it
+// out.
+func writeJSONText(b *strings.Builder, dec *json.Decoder) error {
+	tok, err := dec.Token()
+	if err != nil {
+		return err
+	}
+	switch t := tok.(type) {
+	case json.Delim:
+		b.WriteRune(rune(t))
+		for i := 0; dec.More(); i++ {
+			if i > 0 {
+				b.WriteString(", ")
+			}
+			if t == '{' {
+				key, err := dec.Token()
+				if err != nil {
+					return err
+				}
+				keyText, _ := key.(string)
+				b.WriteString(jsonString(keyText) + ": ")
+			}
+			if err := writeJSONText(b, dec); err != nil {
+				return err
+			}
+		}
+		end, err := dec.Token()
+		if err != nil {
+			return err
+		}
+		b.WriteRune(rune(end.(json.Delim))) //nolint:forcetypeassert // the decoder closes what it opened
+	case string:
+		b.WriteString(jsonString(t))
+	case json.Number:
+		b.WriteString(t.String())
+	case bool:
+		b.WriteString(strconv.FormatBool(t))
+	case nil:
+		b.WriteString("null")
+	}
+	return nil
+}
+
+// jsonString is s as a JSON string, escaping only what JSON requires.
+func jsonString(s string) string {
+	var b strings.Builder
+	b.WriteByte('"')
+	for _, r := range s {
+		switch {
+		case r == '"':
+			b.WriteString(`\"`)
+		case r == '\\':
+			b.WriteString(`\\`)
+		case r == '\n':
+			b.WriteString(`\n`)
+		case r == '\r':
+			b.WriteString(`\r`)
+		case r == '\t':
+			b.WriteString(`\t`)
+		case r == '\b':
+			b.WriteString(`\b`)
+		case r == '\f':
+			b.WriteString(`\f`)
+		case r < 0x20:
+			b.WriteString(`\u` + hex4(r))
+		default:
+			b.WriteRune(r)
+		}
+	}
+	b.WriteByte('"')
+	return b.String()
 }
 
 // userInputEvent is the user's final transcription or backchannel, from a

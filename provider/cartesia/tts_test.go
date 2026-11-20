@@ -55,6 +55,25 @@ func TestEmitWordTimingsStripsMarkupAndKeepsTokens(t *testing.T) {
 	}
 }
 
+// Word ends Cartesia reports go along with their words, the markup stripped,
+// and a message without them reports none.
+func TestWordTimingsKeepTheirEnds(t *testing.T) {
+	got, _ := normalizeWordTimings(&wsWordTimings{
+		Words: []string{"Hello", `<break time="1s"/>`, "world"},
+		Start: []float64{0.0, 0.4, 1.4},
+		End:   []float64{0.4, 1.4, 1.8},
+	}, false)
+	want := []uctx.WordTiming{{Word: "Hello", Offset: 0.0, End: 0.4}, {Word: "world", Offset: 1.4, End: 1.8}}
+	if !slices.Equal(got, want) {
+		t.Errorf("got %+v, want %+v", got, want)
+	}
+
+	got, _ = normalizeWordTimings(&wsWordTimings{Words: []string{"Hello"}, Start: []float64{0.0}}, false)
+	if want := []uctx.WordTiming{{Word: "Hello", Offset: 0.0}}; !slices.Equal(got, want) {
+		t.Errorf("got %+v, want %+v", got, want)
+	}
+}
+
 // A language written without spaces is reported one character at a time, and
 // each character keeps its own start: one entry in is one token out. The base
 // is asked to merge punctuation into the character before it, and told the

@@ -77,7 +77,7 @@ func (s *recordingStream) Close() error { return nil }
 func transcribeSends(t *testing.T, rate int, clip []byte) (sent []byte, opened []int) {
 	t.Helper()
 	conn := &recordingConnector{
-		connector: &connector{cfg: Config{Language: defaultLanguage}},
+		connector: newConnector(Config{Language: defaultLanguage}),
 		sent:      make(chan []byte, 4),
 	}
 	svc := stt.NewStream("TranscribeSTT", conn, rate)
@@ -155,7 +155,7 @@ func TestTranscribeWithoutAnyCredentialsFailsToConnect(t *testing.T) {
 	} {
 		t.Setenv(k, v)
 	}
-	c := &connector{cfg: Config{Region: "us-east-1", Language: defaultLanguage}}
+	c := newConnector(Config{Region: "us-east-1", Language: defaultLanguage})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

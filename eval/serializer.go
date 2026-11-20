@@ -84,7 +84,9 @@ var _ wsserver.Serializer = (*ClientSerializer)(nil)
 // (its transcription, VAD and speaking messages) stay raw messages rather than
 // becoming frames, so they cannot be mistaken for what the harness computes from
 // the bot's audio. So does eval-bot-image, which has no frame on the harness's
-// side to become. A canceled llm-function-call-stopped becomes a
+// side to become. The bot's metrics stay raw messages too, so the sink can
+// report them as they were sent, and so does a server-message, whose data is
+// the bot's own. A canceled llm-function-call-stopped becomes a
 // FunctionCallCancelFrame, which keeps its place among the bot's other
 // function-call reports. The deprecated user-transcription is dropped:
 // user-input carries the same transcriptions.
@@ -125,7 +127,12 @@ func (s *ClientSerializer) Deserialize(data []byte) (frames.Frame, error) {
 			name, _ := payload["function_name"].(string)
 			id, _ := payload["tool_call_id"].(string)
 			return NewFunctionCallCancelFrame(name, id), nil
-		case reportedEventTypes[msgType] || msgType == evalws.BotImageType:
+		case reportedEventTypes[msgType] || msgType == evalws.BotImageType ||
+			// The bot's metrics, reported as sent: no per-metric mapping here
+			// to fall behind the protocol.
+			msgType == rtvi.TypeMetrics ||
+			// A message of the bot's own making, for the scenario to read.
+			msgType == rtvi.TypeServerMessage:
 			// Kept as the raw message so the sink maps it to a scenario event;
 			// see the type's documentation for why these are not frames.
 			return frames.NewInputTransportMessageFrame(data), nil

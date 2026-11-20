@@ -24,10 +24,10 @@ import (
 
 const (
 	wsBase = "wss://streaming.assemblyai.com/v3/ws"
-	// defaultModel is AssemblyAI's flagship streaming model, the one a session
-	// gets when speech_model is omitted. It is a U3 Pro model and covers more
-	// declared languages than universal-3-5-pro.
-	defaultModel = "universal-3-6-pro"
+	// defaultModel is AssemblyAI's Universal-3.7 voice-agent streaming model. It
+	// is a U3 Pro model and covers more declared languages than
+	// universal-3-5-pro.
+	defaultModel = "assemblyai-stt-3-7-realtime-agent"
 	// defaultEncoding is the audio encoding jargo exchanges with AssemblyAI, in
 	// both directions.
 	defaultEncoding = "pcm_s16le"
@@ -54,14 +54,21 @@ var errTooManyLanguages = errors.New("assemblyai: too many declared languages")
 var errPromptNotSupported = errors.New("assemblyai: prompt is only supported by U3 Pro models")
 
 // u3ProModelPrefixes name the Universal-3 Pro streaming variants: the u3-rt-pro
-// family and the universal-3-5-pro and universal-3-6-pro releases (with any
-// suffixed release of each). They all expose the full U3 Pro feature set;
-// universal-3-6-pro is universal-3-5-pro upgraded, the same model with the same
-// features. Language steering is prompt-based, so only these models are steered
-// by it.
+// family, the universal-3-5-pro and universal-3-6-pro releases (with any
+// suffixed release of each), and assemblyai-stt-3-7-realtime-agent. They all
+// expose the full U3 Pro feature set; universal-3-6-pro and
+// assemblyai-stt-3-7-realtime-agent cover 32 declared languages against
+// universal-3-5-pro's 19. assemblyai-stt-3-7-realtime is not one of them: it is
+// built for note takers and ambient listening, not for voice agents. Language
+// steering is prompt-based, so only these models are steered by it.
 //
 //nolint:gochecknoglobals // fixed table
-var u3ProModelPrefixes = []string{"u3-rt-pro", "universal-3-5-pro", "universal-3-6-pro"}
+var u3ProModelPrefixes = []string{
+	"u3-rt-pro",
+	"universal-3-5-pro",
+	"universal-3-6-pro",
+	"assemblyai-stt-3-7-realtime-agent",
+}
 
 // isU3ProModel reports whether model is a Universal-3 Pro streaming variant, so
 // U3 Pro-only features are gated on the whole family rather than one exact name.
@@ -95,7 +102,9 @@ type Config struct {
 	// Encoding is the audio encoding; empty uses "pcm_s16le".
 	Encoding string
 	// Model selects the speech model (sent as speech_model); empty uses
-	// "universal-3-6-pro".
+	// "assemblyai-stt-3-7-realtime-agent". The Universal-3 Pro models
+	// ("universal-3-5-pro", "universal-3-6-pro" and
+	// "assemblyai-stt-3-7-realtime-agent") take the U3 Pro-only settings.
 	Model string
 	// Language declares the audio language (sent as language_code); the zero value
 	// leaves it unset. Mapped to AssemblyAI's base code. AssemblyAI treats this

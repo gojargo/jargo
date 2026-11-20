@@ -105,7 +105,9 @@ type WordTimestamps interface {
 	Synthesizer
 	// RunTTSTimed synthesizes like RunTTS and additionally reports word timing
 	// via word: each call carries a batch of tokens in spoken order, with the
-	// offset of each in seconds from the beginning of this synthesis. A batch
+	// offset of each in seconds from the beginning of this synthesis and, for a
+	// provider that reports it, where each ends. Word ends let the next
+	// context's words start where this context's words end. A batch
 	// rather than one token at a time, because normalizing a token stream can
 	// need the token before it, which the base cannot see one call at a time.
 	RunTTSTimed(
@@ -291,6 +293,9 @@ type Base struct {
 	// wordLastPTS is when the last word pushed downstream was spoken, so a
 	// context starting while another is still playing times its words after it.
 	wordLastPTS time.Duration
+	// wordLastEndPTS is where the words timed so far end, as far as the
+	// provider reports word ends. The next context's words start there.
+	wordLastEndPTS time.Duration
 	// replyStartPTS is what wordLastPTS was when the current model response
 	// started playing, which tells whether the response timed any words.
 	replyStartPTS time.Duration
@@ -1402,7 +1407,7 @@ func (b *Base) stampSegmentAnnouncement(f *frames.AggregatedTextFrame) {
 	if _, has := f.PTS(); has {
 		return
 	}
-	f.SetPTS(int64(max(b.lastWordPTS(), b.now())))
+	f.SetPTS(int64(b.wordTimingBaseline(b.now())))
 }
 
 // maybeCloseAssistantTurn tells the aggregator to commit, for a context that

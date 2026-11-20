@@ -28,6 +28,12 @@ type CharAccumulator struct {
 	// character timings sets it, so a tag reported whole matches the text it
 	// was sent in.
 	AudioTags bool
+	// WordEnds makes each word a space completes report where it ends, as its
+	// End. A word ends where the space after it ends: that space holds the pause
+	// before the next word, or the silence after the last one. The space's
+	// length is taken from the durations AddWithDurations is given; without
+	// one, the word ends where the space starts.
+	WordEnds bool
 
 	word string
 	// start is the offset of the carried word's first character, in seconds from
@@ -42,6 +48,14 @@ type CharAccumulator struct {
 // the synthesis. A word is completed by a space, so the last word of an
 // utterance stays buffered until Flush.
 func (a *CharAccumulator) Add(chars []string, starts []float64) ([]WordTiming, error) {
+	return a.AddWithDurations(chars, starts, nil)
+}
+
+// AddWithDurations is Add for a batch that also says how long each character
+// lasts: durations[i] is the length of chars[i], in seconds. It may be shorter
+// than chars, or nil, and a character without one lasts no time. The durations
+// time where each word ends, which is reported when WordEnds is set.
+func (a *CharAccumulator) AddWithDurations(chars []string, starts, durations []float64) ([]WordTiming, error) {
 	if len(chars) != len(starts) {
 		return nil, fmt.Errorf("%w: %d characters, %d offsets", ErrCharTimingLength, len(chars), len(starts))
 	}
@@ -54,6 +68,9 @@ func (a *CharAccumulator) Add(chars []string, starts []float64) ([]WordTiming, e
 		}
 		if strings.TrimSpace(ch) == "" && !inTag {
 			if wt, ok := a.Flush(); ok {
+				if a.WordEnds {
+					wt.End = spaceEnd(starts, durations, i)
+				}
 				words = append(words, wt)
 			}
 			continue
@@ -65,6 +82,15 @@ func (a *CharAccumulator) Add(chars []string, starts []float64) ([]WordTiming, e
 		a.word += ch
 	}
 	return words, nil
+}
+
+// spaceEnd is where the space at i ends, which is where the word it closes
+// ends. A space with no duration ends where it starts.
+func spaceEnd(starts, durations []float64, i int) float64 {
+	if i < len(durations) {
+		return starts[i] + durations[i]
+	}
+	return starts[i]
 }
 
 // Flush returns the word still being assembled, if any, and clears it. Call it

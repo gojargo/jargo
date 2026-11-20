@@ -180,6 +180,21 @@ func TestPipelineFlushDone(t *testing.T) {
 	default:
 		t.Error("Done should be closed after CloseDone")
 	}
+
+	// A worker starting another flush with the same probe gives it a fresh
+	// Done, which closes again when that flush settles.
+	probe.ResetDone()
+	select {
+	case <-probe.Done:
+		t.Fatal("Done should be open after ResetDone")
+	default:
+	}
+	probe.CloseDone()
+	select {
+	case <-probe.Done:
+	default:
+		t.Error("Done should close again after ResetDone")
+	}
 }
 
 // The interruptible flag on frames: its defaults and how a frame overrides them.

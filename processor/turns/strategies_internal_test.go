@@ -1577,3 +1577,89 @@ func TestWakePhraseDetectedNamesThePhraseAsWritten(t *testing.T) {
 		t.Errorf("detected %q, want %q", detected, "Hey, Jargo!")
 	}
 }
+
+// cleanupStop cleans s up at the end of the test, under the spy's mutex as the
+// controller would.
+func cleanupStop(t *testing.T, sp *spy, s StopStrategy) {
+	t.Helper()
+	t.Cleanup(func() {
+		sp.mu.Lock()
+		defer sp.mu.Unlock()
+		s.Cleanup()
+	})
+}
+
+// Ported from upstream (test_finalized_frame_releases_the_text_before_it). A
+// service's own endpointing can deliver the transcript before it is asked to
+// finalize; the confirmation then has no text to carry and arrives as a
+// TranscriptionFinalizedFrame. It releases the turn like a finalized transcript
+// instead of waiting out the safety net.
+func TestTurnAnalyzerFinalizedFrameReleasesTheTextBeforeIt(t *testing.T) {
+	s := NewTurnAnalyzerStop(TurnAnalyzerConfig{Analyzer: slowAnalyzer{}})
+	sp := attachStop(s)
+	cleanupStop(t, sp, s)
+
+	// The safety net is far out, so an immediate release is unambiguous.
+	sp.sendStop(s, frames.NewSTTMetadataFrame(5*time.Second))
+	sp.sendStop(s, frames.NewVADUserStartedSpeakingFrame(0.2, time.Now()))
+	sp.sendStop(s, transcript("hello"))
+	sp.sendStop(s, frames.NewVADUserStoppedSpeakingFrame(0.2, time.Now()))
+	if sp.stops() != 0 {
+		t.Fatal("released before the finalization")
+	}
+
+	sp.sendStop(s, frames.NewTranscriptionFinalizedFrame("", ""))
+
+	eventually(t, func() bool { return sp.stops() == 1 }, time.Second, "turn never released")
+}
+
+// Ported from upstream (test_finalized_frame_without_text_releases_nothing). A
+// confirmation with no transcript before it has no turn to release.
+func TestTurnAnalyzerFinalizedFrameWithoutTextReleasesNothing(t *testing.T) {
+	s := NewTurnAnalyzerStop(TurnAnalyzerConfig{Analyzer: slowAnalyzer{}})
+	sp := attachStop(s)
+	cleanupStop(t, sp, s)
+
+	sp.sendStop(s, frames.NewSTTMetadataFrame(5*time.Second))
+	sp.sendStop(s, frames.NewVADUserStartedSpeakingFrame(0.2, time.Now()))
+	sp.sendStop(s, frames.NewVADUserStoppedSpeakingFrame(0.2, time.Now()))
+
+	sp.sendStop(s, frames.NewTranscriptionFinalizedFrame("", ""))
+	time.Sleep(50 * time.Millisecond)
+
+	if sp.stops() != 0 {
+		t.Fatal("a confirmation with no text before it released the turn")
+	}
+}
+
+// Ported from upstream (test_finalized_frame_short_circuits_stt_wait). A
+// finalization confirmed after its text cancels the STT wait too. An STT's own
+// endpointing can deliver the transcript before the VAD stop asks it to
+// finalize; the confirmation then arrives without text, as a
+// TranscriptionFinalizedFrame.
+func TestSpeechTimeoutFinalizedFrameShortCircuitsTheSTTWait(t *testing.T) {
+	const speechTimeout = 100 * time.Millisecond
+	s := NewSpeechTimeoutStop(SpeechTimeoutConfig{UserSpeechTimeout: speechTimeout})
+	sp := attachStop(s)
+	cleanupStop(t, sp, s)
+
+	sp.sendStop(s, frames.NewSTTMetadataFrame(4*speechTimeout))
+
+	// The transcript is not finalized, so the STT wait is armed.
+	sp.sendStop(s, frames.NewVADUserStartedSpeakingFrame(0, time.Now()))
+	sp.sendStop(s, transcript("Hello!"))
+	start := time.Now()
+	sp.sendStop(s, frames.NewVADUserStoppedSpeakingFrame(0, time.Now()))
+
+	sp.sendStop(s, frames.NewTranscriptionFinalizedFrame("", ""))
+	if sp.stops() != 0 {
+		t.Fatal("released before the speech timeout")
+	}
+
+	// The turn stops at the speech timeout rather than at the STT wait.
+	eventually(t, func() bool { return sp.stops() == 1 }, 2*time.Second, "turn never released")
+	if elapsed := time.Since(start); elapsed >= 3*speechTimeout {
+		t.Errorf("released after %v, want about the %v speech timeout rather than the STT wait",
+			elapsed, speechTimeout)
+	}
+}

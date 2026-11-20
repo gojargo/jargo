@@ -1127,11 +1127,35 @@ func TestResultsRecordKeepsWhatEachExpectationMatched(t *testing.T) {
 		}
 	})
 	wantKeys := []string{
-		"artifacts", "attempt", "bot", "duration_ms", "error", "failures", "kind", "name", "passed", "scenario",
-		"skipped", "turns",
+		"artifacts", "attempt", "bot", "bot_metrics", "duration_ms", "error", "failures", "kind", "name", "passed",
+		"scenario", "skipped", "turns",
 	}
 	if !slices.Equal(keys, wantKeys) {
 		t.Fatalf("keys = %v", keys)
+	}
+}
+
+func TestResultsRecordKeepsTheBotMetricsOfAPassedRun(t *testing.T) {
+	base := t.TempDir()
+	run := &SuiteRun{
+		Bot: "voice/x", Scenario: "greet", ScenarioPath: filepath.Join(base, "greet.yaml"), Status: RunDone,
+		ScriptResult: &ScriptResult{
+			ScenarioName: "greet",
+			Turns:        []ScriptTurnResult{{TurnIndex: 0, Status: TurnPassed, DurationMS: 50}},
+			DurationMS:   60,
+			BotMetrics: []BotMetricsReport{{
+				At: 1.2, Data: map[string]any{"ttfb": []any{map[string]any{"processor": "STT#0", "value": 0.31}}},
+			}},
+		},
+	}
+	appendResult(filepath.Join(base, "results.jsonl"), run, "voice_x__greet", base, "")
+	record := readRecord(t, filepath.Join(base, "results.jsonl"))
+	if record["passed"] != true {
+		t.Fatalf("record = %v, want a passed run", record)
+	}
+	metrics, _ := json.Marshal(record["bot_metrics"])
+	if want := `[{"at":1.2,"data":{"ttfb":[{"processor":"STT#0","value":0.31}]}}]`; string(metrics) != want {
+		t.Fatalf("bot_metrics = %s, want %s", metrics, want)
 	}
 }
 
@@ -1160,6 +1184,9 @@ func TestResultsRecordForASimulationRun(t *testing.T) {
 		SimulationResult: &SimulationResult{
 			SimulationName: "book", Reason: "no table", Turns: 3, EndedBy: SimulationEndedByBot,
 			EventsSeen: []map[string]any{{"type": "llm_started"}}, Success: "the bot booked a table",
+			BotMetrics: []BotMetricsReport{{
+				At: 0.5, Data: map[string]any{"tokens": []any{map[string]any{"prompt_tokens": 12}}},
+			}},
 			Metrics: []SimulationMetricScore{{Name: "politeness", Score: new(1.0), Passed: true, Criterion: "stays polite"}},
 		},
 	}
@@ -1180,6 +1207,10 @@ func TestResultsRecordForASimulationRun(t *testing.T) {
 	}
 	if seen, _ := json.Marshal(record["events_seen"]); string(seen) != `[{"type":"llm_started"}]` {
 		t.Errorf("events_seen = %s", seen)
+	}
+	metrics, _ := json.Marshal(record["bot_metrics"])
+	if want := `[{"at":0.5,"data":{"tokens":[{"prompt_tokens":12}]}}]`; string(metrics) != want {
+		t.Errorf("bot_metrics = %s, want %s", metrics, want)
 	}
 }
 

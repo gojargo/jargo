@@ -58,7 +58,7 @@ Pick any per category; each is a small `Config` + constructor.
 - **STT**: Deepgram, AssemblyAI, Gladia, Speechmatics, Soniox, Whisper (OpenAI/Groq/local), Azure, Google Cloud, xAI, ElevenLabs, Cartesia, NVIDIA.
 - **LLM**: Anthropic (direct + Bedrock), OpenAI (chat + Responses), Google Gemini (direct + Vertex), Groq, Together, Fireworks, DeepSeek,
   Cerebras, Perplexity, OpenRouter, xAI, Ollama, NVIDIA, Mistral, Nebius, SambaNova, Qwen, Azure OpenAI.
-- **TTS**: ElevenLabs, Cartesia, Rime, Kokoro, Piper, Pocket TTS, Deepgram, OpenAI, Azure, Google Cloud, Hume, Fish, MiniMax, xAI, NVIDIA, Soniox, AssemblyAI.
+- **TTS**: ElevenLabs, Cartesia, Rime, Kokoro, Piper, Pocket TTS, Deepgram, OpenAI, Azure, Google Cloud, Fish, MiniMax, xAI, NVIDIA, Soniox, AssemblyAI, HeyGen.
 - **Speech-to-speech**: OpenAI Realtime (direct + Azure), Gemini Live (direct + Vertex), AWS Nova Sonic, xAI Realtime.
 - **Memory**: mem0.
 

@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -266,6 +267,44 @@ func TestStartRejectsAnotherTransportWhenRestricted(t *testing.T) {
 	if !reflect.DeepEqual(served["transports"], []any{"webrtc"}) {
 		t.Fatalf("/status = %v", served)
 	}
+}
+
+// TestStatusTransports checks GET /status reports only the transports POST
+// /start would accept.
+func TestStatusTransports(t *testing.T) {
+	status := func(t *testing.T, transport string) []any {
+		t.Helper()
+		tr := newTestRunner(t, &Args{Transport: transport})
+		code, served := tr.do(t, http.MethodGet, "/status", nil)
+		if code != http.StatusOK {
+			t.Fatalf("/status = %d", code)
+		}
+		transports, _ := served["transports"].([]any)
+		return transports
+	}
+	t.Run("it lists every enabled transport", func(t *testing.T) {
+		got := status(t, "")
+		for _, want := range []string{"webrtc", "livekit", "twilio", "websocket"} {
+			if !slices.Contains(got, any(want)) {
+				t.Errorf("/status transports = %v, want %s among them", got, want)
+			}
+		}
+		for _, transport := range got {
+			if name, _ := transport.(string); !transportRoutesEnabled(name) {
+				t.Errorf("/status lists %s, which /start refuses", name)
+			}
+		}
+	})
+	t.Run("with -t it reports only that transport", func(t *testing.T) {
+		if got := status(t, "webrtc"); !reflect.DeepEqual(got, []any{"webrtc"}) {
+			t.Fatalf("/status transports = %v, want webrtc alone", got)
+		}
+	})
+	t.Run("with -t it reports nothing when its routes are disabled", func(t *testing.T) {
+		if got := status(t, transportDaily); len(got) != 0 {
+			t.Fatalf("/status transports = %v, want none", got)
+		}
+	})
 }
 
 func TestStartICEConfig(t *testing.T) {

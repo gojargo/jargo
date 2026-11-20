@@ -53,4 +53,8 @@ const (
 
 	// Not yet measured.
 	RimeTTFSP99 = DefaultTTFSP99
+	// DeepgramFluxTTFSP99 applies only when the pipeline's VAD, not Flux, marks
+	// the end of speech (see the Flux service's VADForceTurnEndpoint), where the
+	// transcript trails it by a ForceEndTurn round trip.
+	DeepgramFluxTTFSP99 = DefaultTTFSP99
 )

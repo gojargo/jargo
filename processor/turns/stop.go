@@ -127,6 +127,8 @@ func (s *TurnAnalyzerStop) Process(f frames.Frame) ProcessFrameResult {
 		s.handleVADStopped(fr)
 	case *frames.TranscriptionFrame:
 		s.handleTranscription(fr)
+	case *frames.TranscriptionFinalizedFrame:
+		s.handleTranscriptionFinalized()
 	case *frames.InterimTranscriptionFrame:
 		// An interim means more transcription is still on the way, so an earlier
 		// finalized transcript no longer covers all of the user's speech. Without
@@ -177,9 +179,7 @@ func (s *TurnAnalyzerStop) handleTranscription(fr *frames.TranscriptionFrame) {
 
 	switch {
 	case fr.Finalized:
-		s.txFinalized = true
-		// Nothing more is coming, so release the turn now if the analyzer agrees.
-		s.maybeTrigger()
+		s.handleTranscriptionFinalized()
 	case s.timeoutExpired && s.turnComplete:
 		// The safety net elapsed before the transcript arrived. Now that it has,
 		// stop the turn at once instead of waiting a second time.
@@ -197,6 +197,15 @@ func (s *TurnAnalyzerStop) handleTranscription(fr *frames.TranscriptionFrame) {
 		s.turnComplete = true
 		s.armTimeout()
 	}
+}
+
+// handleTranscriptionFinalized handles the STT confirming that no more
+// transcription is coming. The confirmation arrives on the last transcript or,
+// when the text came before it, as a TranscriptionFinalizedFrame of its own.
+func (s *TurnAnalyzerStop) handleTranscriptionFinalized() {
+	s.txFinalized = true
+	// Nothing more is coming, so release the turn now if the analyzer agrees.
+	s.maybeTrigger()
 }
 
 // sttDeadline returns the instant the safety net expires for the speech the VAD
@@ -404,6 +413,10 @@ func (s *SpeechTimeoutStop) Process(f frames.Frame) ProcessFrameResult {
 		s.handleVADStopped(fr)
 	case *frames.TranscriptionFrame:
 		s.handleTranscription(fr)
+	case *frames.TranscriptionFinalizedFrame:
+		s.handleTranscriptionFinalized()
+		// If the other wait is already done too, the turn was waiting on this.
+		s.maybeTrigger()
 	case *frames.InterimTranscriptionFrame:
 		// More transcription is still on the way, so an earlier finalized
 		// transcript no longer covers all of the user's speech and must not be
@@ -445,13 +458,7 @@ func (s *SpeechTimeoutStop) handleTranscription(fr *frames.TranscriptionFrame) {
 		s.haveText = true
 	}
 	if fr.Finalized {
-		s.txFinalized = true
-		// STT says nothing more is coming, so the safety net has nothing left to
-		// wait for.
-		if !s.sttDone {
-			s.sttDone = true
-			s.cancelSTTTimer()
-		}
+		s.handleTranscriptionFinalized()
 	}
 
 	// Both waits already done means the turn was only waiting on text.
@@ -466,6 +473,19 @@ func (s *SpeechTimeoutStop) handleTranscription(fr *frames.TranscriptionFrame) {
 	if !s.vadSpeaking && !s.vadStopped {
 		s.sttDone = true
 		s.restartUserSpeechTimer()
+	}
+}
+
+// handleTranscriptionFinalized handles the STT confirming that no more
+// transcription is coming. The confirmation arrives on the last transcript or,
+// when the text came before it, as a TranscriptionFinalizedFrame of its own.
+func (s *SpeechTimeoutStop) handleTranscriptionFinalized() {
+	s.txFinalized = true
+	// STT says nothing more is coming, so the safety net has nothing left to
+	// wait for.
+	if !s.sttDone {
+		s.sttDone = true
+		s.cancelSTTTimer()
 	}
 }
 
@@ -634,6 +654,8 @@ func (s *ExternalStop) Process(f frames.Frame) ProcessFrameResult {
 		s.seenInterim = true
 	case *frames.TranscriptionFrame:
 		s.handleTranscription(fr)
+	case *frames.TranscriptionFinalizedFrame:
+		s.handleTranscriptionFinalized()
 	}
 	return Continue
 }
@@ -671,6 +693,16 @@ func (s *ExternalStop) handleTranscription(fr *frames.TranscriptionFrame) {
 			s.maybeReportStopped()
 		}
 	})
+}
+
+// handleTranscriptionFinalized handles a finalization confirmed after its text
+// had already arrived. No more text is coming for this speech, so there is
+// nothing left to wait for. It brings no new text, so a turn already decided
+// stays so.
+func (s *ExternalStop) handleTranscriptionFinalized() {
+	s.seenInterim = false
+	s.cancelTranscriptTimer()
+	s.maybeReportStopped()
 }
 
 func (s *ExternalStop) maybeReportStopped() {

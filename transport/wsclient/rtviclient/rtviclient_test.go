@@ -123,13 +123,24 @@ func TestUnknownAndNonRTVIDropped(t *testing.T) {
 	cases := map[string][]byte{
 		"bot-ready": server(t, "bot-ready", map[string]any{"version": "2.0.0"}),
 		"metrics":   server(t, "metrics", map[string]any{}),
-		"no label":  []byte(`{"type": "bot-llm-text"}`),
-		"not json":  []byte("not json"),
+		// A message type a later protocol version adds.
+		"unknown":  server(t, "bot-something-new", map[string]any{"text": "hi"}),
+		"no label": []byte(`{"type": "bot-llm-text"}`),
+		"not json": []byte("not json"),
 	}
 	for name, data := range cases {
 		if f := deserialize(t, data); f != nil {
 			t.Errorf("%s: got %T, want no frame", name, f)
 		}
+	}
+}
+
+// TestUnknownFieldsIgnored checks a field the client does not know, which a
+// later protocol version may add to a message, leaves the message as it was.
+func TestUnknownFieldsIgnored(t *testing.T) {
+	data := server(t, "bot-llm-text", map[string]any{"text": "Paris", "x_unknown": 1})
+	if text := as[*frames.LLMTextFrame](t, deserialize(t, data)); text.Text != "Paris" {
+		t.Errorf("text = %q, want Paris", text.Text)
 	}
 }
 

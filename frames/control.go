@@ -128,9 +128,17 @@ func (f *PipelineFlushFrame) CloseDone() {
 	f.closeOnce.Do(func() { close(f.Done) })
 }
 
+// ResetDone gives the flush a fresh Done channel, open. A worker starting a
+// flush with a probe its caller built calls it, since it waits on Done, so a
+// probe used for an earlier flush is not taken for settled already.
+func (f *PipelineFlushFrame) ResetDone() {
+	f.Done = make(chan struct{})
+	f.closeOnce = &sync.Once{}
+}
+
 // String implements fmt.Stringer.
 func (f *PipelineFlushFrame) String() string {
-	return fmt.Sprintf("%s(flush_id: %d, returning: %t)", f.Name(), f.FlushID, f.Returning)
+	return fmt.Sprintf("%s(flush_id: %d, origin: %s, returning: %t)", f.Name(), f.FlushID, f.Origin, f.Returning)
 }
 
 // ProposedUserStoppedSpeakingFrame proposes that the user's turn has ended. Like

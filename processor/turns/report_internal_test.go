@@ -254,3 +254,29 @@ func TestExternalStopAFinalizedTranscriptWhileTheUserSpeaksWaitsForTheStopSignal
 		t.Fatalf("decisions = %d, want 1", n)
 	}
 }
+
+// Ported from upstream
+// (test_a_finalized_frame_after_the_text_ends_the_turn_at_once). The text came
+// first and its finalization after, with no text of its own.
+func TestExternalStopAFinalizedFrameAfterTheTextEndsTheTurnAtOnce(t *testing.T) {
+	s := NewExternalStop(ExternalStopConfig{Timeout: 10 * time.Second})
+	sp := openExternalTurn(t, s)
+
+	sp.sendStop(s, frames.NewProposedUserStartedSpeakingFrame())
+	sp.sendStop(s, frames.NewProposedUserStoppedSpeakingFrame())
+	sp.sendStop(s, transcript("Hello!"))
+	if n := sp.stops(); n != 0 {
+		t.Fatalf("decisions before the finalization = %d, want 0", n)
+	}
+
+	sp.sendStop(s, frames.NewTranscriptionFinalizedFrame("", ""))
+	if n := sp.stops(); n != 1 {
+		t.Fatalf("decisions after the finalization = %d, want 1 at once", n)
+	}
+
+	// It brings no new text, so it is not worth a second decision.
+	sp.sendStop(s, frames.NewTranscriptionFinalizedFrame("", ""))
+	if n := sp.stops(); n != 1 {
+		t.Fatalf("decisions after a second finalization = %d, want still 1", n)
+	}
+}

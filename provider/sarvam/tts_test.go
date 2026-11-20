@@ -464,25 +464,43 @@ func TestFinalEventEndsTheContext(t *testing.T) {
 	}
 }
 
-// An error the server reports is pushed, and handed to the context playing.
+// An error the server reports is pushed, and handed to the context playing,
+// with the request ID the server gives it.
 func TestServerErrorIsReported(t *testing.T) {
-	s := newSynthesizer(TTSConfig{APIKey: "k"})
-	host := newFakeTTSHost("c1")
-	s.host, s.svc = host, &fakeTTSSvc{active: "c1"}
+	tests := []struct {
+		name, msg, want string
+	}{
+		{
+			name: "with a request ID",
+			msg:  `{"type":"error","data":{"message":"bad text","request_id":"req-a"}}`,
+			want: "TTS Error: bad text (request ID: req-a)",
+		},
+		{
+			name: "without a request ID",
+			msg:  `{"type":"error","data":{"message":"bad text"}}`,
+			want: "TTS Error: bad text",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := newSynthesizer(TTSConfig{APIKey: "k"})
+			host := newFakeTTSHost("c1")
+			s.host, s.svc = host, &fakeTTSSvc{active: "c1"}
 
-	msg := []byte(`{"type":"error","data":{"message":"unknown speaker"}}`)
-	if err := s.handleMessage(context.Background(), msg); err != nil {
-		t.Fatal(err)
-	}
-	if got := host.reported(); !slices.Equal(got, []string{"TTS Error: unknown speaker"}) {
-		t.Errorf("reported %v, want the server's message", got)
-	}
-	got := host.framesFor("c1")
-	if len(got) != 1 {
-		t.Fatalf("frames = %v, want one error frame", got)
-	}
-	if ef, ok := got[0].(*frames.ErrorFrame); !ok || ef.Error != "TTS Error: unknown speaker" {
-		t.Errorf("frame = %v, want the error on the context", got[0])
+			if err := s.handleMessage(context.Background(), []byte(tt.msg)); err != nil {
+				t.Fatal(err)
+			}
+			if got := host.reported(); !slices.Equal(got, []string{tt.want}) {
+				t.Errorf("reported %v, want %q", got, tt.want)
+			}
+			got := host.framesFor("c1")
+			if len(got) != 1 {
+				t.Fatalf("frames = %v, want one error frame", got)
+			}
+			if ef, ok := got[0].(*frames.ErrorFrame); !ok || ef.Error != tt.want {
+				t.Errorf("frame = %v, want %q on the context", got[0], tt.want)
+			}
+		})
 	}
 }
 

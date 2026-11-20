@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	neturl "net/url"
@@ -22,6 +23,10 @@ import (
 // generating a long sentence in one go sends base64 audio well past a megabyte,
 // and a limit tight enough to cut that off fails the synthesis mid-reply.
 const DefaultReadLimit = 16 << 20
+
+// handshakeBodyLimit is how much of the body of a refused handshake is kept:
+// what the WebSocket library reads of it.
+const handshakeBodyLimit = 1024
 
 // DefaultCloseTimeout bounds how long a close waits for the peer to answer.
 // Disconnecting happens while a service handles the EndFrame, before the frame
@@ -214,6 +219,10 @@ type HandshakeError struct {
 	// Header is the header of the response that refused the handshake, where a
 	// provider may explain the refusal.
 	Header http.Header
+	// Body is the start of the body of the response that refused the
+	// handshake, up to a kilobyte, where a provider may explain the refusal
+	// too. It is nil when the response had none.
+	Body []byte
 	// Err is the underlying dial failure.
 	Err error
 }
@@ -298,17 +307,22 @@ func dialWith(
 	conn, resp, err := websocket.Dial(ctx, url, &websocket.DialOptions{HTTPHeader: header, Subprotocols: subprotocols})
 	status := 0
 	var respHeader http.Header
+	var respBody []byte
 	if resp != nil {
 		status = resp.StatusCode
 		respHeader = resp.Header
 		if resp.Body != nil {
+			// A refused handshake's body is already read, up to a kilobyte.
+			if err != nil {
+				respBody, _ = io.ReadAll(io.LimitReader(resp.Body, handshakeBodyLimit))
+			}
 			_ = resp.Body.Close()
 		}
 	}
 	if err != nil {
 		err = redactDialError(err)
 		if status != 0 {
-			return nil, &HandshakeError{StatusCode: status, Header: respHeader, Err: err}
+			return nil, &HandshakeError{StatusCode: status, Header: respHeader, Body: respBody, Err: err}
 		}
 		return nil, err
 	}

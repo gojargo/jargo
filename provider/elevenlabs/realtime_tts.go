@@ -100,10 +100,10 @@ type RealtimeTTSConfig struct {
 	// ElevenLabs times every character, so the words are assembled from those.
 	WordTimestamps bool
 	// PauseFrameProcessing holds incoming frames after a turn until its audio
-	// has played; nil leaves it on. With it off, contexts synthesize
-	// concurrently on the one connection (two speak frames pushed at once, or
-	// back-to-back turns) and still play in order.
-	PauseFrameProcessing *bool
+	// has played. By default contexts synthesize concurrently on the one
+	// connection (two speak frames pushed at once, or back-to-back turns) and
+	// still play in order.
+	PauseFrameProcessing bool
 	// Websocket configures the connection: whether and how it reconnects, and
 	// how long it waits on a peer that has stopped answering.
 	Websocket wsservice.Options
@@ -132,9 +132,6 @@ func (c RealtimeTTSConfig) withDefaults() RealtimeTTSConfig {
 		// Sentence-at-a-time synthesis has nothing to gain from that buffering,
 		// so it is on unless the caller turns it off.
 		c.AutoMode = new(true)
-	}
-	if c.PauseFrameProcessing == nil {
-		c.PauseFrameProcessing = new(true)
 	}
 	return c
 }
@@ -171,7 +168,7 @@ func newRealtimeTTS(cfg RealtimeTTSConfig) (*tts.Base, *realtimeSynthesizer) {
 	} else {
 		b = tts.New("ElevenLabsRealtimeTTS", s)
 	}
-	b.SetPauseFrameProcessing(tts.PauseOptions{Enabled: *s.cfg.PauseFrameProcessing})
+	b.SetPauseFrameProcessing(tts.PauseOptions{Enabled: s.cfg.PauseFrameProcessing})
 	s.svc = b
 	s.ws = tts.NewWebsocket(b, s, s.cfg.Websocket)
 	return b, s
@@ -615,14 +612,20 @@ func (s *realtimeSynthesizer) wordTimesFromAlignment(id string, a *charAlignment
 	}
 	clock := s.wordClocks[id]
 	if clock == nil {
-		clock = &wordClock{}
+		// Each word reports where it ends, so the context after this one is
+		// timed from there rather than from where its last word starts.
+		clock = &wordClock{acc: uctx.CharAccumulator{WordEnds: true}}
 		s.wordClocks[id] = clock
 	}
 	starts := make([]float64, len(a.CharStartTimesMs))
 	for i, ms := range a.CharStartTimesMs {
 		starts[i] = clock.cumulative + ms/1000
 	}
-	words, err := clock.acc.Add(a.Chars, starts)
+	lengths := make([]float64, len(a.CharDurationsMs))
+	for i, ms := range a.CharDurationsMs {
+		lengths[i] = ms / 1000
+	}
+	words, err := clock.acc.AddWithDurations(a.Chars, starts, lengths)
 	if err != nil {
 		// The message cannot be timed, but its span still counts below.
 		slog.Error("elevenlabs realtime tts: character timings do not line up", "err", err)

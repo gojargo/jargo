@@ -46,6 +46,8 @@ const (
 	defaultPrerollSecs = 0.5
 	// roleAssistant is the role of the model's messages.
 	roleAssistant = "assistant"
+	// roleUser is the role of the user's messages.
+	roleUser = "user"
 )
 
 // errNotConnected is returned when audio is sent before the socket is open.

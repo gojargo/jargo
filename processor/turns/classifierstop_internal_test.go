@@ -659,3 +659,19 @@ func TestTheTurnCompletionQuestionHasTheThreeVerdicts(t *testing.T) {
 		t.Fatalf("options = %v", got)
 	}
 }
+
+// An STT can deliver the words first and confirm they were the last after.
+func TestClassifierStopAFinalizationAfterTheWordsDoesNotWaitForTheSTTLatency(t *testing.T) {
+	h := newClassifierHarness(t, ClassifierStopConfig{}, time.Second, 0, "complete")
+	h.say("book a table.")
+	if h.spy.stops() != 0 {
+		t.Fatalf("stops = %d before the finalization, want 0", h.spy.stops())
+	}
+
+	h.send(frames.NewTranscriptionFinalizedFrame("", ""))
+	time.Sleep(settle)
+
+	if h.spy.stops() != 1 {
+		t.Fatalf("stops = %d, want 1", h.spy.stops())
+	}
+}

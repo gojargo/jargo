@@ -408,6 +408,97 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   (a module of its own) and a remote proxy assistant; flows examples cover
   hello world, food ordering (with hand-written schemas too) and a
   multi-worker handoff. The release suite runs the handoff and flows bots.
+- **Word timings can say where each word ends.** `WordTiming` has an `End`, in
+  seconds from the start of the synthesis. A TTS service that reports word
+  ends lets the next context's words start where its words end, rather than
+  where its last word starts. `CharAccumulator` reports them with `WordEnds`
+  and `AddWithDurations`, and `MergePunctTokens` gives a merged word the end
+  of the punctuation merged into it. Example: `voice-concurrent-tts`, run by
+  the release suite with Cartesia and ElevenLabs.
+- **Eval scenarios can expect the bot's metrics.** A `metrics` expectation
+  matches the bot's RTVI metrics report, filtered by `metric:` (`ttfb`,
+  `processing`, `tokens`, ...) and by `processor:`, text the measuring
+  processor's name must contain; the zero a pipeline reports at start never
+  matches. Every scripted and simulated result carries `BotMetrics`, each
+  report the bot sent with its time, and a suite writes it to `results.jsonl`
+  as `bot_metrics` for passed and failed runs alike.
+- **Eval scenarios can expect a `server_message`**, the data the bot pushed in
+  an RTVI server message. Its text is that data as JSON, so `text_contains:`
+  and the other content checks read it, and a matched expectation records it
+  in the run's result.
+- **RTVI transcriptions carry the diarization speaker.** `user-input` and
+  `stt-raw-text` messages carry `speaker` (`label` and `number`) when the STT
+  service's diarization tells speakers apart, and leave it out otherwise.
+- **`pipeline.EventPipelineFlushed` fires when a flush has made its whole trip
+  through the pipeline**, carrying the flush's last probe.
+  `Worker.FlushWithProbe` starts a flush with a probe of the caller's, so its
+  `FlushID` is known beforehand.
+- **AssemblyAI streaming STT recognizes the Universal-3.7 voice-agent model.**
+  `assemblyai-stt-3-7-realtime-agent` is part of the Universal-3 Pro family,
+  so every U3 Pro setting (`Prompt`, `LanguageCodes`) applies to it.
+  `assemblyai-stt-3-7-realtime` is built for note takers and ambient
+  listening, not voice agents, and is not treated as U3 Pro.
+- **Amazon Transcribe STT can identify the spoken language.** Set
+  `Config.LanguageOptions` to the languages a user might speak, and each
+  transcript carries the language Transcribe identified.
+  `IdentifyMultipleLanguages` identifies the language of each segment, for
+  speakers who switch languages mid-conversation, and `PreferredLanguage`
+  helps Transcribe identify the most likely language sooner. Conflicting
+  settings are refused by `Validate`. The language, partial-results stability
+  and language identification settings can now change while the pipeline runs,
+  through an `STTUpdateSettingsFrame`; a change reopens the session, and a
+  conflicting update is refused whole with a non-fatal error.
+- **Cartesia Turns STT takes language hints and reports the detected
+  language.** `TurnsSTTConfig.LanguageHints` accepts up to six distinct base
+  codes, sent as `language_hint` query parameters. An update to them while the
+  pipeline runs replaces them on the open connection without reopening it.
+  Eager and final transcripts carry the language Cartesia detected for the
+  event.
+- **STT services confirm a finalization that has no text left.** The new
+  `frames.TranscriptionFinalizedFrame` says the transcripts before it are
+  complete, as `Finalized` on a `TranscriptionFrame` would. A streaming STT
+  service pushes it when the provider confirms a finalize with an empty answer
+  that it marks with `stt.Result.PushFinalized`, as Deepgram does. The turn
+  analyzer, speech timeout, classifier and external stop strategies treat it
+  as a finalized transcript, and the user aggregator consumes it.
+- **Deepgram Flux can leave turns to the pipeline.**
+  `FluxConfig.VADForceTurnEndpoint` hands the decision of when a user turn
+  ends to the pipeline's own user turn strategies while Flux keeps
+  transcribing. Each VAD stop sends Flux a `ForceEndTurn`, the service
+  proposes no turn edges and recommends no strategies, and the
+  time-to-final-segment latency applies (`FluxConfig.TTFSP99`, default
+  `stt.DeepgramFluxTTFSP99`). It cannot be combined with `EagerEOTThreshold`.
+  `deepgram.ForceEndTurn` finalizes on other signals, such as a push-to-talk
+  release. Flux `Warning` messages are logged rather than dropped. Example:
+  `voice-deepgram-flux-manual`.
+- **Gradium can report setup problems.** `STTConfig.LogLevel` and
+  `TTSConfig.LogLevel` ask the server for its log messages, such as a warning
+  about an unknown or deprecated setting, and the services log them at their
+  own level. Off by default.
+- **`StreamService.RequestFinalize`.** A provider that confirms its finalizes
+  records each one it sends, so the confirmation marks the transcript that
+  closes the utterance.
+- **A classifier backed by Google's Decisions API.**
+  `classifier/google/decisions` answers yes/no, choice and score questions
+  through `gemini-decision-1` by default, and its inputs can carry images,
+  clips of audio (sent as 16 kHz WAV), and PDFs, videos, images and audio in
+  other formats, as bytes or by URL. A `Client` keeps its connection open
+  between questions, retries when Google is busy or unreachable within one
+  timeout, counts tokens, and can be shared by several classifiers. The eval
+  harness registers it as `evals.judges.google_classifier`, keyed from
+  `GOOGLE_API_KEY`.
+- **HeyGen Voice text-to-speech.** `heygen.NewTTS` streams text over HeyGen's
+  `multi-stream-input` WebSocket with one context per turn and word-level text
+  frames from HeyGen's per-character alignment; `heygen.NewHTTPTTS` streams
+  raw PCM one request per sentence and also serves professional voice clones
+  with `heygen-voice-1`. Both default to `heygen-voice-1-turbo` and the public
+  voice Nadine, resample when HeyGen does not offer the service's rate, and
+  leave out a language HeyGen does not speak so it detects one. The WebSocket
+  service waits as long as a refused handshake's Retry-After asks before
+  connecting again. `wsutil.HandshakeError.Body` holds the first kilobyte of a
+  refused handshake's response, and `tts.Base.RenewTurnContext` moves a turn
+  to a new context when the provider has ended the one it was spoken on.
+  Examples: `voice-heygen`, `voice-heygen-http`.
 
 ### Changed
 
@@ -512,6 +603,82 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   the turn and a wrong-args call fails at the budget. `jargo eval run` reports
   a bot it cannot reach as a failed scenario and keeps going, prints each
   failure with its kind, and leaves `!include` fragments out of a directory.
+- **ElevenLabs realtime TTS synthesizes contexts concurrently.**
+  `elevenlabs.NewRealtimeTTS` no longer holds incoming frames until a turn's
+  audio has played: contexts synthesize on one connection at once, as with
+  Cartesia, so several `TTSSpeakFrame`s pushed together or back-to-back turns
+  start right away, and their audio still plays in order. **Breaking change:**
+  `RealtimeTTSConfig.PauseFrameProcessing` is a `bool` defaulting to false;
+  set it to hold frames as before.
+- **Sarvam TTS errors carry the request ID.** An error Sarvam reports reads
+  `TTS Error: <message> (request ID: <id>)` when Sarvam sends one, in both the
+  pushed error and the `ErrorFrame`. The request ID is no longer logged on
+  every audio chunk.
+- **In realtime mode, the user aggregator passes an `LLMMessagesAppendFrame`
+  on to the speech-to-speech service, and the assistant aggregator adds its
+  messages to the context.** **Breaking change:** a processor between the two
+  aggregators now sees the `LLMMessagesAppendFrame`, where it used to see an
+  `LLMContextFrame` travelling downstream with the messages already in the
+  context.
+- **Gemini Live no longer starts a conversation from an
+  `LLMMessagesAppendFrame` alone.** **Breaking change:** without context
+  aggregators in the pipeline, push an `LLMContextFrame` instead. With
+  aggregators, an opening `LLMMessagesAppendFrame` works as before.
+- **The RTVI processor enforces what the protocol requires of a client
+  message.** A `client-message` without `t`, or an `llm-function-call-result`
+  missing a field, with arguments that are not an object or a result that is
+  neither an object nor a string, gets an `error-response`. A message labeled
+  `rtvi-ai` without a type or an id, or whose data is not an object, gets an
+  `error`. A `client-ready` with a missing or invalid `about` is accepted as a
+  client of an unknown library, rather than its version being treated as
+  unknown.
+- **RTVI raw audio messages have a type each.** **Breaking change:**
+  `rtvi.RawAudioData` describes a `raw-audio` message only and loses
+  `Base64AudioBatch` and `Chunks`; a `raw-audio-batch` is the new
+  `rtvi.RawAudioBatchData`, read with `rtvi.ParseRawAudioBatchData`. Both
+  parsers require every field. `rtvi.STTRawText` takes an
+  `rtvi.STTRawTextData`, which gains `Speaker`.
+- **AssemblyAI streaming STT defaults to
+  `assemblyai-stt-3-7-realtime-agent`.** **Breaking change:**
+  `universal-3-6-pro` remains supported; set `Config.Model` to keep using it.
+- **Cartesia Turns STT no longer labels every transcript as English.**
+  **Breaking change:** interim transcripts, and the transcript of a turn cut
+  short by a dropped connection, carry no language. Eager and final
+  transcripts carry the language Cartesia detected, or none when it reports
+  none.
+- **The STT base no longer records a finalize request on every VAD stop.**
+  **Breaking change:** a custom provider that reports confirmations with
+  `Result.FromFinalize` must call `StreamService.RequestFinalize` when it
+  sends its finalize, as the Deepgram, Flux, Gradium, Rime and Speechmatics
+  services now do. An empty confirmed answer no longer pushes anything unless
+  it sets `Result.PushFinalized`; it marks the next transcript instead.
+- **Gradium settles transcripts only on flush acknowledgements.** The server's
+  `end_of_stream` is only logged. With turn detection on, a turn whose flush
+  could not be sent pushes its transcript unfinalized. In both modes the
+  acknowledgement of the latest flush confirms the finalize the flush asked
+  for, and one with nothing to settle leaves the confirmation to the next
+  transcript.
+- **A Flux turn below the confidence floor still confirms a `ForceEndTurn`.**
+  The text is dropped as before, and the confirmation marks the next
+  transcript.
+
+### Deprecated
+
+- **The `bot-transcription` RTVI message is deprecated**, with
+  `rtvi.TypeBotTranscription` and `rtvi.BotTranscription`. Read `bot-output`,
+  which carries the same sentences along with whether and how far the bot has
+  spoken them.
+- **The Inception provider is deprecated, with no replacement.** Inception
+  stops serving the Mercury API after December 28, 2026, so
+  `provider/inception` will be removed in the first release after that date.
+  `inception.NewLLM` logs a warning when called.
+
+### Removed
+
+- **The Hume text-to-speech service is removed.** Hume has shut down its TTS
+  API, so the service could no longer synthesize speech. **Breaking change:**
+  `provider/hume` (`hume.NewTTS`, `hume.Config`) and the `voice-hume` example
+  are gone; use another TTS provider.
 
 ### Fixed
 
@@ -566,6 +733,56 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   fails at once with the close code when a bot closes before bot-ready,
   reports a failing user voice as the run's error, and refuses `expect:` or
   `context:` that is not a list by name.
+- **Word timestamps no longer run ahead of the audio for a context that starts
+  while the one before it is still playing**, such as several `TTSSpeakFrame`s
+  pushed at once or back-to-back turns. Word highlighting ran more than half a
+  second further ahead of speech with each later context. A context's words
+  now start where the previous context's words end, for ElevenLabs realtime
+  TTS and Cartesia TTS. An interruption forgets where the dropped words end,
+  so they cannot delay the next context.
+- **The assistant aggregator keeps the last words the bot spoke before an
+  interruption in the interrupted turn.** It used to leave them out of the
+  context and add them to the start of the next assistant message. The
+  interrupted turn's `LLMContextFrame`, `LLMContextAssistantTimestampFrame`
+  and `LLMContextAssistantTurnFrame` now follow the `InterruptionFrame`
+  instead of preceding it, a context push waiting for the bot to stop is
+  dropped at the interruption so the canceled response no longer runs the LLM,
+  and a thought being collected is dropped with the turn.
+- **Each VAD speech start and stop is reported once when the VAD runs in the
+  user aggregator.** The RTVI and speaking observers used to report each one
+  twice: the aggregator now marks the downstream and upstream copies of the
+  VAD and `UserSpeakingFrame` frames it sends as broadcast siblings.
+- **OpenAI Realtime, Azure Realtime, Gemini Live, AWS Nova Sonic and xAI
+  Realtime answer an `LLMMessagesAppendFrame` queued ahead of the user
+  aggregator**, such as an RTVI `send-text` message or a frame queued on the
+  worker. Gemini Live and Nova Sonic hold back an append that arrives before
+  their session has started, since the session starts from a context that
+  already holds it.
+- **OpenAI Realtime and Azure Realtime take an appended user message as a user
+  message**, where they used to take it as a system message.
+- **A malformed `raw-audio` or `raw-audio-batch` message gets an
+  `error-response`**, such as one missing `sampleRate` or with audio that is
+  not base64, so the client knows its audio was not received. Previously the
+  error was only logged, and a bad chunk in a batch dropped the chunks after
+  it while keeping the ones before. A batch with a bad chunk now pushes none
+  of its audio.
+- **The runner's `GET /status` lists only the transports `POST /start`
+  accepts.**
+- **Deepgram turns no longer end late when the finalize answer is empty.**
+  When Deepgram's own endpointing delivered the transcript before the VAD stop
+  asked it to finalize, nothing was marked finalized and the turn waited out
+  the STT latency. The empty answer now ends the turn and reports the TTFB.
+- **Gradium no longer finalizes on an earlier flush's acknowledgement.** Only
+  the acknowledgement of the latest flush finalizes the transcript, so audio
+  sent after an earlier flush is never cut off.
+- **STT tracing spans close on the transcript that finalizes them.** A
+  finalized transcript arriving after a VAD stop no longer has its span closed
+  early as `stt.incomplete`, and a `TranscriptionFinalizedFrame` closes the
+  span holding the text it confirms.
+- **No data race when a session is reopened after a drain that ran out.** A
+  provider that kept its socket open past its drain window left a wait running
+  that raced the next session's read loop on a reopen; the drain now waits on
+  the read loop's end, bounded by its window.
 
 ## [0.6.1] - 2026-11-12
 

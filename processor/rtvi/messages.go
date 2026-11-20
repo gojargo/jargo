@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/gojargo/jargo/frames"
@@ -49,10 +50,16 @@ const (
 	TypeError              = "error"
 	// The user-transcription, bot-tts-text and bot-llm-text messages are
 	// deprecated, replaced by the raw text messages and user-input. See
-	// UserTranscription, BotTTSText and BotLLMText.
-	TypeUserTranscription    = "user-transcription"
-	TypeUserInput            = "user-input"
-	TypeBotOutput            = "bot-output"
+	// UserTranscription, BotTTSText and BotLLMText. So is bot-transcription,
+	// replaced by bot-output.
+	TypeUserTranscription = "user-transcription"
+	TypeUserInput         = "user-input"
+	TypeBotOutput         = "bot-output"
+	// TypeBotTranscription is the bot-transcription message: the bot's LLM
+	// text, a sentence at a time.
+	//
+	// Deprecated: read TypeBotOutput, which carries the same sentences along
+	// with whether and how far the bot has spoken them.
 	TypeBotTranscription     = "bot-transcription"
 	TypeBotTTSText           = "bot-tts-text"
 	TypeBotLLMText           = "bot-llm-text"
@@ -113,6 +120,37 @@ func ParseIncoming(raw []byte) (Incoming, error) {
 	return m, err
 }
 
+// The ways a message from the client fails to be an RTVI message at all.
+var (
+	errNoType        = errors.New("type: field required")
+	errNoID          = errors.New("id: field required")
+	errDataNotObject = errors.New("data: must be an object")
+)
+
+// parseClientMessage decodes a message the client sent. Unlike a server
+// message, every one has a type and an id, the id being what an answer is
+// matched to, and its data, when it has any, is an object.
+func parseClientMessage(raw []byte) (Incoming, error) {
+	var m struct {
+		Label string          `json:"label"`
+		Type  *string         `json:"type"`
+		ID    *string         `json:"id"`
+		Data  json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return Incoming{}, err
+	}
+	switch {
+	case m.Type == nil:
+		return Incoming{}, errNoType
+	case m.ID == nil:
+		return Incoming{}, errNoID
+	case !isJSONAbsent(m.Data) && !isJSONObject(m.Data):
+		return Incoming{}, errDataNotObject
+	}
+	return Incoming{Label: m.Label, Type: *m.Type, ID: *m.ID, Data: m.Data}, nil
+}
+
 // SendTextOptions controls how the pipeline processes a send-text message.
 // Both fields default to true when absent, matching the RTVI client SDKs.
 type SendTextOptions struct {
@@ -159,10 +197,48 @@ func ParseSendTextData(raw json.RawMessage) (SendTextData, error) {
 
 // The ways a client message's data fails validation.
 var (
-	errNoContent = errors.New("content: field required")
-	errNoButtons = errors.New("buttons: at least one key required")
-	errBadButton = errors.New("buttons: a key is one of 0-9, * and #")
+	errNoContent               = errors.New("content: field required")
+	errNoButtons               = errors.New("buttons: at least one key required")
+	errBadButton               = errors.New("buttons: a key is one of 0-9, * and #")
+	errArgumentsNotObject      = errors.New("arguments: must be an object")
+	errResultNotObjectOrString = errors.New("result: must be an object or a string")
+	errFieldRequired           = errors.New("field required")
 )
+
+// isJSONAbsent reports whether raw holds no value: a field left out, or set to
+// null.
+func isJSONAbsent(raw json.RawMessage) bool {
+	return len(raw) == 0 || string(raw) == "null"
+}
+
+// requireFields checks that the JSON object raw holds every one of fields, each
+// set to something other than null. A field the client left out would
+// otherwise decode as its zero value, and the message would be carried out on
+// data the client never sent.
+func requireFields(raw json.RawMessage, fields ...string) error {
+	var present map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &present); err != nil {
+		return err
+	}
+	for _, field := range fields {
+		if isJSONAbsent(present[field]) {
+			return fmt.Errorf("%s: %w", field, errFieldRequired)
+		}
+	}
+	return nil
+}
+
+// isJSONObject reports whether raw is a JSON object.
+func isJSONObject(raw json.RawMessage) bool {
+	var v map[string]json.RawMessage
+	return json.Unmarshal(raw, &v) == nil && v != nil
+}
+
+// isJSONString reports whether raw is a JSON string.
+func isJSONString(raw json.RawMessage) bool {
+	var v string
+	return !isJSONAbsent(raw) && json.Unmarshal(raw, &v) == nil
+}
 
 // ParseDTMFData decodes the data payload of a dtmf message: one key or more,
 // each one of 0 to 9, * and #.
@@ -201,11 +277,49 @@ type ClientReadyData struct {
 	About   AboutClientData `json:"about,omitzero"`
 }
 
+// unknownLibrary is the library of a client that does not say what it is.
+const unknownLibrary = "unknown"
+
 // ParseClientReadyData decodes the data payload of a client-ready message.
+//
+// Only the version has to be readable, and a missing one reads as empty. An
+// about that is missing, or that does not describe a client, is ignored: the
+// client is taken to be of an unknown library, and the session still starts.
 func ParseClientReadyData(raw json.RawMessage) (ClientReadyData, error) {
-	var d ClientReadyData
-	err := json.Unmarshal(raw, &d)
-	return d, err
+	var fields struct {
+		Version *string         `json:"version"`
+		About   json.RawMessage `json:"about"`
+	}
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return ClientReadyData{}, err
+	}
+	d := ClientReadyData{About: AboutClientData{Library: unknownLibrary}}
+	if fields.Version != nil {
+		d.Version = *fields.Version
+	}
+	if isJSONAbsent(fields.About) {
+		return d, nil
+	}
+	about, err := parseAboutClientData(fields.About)
+	if err != nil {
+		slog.Warn("invalid about data in an RTVI client-ready, ignoring it", "err", err)
+		return d, nil
+	}
+	d.About = about
+	return d, nil
+}
+
+// parseAboutClientData decodes what a client says about itself, which must at
+// least name its library.
+func parseAboutClientData(raw json.RawMessage) (AboutClientData, error) {
+	var about AboutClientData
+	if err := json.Unmarshal(raw, &about); err != nil {
+		return AboutClientData{}, err
+	}
+	if err := requireFields(raw, "library"); err != nil {
+		return AboutClientData{}, err
+	}
+	return about, nil
 }
 
 // BotReadyData is the payload of a bot-ready message: the protocol version the
@@ -242,11 +356,17 @@ type RawClientMessageData struct {
 	D json.RawMessage `json:"d,omitempty"`
 }
 
-// ParseRawClientMessageData decodes the data payload of a client-message.
+// ParseRawClientMessageData decodes the data payload of a client-message,
+// which must name the client's own message type.
 func ParseRawClientMessageData(raw json.RawMessage) (RawClientMessageData, error) {
 	var d RawClientMessageData
-	err := json.Unmarshal(raw, &d)
-	return d, err
+	if err := json.Unmarshal(raw, &d); err != nil {
+		return RawClientMessageData{}, err
+	}
+	if err := requireFields(raw, "t"); err != nil {
+		return RawClientMessageData{}, err
+	}
+	return d, nil
 }
 
 // RawServerResponseData is the payload of a server-response: the type of the
@@ -291,11 +411,23 @@ type FunctionCallResultData struct {
 }
 
 // ParseFunctionCallResultData decodes the data payload of an
-// llm-function-call-result message.
+// llm-function-call-result message. Every field is required: the arguments are
+// an object, and the result an object or a string.
 func ParseFunctionCallResultData(raw json.RawMessage) (FunctionCallResultData, error) {
 	var d FunctionCallResultData
-	err := json.Unmarshal(raw, &d)
-	return d, err
+	if err := json.Unmarshal(raw, &d); err != nil {
+		return FunctionCallResultData{}, err
+	}
+	if err := requireFields(raw, "function_name", "tool_call_id", "arguments", "result"); err != nil {
+		return FunctionCallResultData{}, err
+	}
+	if !isJSONObject(d.Arguments) {
+		return FunctionCallResultData{}, errArgumentsNotObject
+	}
+	if !isJSONObject(d.Result) && !isJSONString(d.Result) {
+		return FunctionCallResultData{}, errResultNotObjectOrString
+	}
+	return d, nil
 }
 
 // ResultText is the result as the conversation records it. A result sent as a
@@ -309,39 +441,61 @@ func (d FunctionCallResultData) ResultText() string {
 	return string(d.Result)
 }
 
-// RawAudioData is the payload of a raw-audio or raw-audio-batch message: audio
-// the client captured itself, base64-encoded 16-bit PCM, one chunk or a batch of
-// them. It is how a client that does its own capture feeds the pipeline over the
-// message channel rather than a media track.
+// RawAudioData is the payload of a raw-audio message: one chunk of the user's
+// audio, which the client captured itself. It is how a client that does its own
+// capture feeds the pipeline over the message channel rather than a media
+// track.
 type RawAudioData struct {
+	// Base64Audio is 16-bit PCM audio, base64-encoded.
 	//nolint:tagliatelle // RTVI wire fields, camelCase in the protocol
-	Base64Audio string `json:"base64Audio,omitempty"`
-	//nolint:tagliatelle // RTVI wire fields, camelCase in the protocol
-	Base64AudioBatch []string `json:"base64AudioBatch,omitempty"`
+	Base64Audio string `json:"base64Audio"`
+	// SampleRate is the audio's sample rate, in Hz.
 	//nolint:tagliatelle // RTVI wire fields, camelCase in the protocol
 	SampleRate int `json:"sampleRate"`
+	// NumChannels is the audio's number of channels.
 	//nolint:tagliatelle // RTVI wire fields, camelCase in the protocol
 	NumChannels int `json:"numChannels"`
 }
 
-// Chunks are the encoded audio chunks the message carries, in order. A batch is
-// taken whole when there is one; otherwise the single chunk stands alone.
-func (d RawAudioData) Chunks() []string {
-	if len(d.Base64AudioBatch) > 0 {
-		return d.Base64AudioBatch
-	}
-	if d.Base64Audio == "" {
-		return nil
-	}
-	return []string{d.Base64Audio}
-}
-
-// ParseRawAudioData decodes the data payload of a raw-audio or raw-audio-batch
-// message.
+// ParseRawAudioData decodes the data payload of a raw-audio message. Every field
+// is required.
 func ParseRawAudioData(raw json.RawMessage) (RawAudioData, error) {
 	var d RawAudioData
-	err := json.Unmarshal(raw, &d)
-	return d, err
+	if err := json.Unmarshal(raw, &d); err != nil {
+		return RawAudioData{}, err
+	}
+	if err := requireFields(raw, "base64Audio", "sampleRate", "numChannels"); err != nil {
+		return RawAudioData{}, err
+	}
+	return d, nil
+}
+
+// RawAudioBatchData is the payload of a raw-audio-batch message: several chunks
+// of the user's audio, which the client captured itself.
+type RawAudioBatchData struct {
+	// Base64AudioBatch is chunks of 16-bit PCM audio, each base64-encoded, in
+	// order.
+	//nolint:tagliatelle // RTVI wire fields, camelCase in the protocol
+	Base64AudioBatch []string `json:"base64AudioBatch"`
+	// SampleRate is the audio's sample rate, in Hz.
+	//nolint:tagliatelle // RTVI wire fields, camelCase in the protocol
+	SampleRate int `json:"sampleRate"`
+	// NumChannels is the audio's number of channels.
+	//nolint:tagliatelle // RTVI wire fields, camelCase in the protocol
+	NumChannels int `json:"numChannels"`
+}
+
+// ParseRawAudioBatchData decodes the data payload of a raw-audio-batch message.
+// Every field is required.
+func ParseRawAudioBatchData(raw json.RawMessage) (RawAudioBatchData, error) {
+	var d RawAudioBatchData
+	if err := json.Unmarshal(raw, &d); err != nil {
+		return RawAudioBatchData{}, err
+	}
+	if err := requireFields(raw, "base64AudioBatch", "sampleRate", "numChannels"); err != nil {
+		return RawAudioBatchData{}, err
+	}
+	return d, nil
 }
 
 // ErrorData is the payload of an error message.
@@ -470,6 +624,9 @@ func (d *BotOutputData) UnmarshalJSON(data []byte) error {
 }
 
 // BotTranscription builds a bot-transcription message.
+//
+// Deprecated: use BotOutput, which carries the same sentences along with
+// whether and how far the bot has spoken them.
 func BotTranscription(text string) Message {
 	return newMessage(TypeBotTranscription, "", TextData{Text: text})
 }
@@ -651,17 +808,15 @@ type STTRawTextData struct {
 	Timestamp string `json:"timestamp"`
 	// Final is whether the transcription is final, as opposed to interim.
 	Final bool `json:"final"`
+	// Speaker is who said it, when the STT service's diarization tells
+	// speakers apart. It is nil, and left out, otherwise.
+	Speaker *frames.TranscriptionSpeaker `json:"speaker,omitempty"`
 }
 
 // STTRawText builds an stt-raw-text message: a transcription as the STT
 // produced it, interim ones included.
-func STTRawText(text, userID, timestamp string, final bool) Message {
-	return newMessage(TypeSTTRawText, "", STTRawTextData{
-		Text:      text,
-		UserID:    userID,
-		Timestamp: timestamp,
-		Final:     final,
-	})
+func STTRawText(d STTRawTextData) Message {
+	return newMessage(TypeSTTRawText, "", d)
 }
 
 // UserInputType says what kind of input a user-input message reports.
@@ -697,6 +852,9 @@ type UserInputData struct {
 	// Perception is, for a transcription, how the user said it, when it comes
 	// with a reading. Part of expressive conversation (alpha).
 	Perception []UserPerceptionSignal `json:"perception,omitempty"`
+	// Speaker is, for a transcription, who said it, when the STT service's
+	// diarization tells speakers apart. It is nil, and left out, otherwise.
+	Speaker *frames.TranscriptionSpeaker `json:"speaker,omitempty"`
 }
 
 // UserPerceptionLabel is a label of a perception signal, with how sure the

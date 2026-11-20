@@ -2,7 +2,9 @@ package gradium
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strconv"
 	"testing"
 	"time"
 
@@ -32,6 +34,21 @@ func (s *sttStream) feed(msgs ...sttMessage) {
 func text(t string) sttMessage   { return sttMessage{Type: msgText, Text: t} }
 func flushed() sttMessage        { return sttMessage{Type: msgFlushed} }
 func errMsg(m string) sttMessage { return sttMessage{Type: msgError, Message: m} }
+
+// flushedID acknowledges the flush numbered id, which the server returns as a
+// number.
+func flushedID(id int) sttMessage {
+	return sttMessage{Type: msgFlushed, FlushID: json.RawMessage(strconv.Itoa(id))}
+}
+
+// newFlushedStream is a test stream that has sent its first flush, so that
+// flush's acknowledgement confirms it.
+func newFlushedStream() *sttStream {
+	s := newTestStream()
+	s.flushCounter = 1
+	return s
+}
+
 func recvOne(t *testing.T, s *sttStream) stt.Result {
 	t.Helper()
 	got, err := s.Recv()
@@ -68,16 +85,16 @@ func TestRecvSurfacesTheRunningTranscript(t *testing.T) {
 // arrives drops them, and because the transcript is cleared with it, they then
 // turn up at the front of whatever the user says next.
 func TestRecvKeepsTheWordsThatArriveAfterAFlush(t *testing.T) {
-	s := newTestStream()
+	s := newFlushedStream()
 	// The trailing fragment is already on its way when the flush is handled.
-	s.feed(text("what is the"), flushed(), text("weather today"))
+	s.feed(text("what is the"), flushedID(1), text("weather today"))
 
 	if got := recvOne(t, s); got.Text != "what is the" {
 		t.Fatalf("interim = %q, want %q", got.Text, "what is the")
 	}
 
 	final := recvOne(t, s)
-	if !final.Final || !final.EndOfTurn {
+	if !final.Final || !final.FromFinalize {
 		t.Error("the flush did not settle the transcript")
 	}
 	if final.Text != "what is the weather today" {
@@ -138,11 +155,11 @@ func TestRecvHoldsWhatItReadWhileWaiting(t *testing.T) {
 // the transcript open for its window all the same, and what arrives in it is
 // the utterance the flush closed.
 func TestRecvSettlesWhatArrivesAfterAFlushWithNothingHeld(t *testing.T) {
-	s := newTestStream()
-	s.feed(flushed(), text("now speaking"))
+	s := newFlushedStream()
+	s.feed(flushedID(1), text("now speaking"))
 
 	got := recvOne(t, s)
-	if got.Text != "now speaking" || !got.Final || !got.EndOfTurn {
+	if got.Text != "now speaking" || !got.Final || !got.FromFinalize {
 		t.Errorf("result = %+v, want the text that arrived in the window settled", got)
 	}
 }
@@ -152,7 +169,7 @@ func TestRecvSettlesWhatArrivesAfterAFlushWithNothingHeld(t *testing.T) {
 // carrying an empty transcript would end a turn the user never took.
 func TestRecvIgnoresAFlushWithNothingToSettle(t *testing.T) {
 	s := newTestStream()
-	if got := s.flushed(); len(got) != 0 {
+	if got := s.flushed(flushed()); len(got) != 0 {
 		t.Errorf("results = %+v, want nothing for an empty flush", got)
 	}
 }
@@ -209,15 +226,15 @@ func TestRecvADropReturnsTheTextSoFarWithoutEndingTheTurn(t *testing.T) {
 // transcript goes out once, ending the turn the flush closed, and the failure
 // follows without a second transcript.
 func TestRecvADropWhileSettlingReturnsTheTranscriptOnce(t *testing.T) {
-	s := newTestStream()
-	s.feed(text("the tail"), flushed())
+	s := newFlushedStream()
+	s.feed(text("the tail"), flushedID(1))
 	s.drop()
 
 	recvOne(t, s) // the interim
 
 	got := recvOne(t, s)
-	if got.Text != "the tail" || !got.Final || !got.EndOfTurn {
-		t.Errorf("result = %+v, want the flushed transcript ending the turn", got)
+	if got.Text != "the tail" || !got.Final || !got.FromFinalize {
+		t.Errorf("result = %+v, want the flushed transcript confirming the finalize", got)
 	}
 	if res, err := s.Recv(); !errors.Is(err, errDropped) {
 		t.Errorf("Recv = %+v, %v, want only the drop reported", res, err)

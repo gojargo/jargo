@@ -2,12 +2,21 @@ package gradium
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"slices"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor/turns"
 	"github.com/gojargo/jargo/service/settings"
 	"github.com/gojargo/jargo/service/stt"
+	"github.com/gojargo/jargo/utils/events"
 )
 
 // Tests for turn detection from Gradium's end-pointing signal, and for the
@@ -206,6 +215,170 @@ func TestAVADStopFlushesOnlyWithoutTurnDetection(t *testing.T) {
 	}
 }
 
+// flushAnsweringServer is a fake Gradium ASR endpoint that acknowledges the
+// setup and answers each flush with the scripted messages, recording what it
+// was sent.
+func flushAnsweringServer(t *testing.T, answer ...map[string]any) (string, *sttCapture) {
+	t.Helper()
+	c := &sttCapture{got: make(chan map[string]any, 64)}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.CloseNow() }()
+		ctx := r.Context()
+		write := func(m map[string]any) bool {
+			b, _ := json.Marshal(m) //nolint:errchkjson // map of known-serializable values
+			return conn.Write(ctx, websocket.MessageText, b) == nil
+		}
+		for {
+			_, data, err := conn.Read(ctx)
+			if err != nil {
+				return
+			}
+			m := map[string]any{}
+			if json.Unmarshal(data, &m) != nil {
+				return
+			}
+			switch m[msgType] {
+			case "setup":
+				if !write(map[string]any{msgType: "ready"}) {
+					return
+				}
+			case msgFlush:
+				select {
+				case c.got <- m:
+				default:
+				}
+				for _, a := range answer {
+					if !write(a) {
+						return
+					}
+				}
+			}
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return "ws" + strings.TrimPrefix(srv.URL, "http"), c
+}
+
+// Ported from upstream (test_gradium_a_vad_stop_transcript_is_finalized_by_its_flush_ack).
+// The VAD stop's flush asks for the transcript to be finalized, and the
+// server's acknowledgement of that flush confirms it.
+func TestAVADStopTranscriptIsFinalizedByItsFlushAck(t *testing.T) {
+	endpoint, seen := flushAnsweringServer(t,
+		map[string]any{msgType: msgText, "text": "hello"},
+		// The server returns the id as a number.
+		map[string]any{msgType: msgFlushed, "flush_id": 1},
+	)
+	svc := NewSTT(STTConfig{APIKey: "test-key", URL: endpoint})
+
+	transcripts := make(chan *frames.TranscriptionFrame, 4)
+	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{ReachedDownstreamFilter: pipeline.AnyFrame})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		if tf, ok := f.(*frames.TranscriptionFrame); ok {
+			transcripts <- tf
+		}
+	})
+	done := make(chan error, 1)
+	go func() { done <- task.Run(context.Background()) }()
+	defer func() {
+		task.StopWhenDone()
+		<-done
+	}()
+	deadline := time.Now().Add(3 * time.Second)
+	for !svc.Connected() {
+		if time.Now().After(deadline) {
+			t.Fatal("the session never opened")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	task.QueueFrame(frames.NewVADUserStartedSpeakingFrame(0.2, time.Now()))
+	task.QueueFrame(frames.NewVADUserStoppedSpeakingFrame(0.2, time.Now()))
+
+	if m := seen.await(t); m[msgType] != msgFlush || m["flush_id"] != "1" {
+		t.Errorf("the server saw %v, want the first flush", m)
+	}
+	select {
+	case tf := <-transcripts:
+		if tf.Text != "hello" || !tf.Finalized {
+			t.Errorf("transcript = %q (finalized %v), want hello finalized", tf.Text, tf.Finalized)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("no transcript arrived after the flush was acknowledged")
+	}
+}
+
+// Ported from upstream (test_gradium_the_ack_of_an_earlier_flush_does_not_finalize_the_transcript).
+// Two VAD stops in a row: the first flush's acknowledgement arrives after the
+// second flush, and says nothing about the audio sent between them.
+func TestTheAckOfAnEarlierFlushDoesNotFinalizeTheTranscript(t *testing.T) {
+	s := turnStream(func(c *STTConfig) { c.EnableTurnDetection = false })
+	s.flushCounter = 2
+
+	s.feed(text("hello"), flushedID(1))
+	recvOne(t, s) // the interim
+	if got := recvOne(t, s); got.Text != "hello" || got.FromFinalize {
+		t.Errorf("result = %+v, want the transcript left unconfirmed", got)
+	}
+
+	s.feed(text("again"), flushedID(2))
+	recvOne(t, s) // the interim
+	if got := recvOne(t, s); got.Text != "again" || !got.FromFinalize {
+		t.Errorf("result = %+v, want the transcript confirming the finalize", got)
+	}
+}
+
+// With turn detection the flush ending a turn asks for a finalize as well, and
+// only the acknowledgement of the latest one confirms it.
+func TestWithTurnDetectionOnlyTheLatestFlushAckConfirmsTheFinalize(t *testing.T) {
+	s := turnStream()
+	s.flushCounter = 2
+	s.phase = phaseEnding
+
+	s.accumulated = []string{"first"}
+	if res := s.flushed(flushedID(1)); len(res) != 1 || res[0].FromFinalize {
+		t.Errorf("results = %+v, want the transcript left unconfirmed", res)
+	}
+	s.accumulated = []string{"second"}
+	if res := s.flushed(flushedID(2)); len(res) != 1 || !res[0].FromFinalize {
+		t.Errorf("results = %+v, want the transcript confirming the finalize", res)
+	}
+}
+
+// An acknowledgement confirming the finalize with nothing to settle still
+// confirms it, which leaves the confirmation to the next transcript.
+func TestAnEmptyAckOfTheLatestFlushStillConfirmsTheFinalize(t *testing.T) {
+	for _, td := range []bool{false, true} {
+		s := turnStream(func(c *STTConfig) { c.EnableTurnDetection = td })
+		s.flushCounter = 1
+
+		res := s.flushed(flushedID(1))
+
+		if len(res) != 1 || res[0].Text != "" || !res[0].Final || !res[0].FromFinalize {
+			t.Errorf("turn detection %v: results = %+v, want an empty confirmation", td, res)
+		}
+	}
+}
+
+// Ported from upstream (end_of_stream is only logged). The end of the stream
+// settles nothing: the words held stay for the flush that settles them.
+func TestTheEndOfTheStreamIsOnlyLogged(t *testing.T) {
+	s := newTestStream()
+	s.accumulated = []string{"held"}
+
+	res, err := s.handle(sttMessage{Type: msgEndStream})
+
+	if err != nil || len(res) != 0 {
+		t.Errorf("handle = %+v, %v, want nothing", res, err)
+	}
+	if len(s.accumulated) != 1 {
+		t.Errorf("accumulated = %v, want the words still held", s.accumulated)
+	}
+}
+
 // Ported from upstream (test_gradium_turn_detection_the_signal_falling_below_the_threshold_proposes_a_turn_start).
 // The service only proposes the start; the strategies own the interruption.
 func TestTheSignalFallingBelowTheThresholdProposesATurnStart(t *testing.T) {
@@ -297,7 +470,7 @@ func TestTheFlushAckStartsTheCooldownAndHoldsTheEndingPhase(t *testing.T) {
 	s.accumulated = []string{"first turn"}
 	s.feed(step(0.9), step(0.2))
 
-	res := s.flushed()
+	res := s.flushed(flushed())
 
 	if len(res) != 1 || res[0].Text != "first turn" || len(speechOf(res)) != 0 {
 		t.Errorf("results = %+v, want the transcript and nothing proposed", res)
@@ -319,7 +492,7 @@ func TestSpeechContinuingThroughAFlushOpensATurn(t *testing.T) {
 	s.phase = phaseEnding
 	s.accumulated = []string{"I'd like to book a"}
 
-	res := s.flushed()
+	res := s.flushed(flushed())
 	res = append(res, s.steps(0.1, 0.1, 0.1)...)
 
 	if len(res) != 2 || res[0].Text != "I'd like to book a" || res[1].Speech != stt.SpeechStarted {
@@ -335,7 +508,7 @@ func TestAnEmptyTurnStillArmsTheNextTurn(t *testing.T) {
 	s := turnStream()
 	s.phase = phaseEnding
 
-	if res := s.flushed(); len(res) != 0 {
+	if res := s.flushed(flushed()); len(res) != 0 {
 		t.Errorf("results = %+v, want nothing for an empty turn", res)
 	}
 	if s.phase != phaseArmed {
@@ -352,7 +525,7 @@ func TestNoStartBeforeThePreviousTranscriptIsOut(t *testing.T) {
 	s.accumulated = []string{"first turn"}
 	s.feed(step(0.1))
 
-	res := s.flushed()
+	res := s.flushed(flushed())
 	res = append(res, s.steps(0.1)...)
 
 	if len(res) != 2 || res[0].Text != "first turn" || res[1].Speech != stt.SpeechStarted {
@@ -366,7 +539,7 @@ func TestWithoutTurnDetectionAFlushAckLeavesTurnsAlone(t *testing.T) {
 	s.accumulated = []string{"hello"}
 	s.feed(step(0.9), step(0.1))
 
-	res := s.flushed()
+	res := s.flushed(flushed())
 
 	if len(res) != 1 || res[0].Text != "hello" || len(speechOf(res)) != 0 {
 		t.Errorf("results = %+v, want the transcript alone", res)
@@ -384,7 +557,8 @@ func TestWithoutTurnDetectionAFlushAckLeavesTurnsAlone(t *testing.T) {
 // Ported from upstream
 // (test_gradium_turn_detection_the_transcript_finalizes_on_the_spot_when_the_flush_cannot_be_sent).
 // No acknowledgement is coming for a flush that was never sent, so the
-// transcript finalizes on what has arrived, behind the stop.
+// transcript settles on what has arrived, behind the stop, and nothing confirms
+// it as finalized.
 func TestTheTranscriptFinalizesOnTheSpotWhenTheFlushCannotBeSent(t *testing.T) {
 	s := turnStream()
 	s.phase = phaseOpen
@@ -394,6 +568,9 @@ func TestTheTranscriptFinalizesOnTheSpotWhenTheFlushCannotBeSent(t *testing.T) {
 
 	if len(res) != 2 || res[0].Speech != stt.SpeechStopped || res[1].Text != "so far" || !res[1].Final {
 		t.Errorf("results = %+v, want the stop and then the transcript", res)
+	}
+	if res[1].EndOfTurn || res[1].FromFinalize {
+		t.Errorf("transcript = %+v, want it unfinalized", res[1])
 	}
 	if s.phase != phaseIdle {
 		t.Errorf("phase = %v, want idle", s.phase)

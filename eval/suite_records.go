@@ -45,19 +45,20 @@ type turnRecord struct {
 
 // scenarioRecord is the results.jsonl record of a scenario run.
 type scenarioRecord struct {
-	Bot        string            `json:"bot"`
-	Name       string            `json:"name"`
-	Scenario   string            `json:"scenario"`
-	Kind       Kind              `json:"kind"`
-	Attempt    int               `json:"attempt"`
-	Passed     bool              `json:"passed"`
-	Skipped    *string           `json:"skipped"`
-	Error      *string           `json:"error"`
-	DurationMS *int              `json:"duration_ms"`
-	Failures   []failureRecord   `json:"failures"`
-	Turns      []turnRecord      `json:"turns"`
-	Artifacts  recordArtifacts   `json:"artifacts"`
-	EventsSeen *[]map[string]any `json:"events_seen,omitempty"`
+	Bot        string             `json:"bot"`
+	Name       string             `json:"name"`
+	Scenario   string             `json:"scenario"`
+	Kind       Kind               `json:"kind"`
+	Attempt    int                `json:"attempt"`
+	Passed     bool               `json:"passed"`
+	Skipped    *string            `json:"skipped"`
+	Error      *string            `json:"error"`
+	DurationMS *int               `json:"duration_ms"`
+	Failures   []failureRecord    `json:"failures"`
+	Turns      []turnRecord       `json:"turns"`
+	BotMetrics []BotMetricsReport `json:"bot_metrics"`
+	Artifacts  recordArtifacts    `json:"artifacts"`
+	EventsSeen *[]map[string]any  `json:"events_seen,omitempty"`
 }
 
 // verdictRecord is the judge's verdict on one bot turn of a metric.
@@ -104,6 +105,7 @@ type simulationRecord struct {
 	EndCall       map[string]any     `json:"end_call"`
 	DurationMS    *int               `json:"duration_ms"`
 	Messages      []map[string]any   `json:"messages"`
+	BotMetrics    []BotMetricsReport `json:"bot_metrics"`
 	Artifacts     recordArtifacts    `json:"artifacts"`
 	EventsSeen    *[]map[string]any  `json:"events_seen,omitempty"`
 }
@@ -111,7 +113,8 @@ type simulationRecord struct {
 // appendResult appends one JSON line describing a finished run.
 //
 // The record carries enough to compute pass rates and group failures by kind,
-// plus paths to the artifacts. events_seen is included only for runs that did
+// plus paths to the artifacts, and bot_metrics, what the bot's processors
+// measured during the run. events_seen is included only for runs that did
 // not pass, since that is what a failure is diagnosed from. A write that fails
 // is dropped: the record is a by-product of the run.
 func appendResult(resultsPath string, run *SuiteRun, stem, logsDir, recordDir string) {
@@ -171,6 +174,7 @@ func scenarioRecordOf(run *SuiteRun, artifacts recordArtifacts) scenarioRecord {
 		DurationMS: run.DurationMS,
 		Failures:   []failureRecord{},
 		Turns:      []turnRecord{},
+		BotMetrics: []BotMetricsReport{},
 		Artifacts:  artifacts,
 	}
 	if result == nil {
@@ -193,6 +197,7 @@ func scenarioRecordOf(run *SuiteRun, artifacts recordArtifacts) scenarioRecord {
 		}
 		record.Turns = append(record.Turns, turn)
 	}
+	record.BotMetrics = nonNil(result.BotMetrics)
 	if !record.Passed {
 		seen := nonNil(result.EventsSeen)
 		record.EventsSeen = &seen
@@ -217,6 +222,7 @@ func simulationRecordOf(run *SuiteRun, artifacts recordArtifacts) simulationReco
 		Metrics:       []metricRecord{},
 		DurationMS:    run.DurationMS,
 		Messages:      []map[string]any{},
+		BotMetrics:    []BotMetricsReport{},
 		Artifacts:     artifacts,
 	}
 	if result == nil {
@@ -241,6 +247,7 @@ func simulationRecordOf(run *SuiteRun, artifacts recordArtifacts) simulationReco
 	record.Reason = result.Reason
 	record.EndCall = result.EndCall
 	record.Messages = nonNil(result.Messages)
+	record.BotMetrics = nonNil(result.BotMetrics)
 	if !record.Passed {
 		seen := nonNil(result.EventsSeen)
 		record.EventsSeen = &seen

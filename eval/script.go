@@ -73,6 +73,17 @@ const (
 	// (<<neutral>> back to the baseline), [[laughter]] for a sound,
 	// [[pause 600]] for a pause. A tag the TTS can't perform is never reported.
 	EventExpression = "expression"
+	// EventMetrics is a report of what the bot's processors measured, such as
+	// a service's TTFB, its processing time or its usage, as the bot sent it in
+	// an RTVI metrics message, grouped by kind under "data". A bot sends them
+	// when its pipeline has metrics on. They are kept out of the events seen,
+	// and every one is kept with the run's result (see ScriptResult.BotMetrics).
+	EventMetrics = "metrics"
+	// EventServerMessage is a message of the bot's own making: whatever data
+	// it pushed in an RTVI server message frame, under "data". Its text is
+	// that data as JSON, or the data itself when it is a string, so the content
+	// checks read it and a matched expectation records it.
+	EventServerMessage = "server_message"
 )
 
 // The meanings a marker expectation can name, which are the emitter's own
@@ -216,6 +227,13 @@ type Expectation struct {
 	// TextAfter, on an llm_marker, is whether text must (true) or must not
 	// (false) follow the first marker in the raw text.
 	TextAfter *bool
+	// Metric, on a metrics event, is the kind of metric the report must hold,
+	// as the bot names it: ttfb, processing, tokens, and so on. Empty takes any
+	// kind.
+	Metric string
+	// Processor, on a metrics event, is text the name of the processor that
+	// measured the metric must contain. Empty takes any processor.
+	Processor string
 	// CheckFrom is where the expectation checks for its event from: previous
 	// (the default, also when empty), where the expectation above it was met;
 	// or turn_start, the beginning of the turn, at events the expectations
@@ -223,7 +241,7 @@ type Expectation struct {
 	CheckFrom string
 	// Absent inverts the expectation: it passes only when no event of this type
 	// arrives before the WithinMS budget expires, and fails as soon as one does.
-	// It matches on event type only, so no content, call or marker check may
+	// It matches on event type only, so no content, call, marker or metric check may
 	// accompany it.
 	Absent bool
 }
@@ -804,13 +822,19 @@ const (
 	keyTextAfter   = "text_after"
 )
 
+// The keys of a metrics expectation's filters.
+const (
+	keyMetric    = "metric"
+	keyProcessor = "processor"
+)
+
 // absentConflicts are the keys an absent expectation may not carry: content,
-// call and marker checks describe an event that must arrive.
+// call, marker and metric checks describe an event that must arrive.
 //
 //nolint:gochecknoglobals // fixed list, read only
 var absentConflicts = []string{
 	"text_contains", "text_excludes", "text_matches", keyEval, "calls", keyName, "args",
-	keyMarker, keyMarkerFirst, keyMarkers, keyTextAfter,
+	keyMarker, keyMarkerFirst, keyMarkers, keyTextAfter, keyMetric, keyProcessor,
 }
 
 // markerKeys are the keys that only apply to an llm_marker expectation.
@@ -852,7 +876,7 @@ func parseExpectation(raw any, path string, ti, ei int) (Expectation, error) {
 			return Expectation{}, err
 		}
 	}
-	if err = parseMarkerChecks(e, &exp, where); err != nil {
+	if err = parseEventChecks(e, &exp, where); err != nil {
 		return Expectation{}, err
 	}
 	if exp.TextMatches, err = parseTextMatches(e["text_matches"], where); err != nil {
@@ -942,6 +966,35 @@ func parseMarkerChecks(e map[string]any, exp *Expectation, where string) error {
 			return invalidf("%s 'markers:' must be a int", where)
 		}
 		exp.Markers = &n
+	}
+	return nil
+}
+
+// parseEventChecks reads the checks that apply to one event alone: an
+// llm_marker's marker checks and a metrics report's filters.
+func parseEventChecks(e map[string]any, exp *Expectation, where string) error {
+	if err := parseMarkerChecks(e, exp, where); err != nil {
+		return err
+	}
+	return parseMetricFilters(e, exp, where)
+}
+
+// parseMetricFilters reads a metrics expectation's metric: and processor:,
+// refusing them on any other event.
+func parseMetricFilters(e map[string]any, exp *Expectation, where string) error {
+	for _, f := range []stringField{{keyMetric, &exp.Metric}, {keyProcessor, &exp.Processor}} {
+		v := e[f.key]
+		if v == nil {
+			continue
+		}
+		if exp.Event != EventMetrics {
+			return invalidf("%s '%s:' only applies to the 'metrics' event, not %s", where, f.key, pyRepr(exp.Event))
+		}
+		s, ok := v.(string)
+		if !ok || s == "" {
+			return invalidf("%s '%s:' must be a non-empty string", where, f.key)
+		}
+		*f.dst = s
 	}
 	return nil
 }

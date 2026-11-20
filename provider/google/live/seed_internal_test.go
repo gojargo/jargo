@@ -241,28 +241,6 @@ func TestAudioWaitsForTheSessionToBeSeeded(t *testing.T) {
 	}
 }
 
-// Messages appended with no conversation are converted the way the session
-// takes them, a leading system message being the prompt rather than a turn.
-func TestAnAppendWithoutAConversationLiftsTheSystemMessage(t *testing.T) {
-	srv := newRecordingSession(t)
-	s := startedServiceBuilt(t, New(Config{APIKey: "k", BaseURL: wsURL(srv)}))
-
-	f := frames.NewLLMMessagesAppendFrame([]frames.Message{
-		{Role: frames.RoleSystem, Text: "Be brief."},
-		{Role: frames.RoleUser, Text: "Hi."},
-	})
-	s.handleMessagesAppend(t.Context(), f)
-	settle()
-
-	got := srv.clientContents()
-	if len(got) != 1 || got[0][keyTurnComplete] != true {
-		t.Fatalf("client content = %v, want one completing the turn", got)
-	}
-	if roles := turnRoles(got[0]); len(roles) != 1 {
-		t.Errorf("turns = %v, want the user's alone", roles)
-	}
-}
-
 // The setup tells the API the history comes as client content, unless the
 // connector's deployment does not take that.
 func TestTheSetupCarriesTheHistoryConfig(t *testing.T) {

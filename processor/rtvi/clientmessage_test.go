@@ -334,7 +334,7 @@ func TestRawAudioBatchIsHeardInOrder(t *testing.T) {
 	first, second := []byte{1, 1}, []byte{2, 2}
 	c.send(t, rtvi.Message{
 		Label: rtvi.MessageLabel, Type: rtvi.TypeRawAudioBatch, ID: "req-14",
-		Data: rtvi.RawAudioData{
+		Data: rtvi.RawAudioBatchData{
 			Base64AudioBatch: []string{
 				base64.StdEncoding.EncodeToString(first),
 				base64.StdEncoding.EncodeToString(second),

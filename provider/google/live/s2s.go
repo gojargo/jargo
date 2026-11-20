@@ -916,17 +916,19 @@ func (s *Service) handleFunctionCallResult(ctx context.Context, f *frames.Functi
 // reads them without answering. Whether it answers is the aggregator's call: an
 // append that asks to run comes back to this service as the conversation the
 // assistant aggregator pushes upstream, which completes the turn (see
-// handleContext). Without a conversation, the append starts one on its own,
-// which is how a pipeline with no aggregators kicks one off.
+// handleContext).
+//
+// If the session has not received its first conversation yet, the messages are
+// not sent. The assistant aggregator adds them to the conversation, and the
+// session starts from that conversation, so the model gets them then.
+//
+// The messages are taken from this frame, not read from the conversation. The
+// user aggregator's realtimeHandleMessagesAppend explains why.
 func (s *Service) handleMessagesAppend(ctx context.Context, f *frames.LLMMessagesAppendFrame) {
 	s.mu.Lock()
 	convo := s.convo
 	s.mu.Unlock()
-	if convo == nil {
-		s.createSingleResponse(ctx, f.Messages)
-		return
-	}
-	if !s.ready.Load() {
+	if convo == nil || !s.ready.Load() {
 		return
 	}
 	var turns []any
@@ -959,31 +961,6 @@ func (s *Service) completeTurn(ctx context.Context) {
 	s.mu.Unlock()
 	slog.DebugContext(ctx, "completing the turn for appended content", "service", s.Name())
 	s.sendTurnComplete(ctx, map[string]any{keyTurnComplete: true})
-}
-
-// createSingleResponse has the model answer messages appended with no
-// conversation to append them to, the case of a pipeline with no aggregators
-// that starts the conversation this way.
-func (s *Service) createSingleResponse(ctx context.Context, messages []frames.Message) {
-	if !s.ready.Load() {
-		return
-	}
-	// A throwaway conversation, only to convert the messages the way the
-	// session takes them. A leading system message is its prompt, as it would
-	// be of any conversation built from a message list.
-	system := ""
-	if len(messages) > 0 && messages[0].Role == frames.RoleSystem && !messages[0].IsLLMSpecific() {
-		system, messages = messages[0].Text, messages[1:]
-	}
-	convo := frames.NewLLMContext(system)
-	convo.SetMessages(messages)
-	params, err := s.adapter.LLMInvocationParams(convo, adapter.Options{})
-	if err != nil || len(params.Contents) == 0 {
-		return
-	}
-	slog.DebugContext(ctx, "creating a response", "service", s.Name())
-	s.StartTTFBMetrics()
-	s.sendTurnComplete(ctx, map[string]any{keyTurns: params.Contents, keyTurnComplete: true})
 }
 
 // sendTurnComplete sends client content that completes the turn. The 3.x

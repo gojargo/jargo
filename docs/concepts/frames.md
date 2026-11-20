@@ -208,6 +208,7 @@ is data precisely so that it *can* be thrown away.
 | `TTSTextFrame` | data | Text a TTS service is speaking, aligned to audio. |
 | `TTSSpeakFrame` | data | Fixed text to speak directly, bypassing the LLM. |
 | `TranscriptionFrame` | data | Finalized user transcription. |
+| `TranscriptionFinalizedFrame` | data | An STT's confirmation, without text, that the transcripts before it are complete. |
 | `InterimTranscriptionFrame` | data | Partial, non-final transcription. |
 
 ### LLM and context

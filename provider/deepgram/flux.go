@@ -64,7 +64,19 @@ const (
 	fluxMsgTurnInfo         = "TurnInfo"
 	fluxMsgConfigureSuccess = "ConfigureSuccess"
 	fluxMsgConfigureFailure = "ConfigureFailure"
+	fluxMsgWarning          = "Warning"
 )
+
+// fluxForceEndTurn asks Flux to finalize the audio sent so far, ending the turn
+// in progress.
+const fluxForceEndTurn = `{"type":"ForceEndTurn"}`
+
+// fluxTriggerManual is the trigger of an EndOfTurn that answers a ForceEndTurn.
+const fluxTriggerManual = "manual"
+
+// fluxWarningNoActiveTurn is the warning Flux sends for a ForceEndTurn that
+// arrived after it had already ended the turn.
+const fluxWarningNoActiveTurn = "FORCE_END_TURN_NO_ACTIVE_TURN"
 
 // Flux TurnInfo event types (the "event" field on a TurnInfo message).
 const (
@@ -78,7 +90,12 @@ const (
 
 // The events the Flux STT service fires as Flux reports on the turn, each after
 // the frames the report produced have been pushed. All but EventFluxTurnResumed
-// carry the transcript Flux sent with the report:
+// carry the transcript Flux sent with the report.
+//
+// The turn events follow Flux's turns. With FluxConfig.VADForceTurnEndpoint
+// those are not the pipeline's turns: EventFluxEndOfTurn fires on every Flux
+// finalization, so possibly several times per user turn. The user aggregator's
+// own events report the pipeline's turns:
 //
 //	events.On(svc.Events(), deepgram.EventFluxUpdate,
 //	    func(ctx context.Context, transcript string) { … })
@@ -237,7 +254,26 @@ type FluxConfig struct {
 	// nil enables it. It is passed along to the user turn strategies this
 	// service recommends, which own the interruption; strategies the application
 	// configures itself override the recommendation and this setting with it.
+	// Ignored with VADForceTurnEndpoint.
 	ShouldInterrupt *bool
+	// VADForceTurnEndpoint hands the decision of when a user turn ends to the
+	// pipeline's own user turn strategies (a smart-turn analyzer, an LLM
+	// completion gate), instead of Flux. Flux keeps transcribing: each
+	// VADUserStoppedSpeakingFrame asks it to finalize the audio sent so far
+	// with a ForceEndTurn, so a VAD analyzer is required, and one user turn can
+	// produce several finalized transcripts, which the user aggregator joins
+	// until the stop strategy ends the turn. The service then proposes neither
+	// turn edge and recommends no strategies. Flux still finalizes on its own
+	// confidence unless EOTThreshold is 1.0. It cannot be combined with
+	// EagerEOTThreshold: nothing answers Flux's predictions when the pipeline
+	// owns the turn. Off by default.
+	VADForceTurnEndpoint bool `validate:"excluded_with=EagerEOTThreshold"`
+	// TTFSP99 overrides the measured transcript latency the turn strategies
+	// size their wait by; nil uses stt.DeepgramFluxTTFSP99, and zero means no
+	// wait. It only applies with VADForceTurnEndpoint, where the transcript
+	// trails the VAD stop by a ForceEndTurn round trip; otherwise Flux marks
+	// the end of speech itself.
+	TTFSP99 *time.Duration
 
 	// APIKey is the Deepgram API key. Required.
 	APIKey string `validate:"required"`
@@ -254,7 +290,8 @@ type FluxConfig struct {
 	// transcripts before a turn is confirmed). Off when nil.
 	EagerEOTThreshold *float64
 	// EOTThreshold is the end-of-turn confidence required to finish a turn;
-	// nil uses the service default.
+	// nil uses the service default. At 1.0 Flux ends a turn only on
+	// EOTTimeoutMs or a ForceEndTurn.
 	EOTThreshold *float64
 	// EOTTimeoutMs is the time in ms after speech to finish a turn regardless of
 	// end-of-turn confidence; nil uses the service default.
@@ -292,13 +329,18 @@ func (cfg FluxConfig) Validate() error { return validate.Struct(cfg) }
 
 // NewFluxSTT builds a Deepgram Flux streaming turn-aware STT service. Flux
 // detects turn boundaries server-side, so the service recommends external user
-// turns downstream.
+// turns downstream, unless VADForceTurnEndpoint hands the turns to the
+// pipeline's own strategies.
 func NewFluxSTT(cfg FluxConfig) *stt.StreamService {
 	if cfg.Model == "" {
 		cfg.Model = defaultFluxModel
 	}
 	if cfg.ListenURL == "" {
 		cfg.ListenURL = fluxListenURL
+	}
+	if cfg.VADForceTurnEndpoint && cfg.ShouldInterrupt != nil && !*cfg.ShouldInterrupt {
+		slog.Warn("ShouldInterrupt is ignored with VADForceTurnEndpoint; "+
+			"configure interruptions on the user turn start strategy instead", "service", "DeepgramFluxSTT")
 	}
 	c := newFluxConnector(cfg)
 	svc := stt.NewStream("DeepgramFluxSTT", c, cfg.SampleRate)
@@ -462,20 +504,52 @@ func (c *fluxConnector) EagerEndOfTurn() bool {
 // Metadata recommends external user turns: Flux emits its own turn boundaries.
 // With the eager threshold set it recommends the eager ones instead, which
 // answer a predicted end of turn while the turn is still open.
+//
+// With VADForceTurnEndpoint it recommends nothing, leaving the turns to the
+// pipeline's own strategies, and TTFS applies: the VAD, not Flux, marks the end
+// of speech, and the transcript trails it by a ForceEndTurn round trip.
 func (c *fluxConnector) Metadata() stt.Metadata {
+	m := stt.Metadata{Model: c.live.Model.Or(c.cfg.Model)}
+	if c.cfg.VADForceTurnEndpoint {
+		m.TTFSP99 = stt.TTFSP99Or(c.cfg.TTFSP99, stt.DeepgramFluxTTFSP99)
+		return m
+	}
 	noTTFS := false
+	m.SupportsTTFS = &noTTFS
 	external := turns.ExternalStrategiesConfig{EnableInterruptions: c.cfg.ShouldInterrupt}
-	strategies := turns.ExternalStrategies(external)
+	m.UserTurnStrategies = turns.ExternalStrategies(external)
 	if c.EagerEndOfTurn() {
-		strategies = turns.EagerStrategies(turns.EagerStrategiesConfig{
+		m.UserTurnStrategies = turns.EagerStrategies(turns.EagerStrategiesConfig{
 			ExternalStrategiesConfig: external,
 		})
 	}
-	return stt.Metadata{
-		UserTurnStrategies: strategies,
-		SupportsTTFS:       &noTTFS,
-		Model:              c.live.Model.Or(c.cfg.Model),
+	return m
+}
+
+// errNotFlux is returned by ForceEndTurn for a service that is not a Flux STT
+// service.
+//
+//nolint:gochecknoglobals // sentinel error
+var errNotFlux = errors.New("deepgram flux: not a Flux STT service")
+
+// ForceEndTurn asks Flux to finalize the audio svc has sent so far, ending the
+// turn in progress, on a signal of the application's own such as a
+// push-to-talk release. With VADForceTurnEndpoint each VAD stop does the same.
+// Without it, the EndOfTurn Flux answers with ends the pipeline's turn as any
+// other does.
+//
+// It does nothing while no turn is in progress or no session is open, and fails
+// when svc is not a Flux STT service or the request could not be sent.
+func ForceEndTurn(svc *stt.StreamService) error {
+	c, ok := svc.Connector().(*fluxConnector)
+	if !ok {
+		return errNotFlux
 	}
+	s := c.currentStream()
+	if s == nil {
+		return nil
+	}
+	return s.forceEndTurn()
 }
 
 // Connect dials the Flux transcription WebSocket for the given sample rate.
@@ -504,6 +578,7 @@ func (c *fluxConnector) Connect(ctx context.Context, sampleRate int) (stt.Stream
 	s := &fluxStream{
 		conn:        conn,
 		ctx:         ctx,
+		forceTurns:  c.cfg.VADForceTurnEndpoint,
 		sampleRate:  sampleRate,
 		model:       c.live.Model.Or(c.cfg.Model),
 		live:        c.live,
@@ -515,6 +590,9 @@ func (c *fluxConnector) Connect(ctx context.Context, sampleRate int) (stt.Stream
 		closeWait:   c.closeStreamTimeout,
 		stop:        make(chan struct{}),
 		fail:        c.reportFailure,
+		// The finalizes a ForceEndTurn asks for are recorded with the service
+		// the connector drives.
+		requestFinalize: c.requestFinalize,
 	}
 	if v, ok := c.live.MinConfidence.Value(); ok {
 		s.minConf = &v
@@ -543,6 +621,14 @@ func (c *fluxConnector) reportProblem(ctx context.Context, msg string) {
 		return
 	}
 	c.svc.PushError(ctx, msg, nil, false)
+}
+
+// requestFinalize records with the service that Flux was asked to finalize,
+// so the EndOfTurn answering it confirms it.
+func (c *fluxConnector) requestFinalize() {
+	if c.svc != nil {
+		c.svc.RequestFinalize()
+	}
 }
 
 // raise fires one of the service's turn events.
@@ -592,6 +678,13 @@ type fluxStream struct {
 	sampleRate  int
 	model       string
 	watchdogMin time.Duration
+	// forceTurns is whether the pipeline's strategies decide where turns end:
+	// the VAD stop asks Flux to finalize, and Flux's turn edges are not
+	// proposed.
+	forceTurns bool
+	// requestFinalize records a finalize asked for with the service; nil for a
+	// stream built outside Connect.
+	requestFinalize func()
 	// live is the settings store, read only while the service holds it steady:
 	// on the connection that opened this session, and when a settings update
 	// hands its changed fields over. Never from the read loop, which runs on a
@@ -695,7 +788,9 @@ func (s *fluxStream) handleUnconfirmed(data []byte) (bool, error) {
 	case fluxMsgTurnInfo:
 		s.trackTurn(m)
 		s.queueTurnEvent(m)
-		s.pending = append(s.pending, fluxResults(m, s.model, s.minConfidence())...)
+		s.pending = append(s.pending, s.results(m)...)
+	case fluxMsgWarning:
+		s.warn(m)
 	default:
 	}
 	return false, nil
@@ -865,8 +960,12 @@ type fluxMessage struct {
 	Type       string `json:"type"`
 	Event      string `json:"event"`
 	Transcript string `json:"transcript"`
-	// Code names the failure on a fatal Error message.
+	// Code names the failure on a fatal Error message, and the problem on a
+	// Warning.
 	Code any `json:"code"`
+	// Trigger says what ended the turn on an EndOfTurn: "manual" for one that
+	// answers a ForceEndTurn.
+	Trigger string `json:"trigger"`
 	// ErrorCode names it on a ConfigureFailure, which spells the same thing
 	// differently.
 	ErrorCode   any        `json:"error_code"` //nolint:tagliatelle // Deepgram wire field
@@ -956,7 +1055,7 @@ func (s *fluxStream) Recv() ([]stt.Result, error) {
 		case fluxMsgTurnInfo:
 			s.trackTurn(m)
 			s.queueTurnEvent(m)
-			if res := fluxResults(m, s.model, s.minConfidence()); len(res) > 0 {
+			if res := s.results(m); len(res) > 0 {
 				return res, nil
 			}
 			// Nothing to push first, so the event fires now.
@@ -975,10 +1074,99 @@ func (s *fluxStream) Recv() ([]stt.Result, error) {
 			if s.report != nil {
 				s.report(s.ctx, msg)
 			}
+		case fluxMsgWarning:
+			s.warn(m)
 		default:
 			// Connected and other control messages carry no text.
 		}
 	}
+}
+
+// warn logs a Warning from Flux. Warnings never interrupt the stream, so none
+// is reported as an error. A ForceEndTurn that found no turn to end raced an
+// EndOfTurn Flux had already sent, which is routine.
+func (s *fluxStream) warn(m fluxMessage) {
+	if m.errCode() == fluxWarningNoActiveTurn {
+		slog.Debug("deepgram flux: ForceEndTurn arrived with no active turn")
+		return
+	}
+	description := "no description"
+	if m.Description != "" {
+		description = m.Description
+	}
+	slog.Warn("deepgram flux warning", "code", m.errCode(), "description", description)
+}
+
+// results maps a Flux message to its results. With the turns left to the
+// pipeline's strategies, the turn edges Flux reports are not proposed: what
+// carried only a proposal is dropped, and the transcripts go out alone.
+func (s *fluxStream) results(m fluxMessage) []stt.Result {
+	res := fluxResults(m, s.model, s.minConfidence())
+	if !s.forceTurns {
+		return res
+	}
+	return withoutTurnProposals(res)
+}
+
+// withoutTurnProposals strips the speech boundaries from res, dropping a result
+// left with nothing to report.
+func withoutTurnProposals(res []stt.Result) []stt.Result {
+	out := res[:0]
+	for _, r := range res {
+		r.Speech = stt.SpeechUnknown
+		if r != (stt.Result{}) {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// Finalize asks Flux to finalize the turn in progress when the pipeline's VAD
+// reports the user stopped, implementing stt.Finalizer. Only with
+// VADForceTurnEndpoint: otherwise Flux decides where a turn ends, and the VAD
+// stop asks nothing of it.
+func (s *fluxStream) Finalize() error {
+	if !s.forceTurns {
+		return nil
+	}
+	return s.forceEndTurn()
+}
+
+// forceEndTurn asks Flux to finalize the audio sent so far, recording the
+// finalize with the service so the EndOfTurn answering it confirms it. It does
+// nothing while no turn is in progress, or once the session is closing.
+func (s *fluxStream) forceEndTurn() error {
+	if !s.turnInProgress() {
+		return nil
+	}
+	if s.requestFinalize != nil {
+		s.requestFinalize()
+	}
+	return s.sendForceEndTurn()
+}
+
+// turnInProgress reports whether Flux has a turn open on a session still
+// running, which is the only time a ForceEndTurn has anything to finalize.
+func (s *fluxStream) turnInProgress() bool {
+	s.lifeMu.Lock()
+	closed := s.closed
+	s.lifeMu.Unlock()
+	s.stateMu.Lock()
+	speaking := s.speaking
+	s.stateMu.Unlock()
+	return speaking && !closed && s.ctx.Err() == nil
+}
+
+// sendForceEndTurn asks Flux to finalize the audio sent so far. Flux answers
+// with an EndOfTurn whose trigger is "manual".
+func (s *fluxStream) sendForceEndTurn() error {
+	slog.Debug("deepgram flux: sending ForceEndTurn")
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if err := s.conn.Write(s.ctx, websocket.MessageText, []byte(fluxForceEndTurn)); err != nil {
+		return fmt.Errorf("deepgram flux: sending ForceEndTurn: %w", err)
+	}
+	return nil
 }
 
 // queueTurnEvent queues the turn event a TurnInfo message fires, to be fired
@@ -1028,8 +1216,9 @@ func (s *fluxStream) trackTurn(m fluxMessage) {
 // stt.SessionEnder. A Flux turn lives in one connection, so a new connection
 // never ends the old one's turn. The transcript received so far is reported as
 // the turn's transcription, unfinalized since Flux never committed it, and the
-// turn's end is proposed. If the user keeps talking on a new connection, what
-// follows is transcribed as a turn of its own.
+// turn's end is proposed unless the turns are left to the pipeline's
+// strategies. If the user keeps talking on a new connection, what follows is
+// transcribed as a turn of its own.
 func (s *fluxStream) EndSession() []stt.Result {
 	s.stateMu.Lock()
 	speaking := s.speaking
@@ -1041,7 +1230,11 @@ func (s *fluxStream) EndSession() []stt.Result {
 	slog.Debug("deepgram flux connection closed mid-turn, ending the turn")
 	text, lang := s.turnText, s.turnLanguage
 	s.turnText, s.turnLanguage = "", ""
-	return []stt.Result{{Text: text, Final: text != "", Speech: stt.SpeechStopped, Language: lang}}
+	res := []stt.Result{{Text: text, Final: text != "", Speech: stt.SpeechStopped, Language: lang}}
+	if s.forceTurns {
+		return withoutTurnProposals(res)
+	}
+	return res
 }
 
 // fluxResults maps a Flux message to zero or one transcription result.
@@ -1052,7 +1245,8 @@ func (s *fluxStream) EndSession() []stt.Result {
 // it may come with are a preview of a turn whose transcripts follow. EndOfTurn
 // proposes the stop, and carries the turn's final transcript unless the words
 // came back below the confidence floor, in which case the boundary is still
-// reported and only the text is dropped.
+// reported and only the text is dropped. Only an EndOfTurn with the "manual"
+// trigger answers a ForceEndTurn, and so confirms the finalize asked for.
 func fluxResults(m fluxMessage, model string, minConf *float64) []stt.Result {
 	if m.Type != fluxMsgTurnInfo {
 		return nil
@@ -1078,11 +1272,16 @@ func fluxResults(m fluxMessage, model string, minConf *float64) []stt.Result {
 		if !confidenceOK(m.Words, minConf) {
 			slog.Warn("transcription confidence is below the configured floor, dropping the text",
 				"service", "DeepgramFluxSTT")
-			return []stt.Result{{Speech: stt.SpeechStopped}}
+			// The turn still ended, and still answers a ForceEndTurn: the
+			// confirmation stands with no text, and marks the next transcript.
+			return []stt.Result{{
+				Final: true, FromFinalize: m.Trigger == fluxTriggerManual, Speech: stt.SpeechStopped,
+			}}
 		}
 		return []stt.Result{{
 			Text: m.Transcript, Final: true, EndOfTurn: true,
-			Language: lang, Speech: stt.SpeechStopped,
+			FromFinalize: m.Trigger == fluxTriggerManual,
+			Language:     lang, Speech: stt.SpeechStopped,
 		}}
 	case fluxEventTurnResumed:
 		// The user was not finished after all, so any prediction Flux made about

@@ -2,6 +2,7 @@ package eval
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"slices"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/processor/rtvi"
 )
 
 // fakeJudge returns queued verdicts without calling a real LLM.
@@ -714,4 +716,86 @@ func TestCallArgumentsCompareAcrossNumberTypes(t *testing.T) {
 	if callMatches(event, "book", map[string]any{"party": 3}) {
 		t.Fatal("2 and 3 compare equal")
 	}
+}
+
+// A metrics expectation takes the next report holding its kind of metric.
+func TestMetricsExpectation(t *testing.T) {
+	t.Run("it takes the report holding its metric", func(t *testing.T) {
+		m := newMatcher(nil, false)
+		m.stream.Append(metricsEvent(map[string]any{"processing": measurement("STT#0", 0.01)}))
+		m.stream.Append(metricsEvent(map[string]any{"ttfb": measurement("LLM#0", 0.4)}))
+		m.stream.Append(metricsEvent(map[string]any{
+			"ttfb":       measurement("DeepgramSTTService#0", 0.31),
+			"processing": measurement("DeepgramSTTService#0", 0.02),
+		}))
+		if f := mustMatch(t, m, Expectation{Event: EventMetrics, Metric: "ttfb", Processor: "STT"}, 1000); f != nil {
+			t.Fatalf("failure = %v", f)
+		}
+		var kept map[string]any
+		if err := json.Unmarshal([]byte(m.LastMatchText), &kept); err != nil {
+			t.Fatal(err)
+		}
+		if want := map[string]any{"ttfb": measurement("DeepgramSTTService#0", 0.31)}; !reflect.DeepEqual(kept, want) {
+			t.Fatalf("matched %v, want %v", kept, want)
+		}
+	})
+	t.Run("the zero reported at start is not a measurement", func(t *testing.T) {
+		m := newMatcher(nil, false)
+		m.stream.Append(metricsEvent(map[string]any{"ttfb": measurement("STT#0", 0)}))
+		if _, err := match(t, m, Expectation{Event: EventMetrics, Metric: "ttfb"}, 50); !errors.Is(err, ErrTimeout) {
+			t.Fatalf("err = %v, want a timeout", err)
+		}
+	})
+	t.Run("a bare expectation takes any report", func(t *testing.T) {
+		m := newMatcher(nil, false)
+		m.stream.Append(metricsEvent(map[string]any{
+			"tokens": []any{map[string]any{"prompt_tokens": 12.0, "completion_tokens": 3.0}},
+		}))
+		if f := mustMatch(t, m, Expectation{Event: EventMetrics}, 1000); f != nil {
+			t.Fatalf("failure = %v", f)
+		}
+	})
+	t.Run("a report from earlier in the turn is found from turn start", func(t *testing.T) {
+		m := newMatcher(nil, false)
+		m.ResetTurn()
+		m.stream.Append(metricsEvent(map[string]any{"ttfb": measurement("STT#0", 0.3)}))
+		m.stream.Append(map[string]any{keyType: EventUserTranscription, keyTranscript: "hello"})
+		if f := mustMatch(t, m, Expectation{Event: EventUserTranscription}, 1000); f != nil {
+			t.Fatalf("failure = %v", f)
+		}
+		lookingBack := Expectation{Event: EventMetrics, Metric: "ttfb", CheckFrom: CheckFromTurnStart}
+		if f, err := m.Match(t.Context(), &lookingBack, time.Now(), 1000, 0, 1); f != nil || err != nil {
+			t.Fatalf("failure = %v, err = %v", f, err)
+		}
+	})
+}
+
+// A server_message expectation reads the bot's data as text.
+func TestServerMessageExpectation(t *testing.T) {
+	serverMessage := func(t *testing.T, m *ExpectationMatcher, data any) {
+		t.Helper()
+		m.stream.Append(m.stream.FrameToEvent(messageFrame(t, rtvi.TypeServerMessage, data)))
+	}
+	t.Run("it reads the data and records it", func(t *testing.T) {
+		m := newMatcher(nil, false)
+		data := map[string]any{"kind": "result", "ttfb": 0.31}
+		serverMessage(t, m, data)
+		exp := Expectation{Event: EventServerMessage, TextContains: `"kind": "result"`}
+		if f := mustMatch(t, m, exp, 1000); f != nil {
+			t.Fatalf("failure = %v", f)
+		}
+		var recorded map[string]any
+		if err := json.Unmarshal([]byte(m.LastMatchText), &recorded); err != nil || !reflect.DeepEqual(recorded, data) {
+			t.Fatalf("recorded %q, want the data", m.LastMatchText)
+		}
+	})
+	t.Run("a content check judges the next message", func(t *testing.T) {
+		// As for any event: the next one of the type is the one checked.
+		m := newMatcher(nil, false)
+		serverMessage(t, m, map[string]any{"kind": "progress"})
+		f := mustMatch(t, m, Expectation{Event: EventServerMessage, TextContains: `"kind": "result"`}, 1000)
+		if f == nil || f.Kind != FailureTextMismatch {
+			t.Fatalf("failure = %v, want a text mismatch", f)
+		}
+	})
 }

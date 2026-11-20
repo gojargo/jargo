@@ -3,6 +3,7 @@ package wsutil_test
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -276,6 +277,30 @@ func TestDialReportsTheRefusedStatus(t *testing.T) {
 		if got := wsutil.Permanent(err); got != wantPermanent {
 			t.Errorf("status %d: Permanent = %v, want %v", status, got, wantPermanent)
 		}
+	}
+}
+
+// A refused handshake carries the response's header and the start of its body,
+// where a provider says why it refused.
+func TestDialReportsWhyTheHandshakeWasRefused(t *testing.T) {
+	reason := `{"error": {"code": "invalid_parameter", "message": "Voice not found"}}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Retry-After", "1")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = io.WriteString(w, reason+strings.Repeat(" ", 2048))
+	}))
+	defer srv.Close()
+
+	_, err := wsutil.Dial(t.Context(), wsURL(srv), nil, 0)
+	var he *wsutil.HandshakeError
+	if !errors.As(err, &he) {
+		t.Fatalf("error %v does not carry the refusal", err)
+	}
+	if he.Header.Get("Retry-After") != "1" {
+		t.Errorf("header = %v, want the Retry-After the server sent", he.Header)
+	}
+	if !strings.HasPrefix(string(he.Body), reason) || len(he.Body) != 1024 {
+		t.Errorf("body = %q (%d bytes), want the first kilobyte of the reason", he.Body, len(he.Body))
 	}
 }
 

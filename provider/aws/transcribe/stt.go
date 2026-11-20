@@ -2,7 +2,10 @@ package transcribe
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
+	"strings"
 	"sync"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -10,7 +13,9 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/transcribestreaming"
 	"github.com/aws/aws-sdk-go-v2/service/transcribestreaming/types"
+	"github.com/gojargo/jargo/service/settings"
 	"github.com/gojargo/jargo/service/stt"
+	errs "github.com/gojargo/jargo/utils/errors"
 )
 
 // loadOptions builds the AWS config load options from the static fields. An
@@ -30,17 +35,20 @@ func (c Config) loadOptions() []func(*awsconfig.LoadOptions) error {
 
 // NewSTT builds an Amazon Transcribe streaming STT service.
 func NewSTT(cfg Config) *stt.StreamService {
-	if cfg.Language == "" {
-		cfg.Language = defaultLanguage
-	}
-	if cfg.PartialResultsStability == "" {
-		cfg.PartialResultsStability = defaultStability
-	}
-	return stt.NewStream("TranscribeSTT", &connector{cfg: cfg}, cfg.SampleRate)
+	return stt.NewStream("TranscribeSTT", newConnector(cfg), cfg.SampleRate)
+}
+
+// newConnector builds the connector a service opens its sessions with, its
+// settings store taken from cfg.
+func newConnector(cfg Config) *connector {
+	return &connector{cfg: cfg, live: newSTTSettings(cfg)}
 }
 
 type connector struct {
 	cfg Config
+	// live is the settings store updates are merged into. The service holds it
+	// steady while a session opens from it.
+	live *STTSettings
 
 	mu     sync.Mutex
 	client *transcribestreaming.Client
@@ -55,6 +63,43 @@ func (c *connector) Metadata() stt.Metadata {
 	}
 }
 
+// Settings is the configuration a caller may change while the pipeline runs.
+func (c *connector) Settings() any { return c.live }
+
+// PrepareSettings refuses an update whose language identification settings
+// conflict once merged into the settings in force, whole, before any of it is
+// applied.
+func (c *connector) PrepareSettings(delta any) error {
+	copied, err := settings.Copy(c.live)
+	if err != nil {
+		return err
+	}
+	candidate, _ := copied.(*STTSettings)
+	if _, err := settings.Apply(candidate, delta); err != nil {
+		return err
+	}
+	if err := validateLanguageIdentification(candidate); err != nil {
+		return fmt.Errorf("%w: %w", errSettingsRejected, err)
+	}
+	return nil
+}
+
+// UpdateSettings asks for the session to be reopened whenever anything changed.
+// Transcribe binds all of it to a connection, so a change reaches it only by
+// opening another.
+func (c *connector) UpdateSettings(context.Context, settings.Changed) (bool, error) {
+	return true, nil
+}
+
+// ClassifyError says what a Transcribe failure means: a refused settings update
+// is the application's mistake.
+func (c *connector) ClassifyError(err error) errs.Category {
+	if errors.Is(err, errSettingsRejected) {
+		return errs.Application
+	}
+	return errs.Unset
+}
+
 // SendSampleRate is the rate Transcribe is sent audio at, implementing
 // stt.SendRater. Transcribe takes 8 or 16 kHz, so audio at either goes as it is,
 // and audio at any other rate is resampled to 16 kHz.
@@ -66,18 +111,28 @@ func (c *connector) SendSampleRate(sampleRate int) int {
 }
 
 // Connect opens a streaming transcription session for audio at sampleRate,
-// which is the rate SendSampleRate gave.
+// which is the rate SendSampleRate gave, with the settings as they stand.
 func (c *connector) Connect(ctx context.Context, sampleRate int) (stt.Stream, error) {
+	in, err := c.request(sampleRate)
+	if err != nil {
+		return nil, err
+	}
 	client, err := c.transcribeClient(ctx)
 	if err != nil {
 		return nil, err
 	}
-	out, err := client.StartStreamTranscription(ctx, c.cfg.request(sampleRate))
+	out, err := client.StartStreamTranscription(ctx, in)
 	if err != nil {
 		return nil, err
 	}
 	es := out.GetStream()
-	return &stream{ctx: ctx, es: es, events: es.Events(), lang: c.cfg.Language}, nil
+	return &stream{
+		ctx:      ctx,
+		es:       es,
+		events:   es.Events(),
+		lang:     c.live.Language.Or(""),
+		identify: in.LanguageCode == "",
+	}, nil
 }
 
 // transcribeClient lazily loads AWS config (which may read the environment,
@@ -96,31 +151,61 @@ func (c *connector) transcribeClient(ctx context.Context) (*transcribestreaming.
 	return c.client, nil
 }
 
-// request builds the StartStreamTranscription input for the given sample rate.
-func (c Config) request(sampleRate int) *transcribestreaming.StartStreamTranscriptionInput {
+// request builds the StartStreamTranscription input for the given sample rate
+// from the settings in force.
+func (c *connector) request(sampleRate int) (*transcribestreaming.StartStreamTranscriptionInput, error) {
 	in := &transcribestreaming.StartStreamTranscriptionInput{
-		LanguageCode:         types.LanguageCode(c.Language),
 		MediaEncoding:        types.MediaEncodingPcm,
 		MediaSampleRateHertz: aws.Int32(int32(sampleRate)),
 	}
-	if c.PartialResultsStabilization == nil || *c.PartialResultsStabilization {
+	if err := c.setLanguage(in); err != nil {
+		return nil, err
+	}
+	if c.cfg.PartialResultsStabilization == nil || *c.cfg.PartialResultsStabilization {
 		in.EnablePartialResultsStabilization = true
-		in.PartialResultsStability = types.PartialResultsStability(c.PartialResultsStability)
+		in.PartialResultsStability = types.PartialResultsStability(c.live.PartialResultsStability.Or(defaultStability))
 	}
-	if c.VocabularyName != "" {
-		in.VocabularyName = aws.String(c.VocabularyName)
+	if c.cfg.VocabularyName != "" {
+		in.VocabularyName = aws.String(c.cfg.VocabularyName)
 	}
-	if c.VocabularyFilterName != "" {
-		in.VocabularyFilterName = aws.String(c.VocabularyFilterName)
+	if c.cfg.VocabularyFilterName != "" {
+		in.VocabularyFilterName = aws.String(c.cfg.VocabularyFilterName)
 	}
-	return in
+	return in, nil
+}
+
+// setLanguage sets the configured language on in, or the language
+// identification that replaces it when language options are set. Transcribe
+// rejects a language code alongside identification.
+func (c *connector) setLanguage(in *transcribestreaming.StartStreamTranscriptionInput) error {
+	options, _ := c.live.LanguageOptions.Value()
+	if len(options) == 0 {
+		code := c.live.Language.Or("")
+		if code == "" {
+			return fmt.Errorf("%w: %q", errUnsupportedLanguage, code)
+		}
+		in.LanguageCode = types.LanguageCode(code)
+		return nil
+	}
+	multiple := c.live.IdentifyMultipleLanguages.Or(false)
+	in.IdentifyLanguage = !multiple
+	in.IdentifyMultipleLanguages = multiple
+	in.LanguageOptions = aws.String(strings.Join(languageOptionCodes(options), ","))
+	if preferred := c.live.PreferredLanguage.Or(""); preferred != "" {
+		in.PreferredLanguage = types.LanguageCode(preferred)
+	}
+	return nil
 }
 
 type stream struct {
 	ctx    context.Context
 	es     *transcribestreaming.StartStreamTranscriptionEventStream
 	events <-chan types.TranscriptResultStream
-	lang   string
+	// lang is the language the session was opened to transcribe.
+	lang string
+	// identify reports whether the session identifies the language, so each
+	// result carries the language Transcribe identified rather than lang.
+	identify bool
 }
 
 // Send writes a chunk of PCM audio as an AudioEvent.
@@ -159,8 +244,9 @@ func (s *stream) Recv() ([]stt.Result, error) {
 //
 // One event describes one stretch of speech: its first segment, read through the
 // service's own best alternative for it. The transcript is labeled with the
-// language the session was opened with, which is the language the service was
-// asked to transcribe.
+// language Transcribe identified for the segment when the session identifies
+// the language, and otherwise with the language the session was opened with,
+// which is the language the service was asked to transcribe.
 func (s *stream) results(segments []types.Result) []stt.Result {
 	if len(segments) == 0 {
 		return nil
@@ -178,8 +264,17 @@ func (s *stream) results(segments []types.Result) []stt.Result {
 		Text:      text,
 		Final:     final,
 		EndOfTurn: final,
-		Language:  s.lang,
+		Language:  s.resultLanguage(r),
 	}}
+}
+
+// resultLanguage is the language of a result: the one Transcribe identified,
+// or the configured one.
+func (s *stream) resultLanguage(r types.Result) string {
+	if s.identify {
+		return string(r.LanguageCode)
+	}
+	return s.lang
 }
 
 // Close tears down the event stream.

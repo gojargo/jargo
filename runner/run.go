@@ -741,11 +741,16 @@ func (s *server) proxyRequest(w http.ResponseWriter, r *http.Request) {
 // setupUnifiedStartRoute serves POST /start, which starts a session on the
 // transport the client asks for, and GET /status.
 func (s *server) setupUnifiedStartRoute(mux *http.ServeMux) {
+	// GET /status lists the transports this runner serves, as POST /start
+	// accepts them, so a client can build its transport options from it.
 	mux.HandleFunc("GET /status", func(w http.ResponseWriter, _ *http.Request) {
 		transports := allTransports
 		if s.args.Transport != "" {
 			transports = []string{s.args.Transport}
 		}
+		transports = slices.DeleteFunc(slices.Clone(transports), func(t string) bool {
+			return !transportRoutesEnabled(t)
+		})
 		writeJSON(w, http.StatusOK, map[string]any{"status": "ready", "transports": transports})
 	})
 	mux.HandleFunc("POST /start", s.start)

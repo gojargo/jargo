@@ -502,6 +502,9 @@ type answeringStream struct {
 	told chan struct{}
 	sent bool
 	ctx  context.Context //nolint:containedctx // the session context, set on dial
+	// request records the finalize asked for with the service, the way a
+	// provider that confirms its finalizes does.
+	request func()
 }
 
 func (s *answeringStream) Send([]byte) error { return nil }
@@ -509,6 +512,9 @@ func (s *answeringStream) Send([]byte) error { return nil }
 func (s *answeringStream) Close() error { return nil }
 
 func (s *answeringStream) Finalize() error {
+	if s.request != nil {
+		s.request()
+	}
 	select {
 	case s.told <- struct{}{}:
 	default:
@@ -543,6 +549,7 @@ func (c *answeringConnector) Connect(ctx context.Context, _ int) (stt.Stream, er
 func TestStreamServiceMarksTheAnswerToAFinalizeFinal(t *testing.T) {
 	stream := &answeringStream{told: make(chan struct{}, 1)}
 	svc := stt.NewStream("ConfirmingSTT", &answeringConnector{stream: stream}, 16000)
+	stream.request = svc.RequestFinalize
 
 	var mu sync.Mutex
 	var finalized bool
@@ -579,6 +586,151 @@ func TestStreamServiceMarksTheAnswerToAFinalizeFinal(t *testing.T) {
 	defer mu.Unlock()
 	if !finalized {
 		t.Fatal("the transcript answering a confirmed finalize was not marked final")
+	}
+}
+
+// lateConfirmingStream transcribes the speech on its own endpointing once it
+// has heard the audio, and answers the finalize that follows with nothing left
+// to say.
+type lateConfirmingStream struct {
+	heard   chan struct{}
+	told    chan struct{}
+	ctx     context.Context //nolint:containedctx // the session context, set on dial
+	step    int
+	request func()
+}
+
+func (s *lateConfirmingStream) Send([]byte) error {
+	select {
+	case s.heard <- struct{}{}:
+	default:
+	}
+	return nil
+}
+
+func (s *lateConfirmingStream) Close() error { return nil }
+
+func (s *lateConfirmingStream) Finalize() error {
+	if s.request != nil {
+		s.request()
+	}
+	select {
+	case s.told <- struct{}{}:
+	default:
+	}
+	return nil
+}
+
+func (s *lateConfirmingStream) Recv() ([]stt.Result, error) {
+	s.step++
+	var wait chan struct{}
+	var answer stt.Result
+	switch s.step {
+	case 1:
+		wait, answer = s.heard, stt.Result{Text: "Hi.", Final: true}
+	case 2:
+		wait, answer = s.told, stt.Result{Final: true, FromFinalize: true, PushFinalized: true}
+	default:
+		<-s.ctx.Done()
+		return nil, s.ctx.Err()
+	}
+	select {
+	case <-wait:
+		return []stt.Result{answer}, nil
+	case <-s.ctx.Done():
+		return nil, s.ctx.Err()
+	}
+}
+
+type lateConfirmingConnector struct{ stream *lateConfirmingStream }
+
+func (c *lateConfirmingConnector) Connect(ctx context.Context, _ int) (stt.Stream, error) {
+	c.stream.ctx = ctx
+	return c.stream, nil
+}
+
+// The text opened the span; its finalization arrives later, as a frame of its
+// own, and closes the span holding that text with what the segment was billed
+// for.
+func TestStreamServiceClosesTheSpanOnAFinalizationWithoutText(t *testing.T) {
+	rec := tracetest.NewSpanRecorder()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(rec))
+	prev := otel.GetTracerProvider()
+	otel.SetTracerProvider(tp)
+	defer otel.SetTracerProvider(prev)
+
+	stream := &lateConfirmingStream{heard: make(chan struct{}, 1), told: make(chan struct{}, 1)}
+	svc := stt.NewStream("ConfirmingSTT", &lateConfirmingConnector{stream: stream}, 16000)
+	stream.request = svc.RequestFinalize
+
+	var mu sync.Mutex
+	var seq []string
+	confirmed := make(chan struct{}, 1)
+	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{
+		EnableTracing:           true,
+		ReachedDownstreamFilter: pipeline.AnyFrame,
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch fr := f.(type) {
+		case *frames.TranscriptionFrame:
+			seq = append(seq, fmt.Sprintf("transcript:%s:%t", fr.Text, fr.Finalized))
+		case *frames.TranscriptionFinalizedFrame:
+			seq = append(seq, "finalized")
+			select {
+			case confirmed <- struct{}{}:
+			default:
+			}
+		}
+	})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	task.QueueFrame(frames.NewVADUserStartedSpeakingFrame(0.2, time.Now()))
+	// 32000 bytes of 16-bit mono at 16 kHz is one second of audio.
+	task.QueueFrame(frames.NewInputAudioRawFrame(make([]byte, 32000), 16000, 1))
+	task.QueueFrame(frames.NewVADUserStoppedSpeakingFrame(0.2, time.Now()))
+	select {
+	case <-confirmed:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the empty answer to the finalize was not pushed as a confirmation")
+	}
+	task.StopWhenDone()
+	<-runDone
+
+	mu.Lock()
+	got := fmt.Sprint(seq)
+	mu.Unlock()
+	if want := "[transcript:Hi.:false finalized]"; got != want {
+		t.Fatalf("frames = %s, want %s", got, want)
+	}
+
+	var spans []sdktrace.ReadOnlySpan
+	for _, s := range rec.Ended() {
+		if s.Name() == "stt" {
+			spans = append(spans, s)
+		}
+	}
+	if len(spans) != 1 {
+		t.Fatalf("stt spans = %d, want 1", len(spans))
+	}
+	attrs := map[string]string{}
+	for _, kv := range spans[0].Attributes() {
+		attrs[string(kv.Key)] = kv.Value.String()
+	}
+	want := map[string]string{
+		"transcript":            "Hi.",
+		"is_final":              "true",
+		"metrics.audio_seconds": "1",
+	}
+	for k, v := range want {
+		if attrs[k] != v {
+			t.Errorf("attr %q = %q, want %q (all: %v)", k, attrs[k], v, attrs)
+		}
+	}
+	if _, incomplete := attrs["stt.incomplete"]; incomplete {
+		t.Errorf("the span was closed as incomplete (all: %v)", attrs)
 	}
 }
 

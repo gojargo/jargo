@@ -98,6 +98,10 @@ type STTConfig struct {
 	// DelayInFrames delays text generation by this many 80 ms frames; nil uses a
 	// default. Allowed values: 7, 8, 10, 12, 14, 16, 20, 24, 36, 48.
 	DelayInFrames *int `validate:"omitempty,oneof=7 8 10 12 14 16 20 24 36 48"`
+	// LogLevel opts in to the server's log messages, such as a warning about an
+	// unknown or deprecated setting: the lowest level to receive. They are logged
+	// at their own level. Empty asks for none, the default.
+	LogLevel LogLevel `validate:"omitempty,oneof=debug info warning error"`
 
 	// EnableTurnDetection lets Gradium's end-pointing signal decide when user
 	// turns start and end, instead of the pipeline's VAD. The service then
@@ -470,18 +474,22 @@ func (c *sttConnector) setup(sampleRate int) []byte {
 	if len(jsonConfig) > 0 {
 		msg["json_config"] = jsonConfig
 	}
+	if c.cfg.LogLevel != "" {
+		msg[keyLogLevel] = c.cfg.LogLevel
+	}
 	b, _ := json.Marshal(msg) //nolint:errchkjson // map of known-serializable values
 	return b
 }
 
-// awaitReady reads the handshake reply and requires a "ready" message.
+// awaitReady reads the handshake reply and requires a "ready" message. A
+// server log can come before it, and is logged and read past.
 func awaitReady(ctx context.Context, conn *wsutil.Conn) error {
-	_, data, err := conn.Read(ctx)
-	if err != nil {
-		return err
+	m, err := readSTTMessage(ctx, conn)
+	for err == nil && m.Type == msgLog {
+		logServerMessage(ctx, m.Level, m.Message)
+		m, err = readSTTMessage(ctx, conn)
 	}
-	var m sttMessage
-	if err := json.Unmarshal(data, &m); err != nil {
+	if err != nil {
 		return err
 	}
 	switch m.Type {
@@ -492,6 +500,17 @@ func awaitReady(ctx context.Context, conn *wsutil.Conn) error {
 	default:
 		return fmt.Errorf("%w: unexpected first message %q", errSTTProtocol, m.Type)
 	}
+}
+
+// readSTTMessage reads and decodes the next message of the handshake.
+func readSTTMessage(ctx context.Context, conn *wsutil.Conn) (sttMessage, error) {
+	var m sttMessage
+	_, data, err := conn.Read(ctx)
+	if err != nil {
+		return m, err
+	}
+	err = json.Unmarshal(data, &m)
+	return m, err
 }
 
 // transcriptAggregationDelay is how long the transcript stays open after a
@@ -636,6 +655,12 @@ type sttMessage struct {
 	Type    string `json:"type"`
 	Text    string `json:"text"`
 	Message string `json:"message"`
+	// Level is the level of a server log message.
+	Level string `json:"level"`
+	// FlushID names the flush a "flushed" message acknowledges. The server
+	// returns it as a number though the client sends it as a string, so it is
+	// kept as it came and compared by its text.
+	FlushID json.RawMessage `json:"flush_id,omitempty"`
 	// VAD is the end-pointing signal a step message carries, one entry per
 	// horizon.
 	VAD []vadEntry `json:"vad,omitempty"`
@@ -675,14 +700,27 @@ func (s *sttStream) Send(audio []byte) error {
 
 // Finalize flushes the server when the pipeline's VAD reports the user stopped,
 // implementing stt.Finalizer. The server answers with the text it was holding
-// and a "flushed" acknowledgement, which finalizes the transcript. With turn
-// detection on the end-pointing signal decides when a turn ends, so the VAD
-// flushes nothing.
+// and a "flushed" acknowledgement, which confirms the finalize the flush asked
+// for and so finalizes the transcript. A flush that cannot be sent asks for no
+// finalize. With turn detection on the end-pointing signal decides when a turn
+// ends, so the VAD flushes nothing.
 func (s *sttStream) Finalize() error {
 	if s.turnDetection {
 		return nil
 	}
-	return s.sendFlush()
+	if err := s.sendFlush(); err != nil {
+		return err
+	}
+	s.requestFinalize()
+	return nil
+}
+
+// requestFinalize records with the service that the server was asked to
+// finalize, so the acknowledgement confirming it finalizes the transcript.
+func (s *sttStream) requestFinalize() {
+	if s.owner != nil && s.owner.svc != nil {
+		s.owner.svc.RequestFinalize()
+	}
 }
 
 // sendFlush asks the server to process the audio it is holding right away.
@@ -703,9 +741,11 @@ func (s *sttStream) sendFlush() error {
 }
 
 // Recv reads the next message. Each "text" fragment accumulates and surfaces the
-// running transcript as an interim result; a "flushed" acknowledgement
-// finalizes the accumulated transcript with EndOfTurn set. With turn detection
-// on, "step" messages open and end the user's turns.
+// running transcript as an interim result; a "flushed" acknowledgement settles
+// the accumulated transcript, and confirms the finalize when it acknowledges the
+// latest flush. With turn detection on, "step" messages open and end the user's
+// turns. A server log message is logged at its own level, and the end of the
+// stream only logged.
 //
 // When the connection drops, the words already held are returned as a
 // transcript before the failure is. The server's decoder state goes with the
@@ -744,13 +784,11 @@ func (s *sttStream) handle(m sttMessage) ([]stt.Result, error) {
 		text := strings.Join(s.accumulated, " ")
 		return []stt.Result{{Text: text, Final: false, Language: s.lang}}, nil
 	case msgFlushed:
-		return s.flushed(), nil
+		return s.flushed(m), nil
+	case msgLog:
+		logServerMessage(s.ctx, m.Level, m.Message)
 	case msgEndStream:
-		if len(s.accumulated) == 0 {
-			return nil, nil
-		}
-		s.aggregateTrailing()
-		return s.finalizeAccumulated(true), nil
+		slog.Debug("gradium stt: received end_of_stream from the server")
 	case msgError:
 		return nil, fmt.Errorf("%w: %s", errSTTProtocol, m.Message)
 	}
@@ -760,28 +798,49 @@ func (s *sttStream) handle(m sttMessage) ([]stt.Result, error) {
 // flushed handles the server's acknowledgement of a flush. With turn detection
 // on it starts the post-flush cooldown. The words that end the utterance can
 // still be arriving, so the transcript stays open for a moment before it
-// finalizes, and only then does a turn that was ending hand over to the next.
-func (s *sttStream) flushed() []stt.Result {
+// settles, and only then does a turn that was ending hand over to the next.
+//
+// Only the acknowledgement of the latest flush confirms the finalize the flush
+// asked for, which finalizes the transcript: one of an earlier flush says
+// nothing about the audio sent since. An acknowledgement confirming the finalize
+// with nothing to settle leaves it to the next transcript.
+func (s *sttStream) flushed(m sttMessage) []stt.Result {
 	if s.turnDetection {
 		s.cooldown = s.params().cooldown
 	}
+	latest := s.acknowledgesLatestFlush(m)
 	s.aggregateTrailing()
-	res := s.finalizeAccumulated(true)
+	res := s.finalizeAccumulated()
+	if latest {
+		if len(res) == 0 {
+			res = []stt.Result{{Final: true, Language: s.lang}}
+		}
+		res[0].FromFinalize = true
+	}
 	if s.phase == phaseEnding {
 		s.phase = phaseArmed
 	}
 	return res
 }
 
+// acknowledgesLatestFlush reports whether a "flushed" message acknowledges the
+// last flush sent on this session.
+func (s *sttStream) acknowledgesLatestFlush(m sttMessage) bool {
+	s.writeMu.Lock()
+	latest := strconv.Itoa(s.flushCounter)
+	s.writeMu.Unlock()
+	return strings.Trim(string(m.FlushID), `"`) == latest
+}
+
 // finalizeAccumulated joins the text held into a transcript and clears it.
 // Holding nothing, it gives nothing.
-func (s *sttStream) finalizeAccumulated(endOfTurn bool) []stt.Result {
+func (s *sttStream) finalizeAccumulated() []stt.Result {
 	if len(s.accumulated) == 0 {
 		return nil
 	}
 	text := strings.Join(s.accumulated, " ")
 	s.accumulated = nil
-	return []stt.Result{{Text: text, Final: true, EndOfTurn: endOfTurn, Language: s.lang}}
+	return []stt.Result{{Text: text, Final: true, Language: s.lang}}
 }
 
 // params is the turn detection settings now in force.
@@ -859,8 +918,9 @@ func (s *sttStream) startTurn() []stt.Result {
 
 // endTurn ends the open turn, proposing its stop, and flushes the server. The
 // flush pushes the decoder past its lookahead so the turn's tail arrives, and
-// the transcript finalizes on the "flushed" acknowledgement. Without a flush no
-// acknowledgement is coming, so the transcript finalizes on what has arrived.
+// the transcript is finalized by the "flushed" acknowledgement confirming the
+// finalize asked for. Without a flush no acknowledgement is coming, so the
+// transcript settles on what has arrived, unfinalized.
 func (s *sttStream) endTurn() []stt.Result {
 	slog.Debug("gradium stt turn detection: end of turn")
 	s.phase = phaseEnding
@@ -868,11 +928,12 @@ func (s *sttStream) endTurn() []stt.Result {
 		s.owner.raise(s.ctx, EventTurnEnd)
 	}
 	res := []stt.Result{{Speech: stt.SpeechStopped}}
+	s.requestFinalize()
 	if s.sendFlush() == nil {
 		return res
 	}
 	s.phase = phaseIdle
-	return append(res, s.finalizeAccumulated(true)...)
+	return append(res, s.finalizeAccumulated()...)
 }
 
 // finalizeOnDrop closes out the transcript of a connection that dropped. It
@@ -891,7 +952,7 @@ func (s *sttStream) finalizeOnDrop(r sttRead) ([]stt.Result, bool) {
 	if len(s.accumulated) == 0 {
 		return nil, false
 	}
-	res := s.finalizeAccumulated(false)
+	res := s.finalizeAccumulated()
 	s.pending = &r
 	return res, true
 }

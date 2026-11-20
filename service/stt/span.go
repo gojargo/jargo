@@ -17,7 +17,9 @@ import (
 // moment the user began speaking to the transcript that finalizes what they
 // said. A turn that produces several finalized transcripts produces several
 // spans, each anchored where its own speech began, so a trace shows what was
-// heard and when rather than one span covering the whole session.
+// heard and when rather than one span covering the whole session. A
+// finalization confirmed after its text arrives as a
+// TranscriptionFinalizedFrame, and closes the span the same way.
 //
 // The span opens on the first transcript rather than on the speech itself. The
 // turn it belongs under is opened by an observer reacting to the same speech,
@@ -130,6 +132,25 @@ func (t *segmentTracer) record(tf *frames.TranscriptionFrame) {
 	if tf.Finalized {
 		t.closeLocked(time.Time{})
 	}
+}
+
+// finalized closes the open span on a finalization confirmed after its text.
+// The confirmation arrives as a TranscriptionFinalizedFrame rather than on a
+// transcript, so the span holding that text closes here.
+func (t *segmentTracer) finalized() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.span == nil {
+		return
+	}
+	final := true
+	tracing.SetSTTAttributes(t.span, tracing.STTAttributes{
+		Service:    t.baseline().Service,
+		Model:      t.baseline().Model,
+		Final:      &final,
+		VADEnabled: t.baseline().VADEnabled,
+	})
+	t.closeLocked(time.Time{})
 }
 
 // appendLocked folds a transcript into the segment. A service that re-sends the

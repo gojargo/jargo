@@ -1,7 +1,9 @@
 package eval
 
 import (
+	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -175,7 +177,76 @@ func (m *ExpectationMatcher) Match(
 		// does not short-circuit it).
 		return m.matchFunctionCalls(ctx, exp, deadline, turnIdx, expIdx, since)
 	}
+	if exp.Event == EventMetrics {
+		return nil, m.matchMetrics(ctx, exp, deadline, since)
+	}
 	return m.matchOne(ctx, exp, deadline, turnIdx, expIdx, since)
+}
+
+// matchMetrics matches the next metrics report holding the expected kind of
+// metric.
+//
+// A report without it is passed over, as an event of another type is: a bot
+// sends several per turn, and which one comes first is not the bot's behavior.
+func (m *ExpectationMatcher) matchMetrics(
+	ctx context.Context, exp *Expectation, deadline time.Time, since int,
+) error {
+	wanted := cmp.Or(exp.Metric, "any")
+	if exp.Processor != "" {
+		wanted += " from " + pyRepr(exp.Processor)
+	}
+	m.trace.Log(fmt.Sprintf("match: waiting for 'metrics' (%s)", wanted))
+	event, err := m.stream.NextEvent(ctx, EventMetrics, deadline, since, func(event map[string]any) bool {
+		return len(MatchingMetrics(event, exp.Metric, exp.Processor)) > 0
+	})
+	if err != nil {
+		return err
+	}
+	kept, err := json.Marshal(MatchingMetrics(event, exp.Metric, exp.Processor))
+	if err != nil {
+		return err
+	}
+	m.LastMatchText = string(kept)
+	m.lastMatchAt = time.Now()
+	return nil
+}
+
+// MatchingMetrics is the measurements of a metrics event that an expectation's
+// filters take, by kind: metric is the kind to keep, or empty for every kind,
+// and processor text the measuring processor's name must contain, or empty for
+// any processor. It is empty when none is kept.
+//
+// The zero a pipeline reports for every processor as it starts is a
+// placeholder, not a measurement, and is left out.
+func MatchingMetrics(event map[string]any, metric, processor string) map[string][]any {
+	kept := map[string][]any{}
+	data, _ := event[keyData].(map[string]any)
+	for kind, entries := range data {
+		if metric != "" && kind != metric {
+			continue
+		}
+		list, _ := entries.([]any)
+		for _, entry := range list {
+			measurement, ok := entry.(map[string]any)
+			if !ok {
+				continue
+			}
+			if value, ok := toFloat(measurement["value"]); ok && value == 0 {
+				continue
+			}
+			if processor != "" {
+				name := ""
+				if v, ok := measurement["processor"]; ok {
+					name = pyStr(v)
+				}
+				if !strings.Contains(name, processor) {
+					continue
+				}
+			}
+			kept[kind] = append(kept[kind], measurement)
+		}
+	}
+	return kept
 }
 
 // matchOne matches a single event and checks its payload and judge assertion.

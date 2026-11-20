@@ -7,14 +7,18 @@ package aggregators_test
 
 import (
 	"context"
+	"slices"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
+	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/processor/aggregators"
 	"github.com/gojargo/jargo/processor/turns"
 	"github.com/gojargo/jargo/service/stt"
+	"github.com/gojargo/jargo/utils/events"
 )
 
 // realtimeMetadata is what a realtime LLM service broadcasts about itself.
@@ -257,5 +261,102 @@ func TestExplicitRealtimeModeTranscriptOpensNoTurn(t *testing.T) {
 	case <-started:
 		t.Error("a transcript opened a user turn in realtime mode")
 	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+// runRealtimeAppend sends an append through the processors build returns, in
+// realtime mode, and reports the frames that reached each end of the pipeline
+// once it has settled.
+func runRealtimeAppend(
+	t *testing.T, build func(*aggregators.Pair) []processor.Processor, f *frames.LLMMessagesAppendFrame,
+) (convo *frames.LLMContext, down, up []frames.Frame) {
+	t.Helper()
+	convo = frames.NewLLMContext("")
+	pair := aggregators.New(convo, speechTimeoutTurns(), aggregators.WithRealtimeServiceMode(true))
+	task := pipeline.NewWorker(pipeline.New(build(pair)...), pipeline.WorkerConfig{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
+		ReachedUpstreamFilter:   pipeline.AnyFrame,
+	})
+	var mu sync.Mutex
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		mu.Lock()
+		down = append(down, f)
+		mu.Unlock()
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
+		mu.Lock()
+		up = append(up, f)
+		mu.Unlock()
+	})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	task.QueueFrame(f)
+	flushPipeline(t, task)
+	settle()
+	task.StopWhenDone()
+	<-runDone
+
+	mu.Lock()
+	defer mu.Unlock()
+	return convo, slices.Clone(down), slices.Clone(up)
+}
+
+func capitalQuestion() *frames.LLMMessagesAppendFrame {
+	f := frames.NewLLMMessagesAppendFrame([]frames.Message{
+		{Role: frames.RoleUser, Text: "What's the capital of France?"},
+	})
+	f.RunLLM = true
+	return f
+}
+
+// isCapitalQuestion reports whether msgs are the one message capitalQuestion
+// appends.
+func isCapitalQuestion(msgs []frames.Message) bool {
+	return len(msgs) == 1 && msgs[0].Role == frames.RoleUser && msgs[0].Text == "What's the capital of France?"
+}
+
+// TestAnAppendedMessageGoesOnToTheService is upstream's
+// test_an_appended_message_goes_on_to_the_service: in realtime mode the user
+// half passes the append on for the service to take in, rather than adding it
+// to the conversation and running the model itself.
+func TestAnAppendedMessageGoesOnToTheService(t *testing.T) {
+	convo, down, _ := runRealtimeAppend(t, func(p *aggregators.Pair) []processor.Processor {
+		return []processor.Processor{p.User()}
+	}, capitalQuestion())
+
+	var appends []*frames.LLMMessagesAppendFrame
+	for _, f := range down {
+		switch fr := f.(type) {
+		case *frames.LLMMessagesAppendFrame:
+			appends = append(appends, fr)
+		case *frames.LLMContextFrame:
+			t.Error("the user half ran the model on the append")
+		}
+	}
+	if len(appends) != 1 || !isCapitalQuestion(appends[0].Messages) {
+		t.Errorf("appends downstream = %+v, want the one sent", appends)
+	}
+	if msgs := convo.Messages(); len(msgs) != 0 {
+		t.Errorf("conversation = %+v, want nothing added by the user half", msgs)
+	}
+}
+
+// TestAnAppendedMessageIsAddedOnceAndTheAssistantAsksToRun is upstream's
+// test_an_appended_message_is_added_once_and_the_assistant_asks_to_run: the
+// assistant half adds the message, once, and asks for it to be answered.
+func TestAnAppendedMessageIsAddedOnceAndTheAssistantAsksToRun(t *testing.T) {
+	convo, _, up := runRealtimeAppend(t, func(p *aggregators.Pair) []processor.Processor {
+		return []processor.Processor{p.User(), p.Assistant()}
+	}, capitalQuestion())
+
+	if msgs := convo.Messages(); !isCapitalQuestion(msgs) {
+		t.Errorf("conversation = %+v, want the appended message once", msgs)
+	}
+	if !slices.ContainsFunc(up, func(f frames.Frame) bool {
+		_, ok := f.(*frames.LLMContextFrame)
+		return ok
+	}) {
+		t.Error("the assistant half did not ask for the append to be answered")
 	}
 }

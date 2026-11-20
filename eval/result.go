@@ -210,6 +210,31 @@ type ScriptResult struct {
 	// Skipped, when set, means the scenario was not run, and says why. Such a
 	// result is neither passed nor failed.
 	Skipped string
+	// BotMetrics is every metrics report the bot sent during the run, in
+	// order. Empty for a bot that runs without metrics.
+	BotMetrics []BotMetricsReport
+}
+
+// BotMetricsReport is one metrics report the bot sent during a run.
+type BotMetricsReport struct {
+	// At is when it arrived, in seconds since the run's stream began.
+	At float64 `json:"at"`
+	// Data is the report as the bot sent it, its measurements grouped by kind
+	// (ttfb, processing, tokens, and so on).
+	Data map[string]any `json:"data"`
+}
+
+// botMetricsOf is the metrics reports the bot sent on stream, for a result:
+// each one's time and data.
+func botMetricsOf(stream *EventStream) []BotMetricsReport {
+	events := stream.Metrics()
+	reports := make([]BotMetricsReport, 0, len(events))
+	for _, event := range events {
+		at, _ := event["at"].(float64)
+		data, _ := event[keyData].(map[string]any)
+		reports = append(reports, BotMetricsReport{At: at, Data: data})
+	}
+	return reports
 }
 
 // Result is the outcome of running a scripted scenario.
@@ -366,6 +391,10 @@ type SimulationResult struct {
 	// Success is the goal the conversation was judged on, the simulation's
 	// success as it was worded.
 	Success string
+	// BotMetrics is every metrics report the bot sent during the run, in
+	// order. These are the bot's own measurements, not the quality Metrics the
+	// run was scored on.
+	BotMetrics []BotMetricsReport
 }
 
 // Passed reports whether the run completed, achieved its goal, and no metric

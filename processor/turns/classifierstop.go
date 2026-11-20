@@ -241,6 +241,11 @@ func (s *ClassifierStop) Process(f frames.Frame) ProcessFrameResult {
 		s.txFinalized = false
 	case *frames.TranscriptionFrame:
 		s.handleTranscription(fr)
+	case *frames.TranscriptionFinalizedFrame:
+		// The words already collected are all of them; the confirmation came
+		// without text of its own.
+		s.txFinalized = true
+		s.maybeClassify()
 	}
 	return Continue
 }

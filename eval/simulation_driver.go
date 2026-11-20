@@ -311,6 +311,7 @@ func (d *SimulationDriver) result(
 		DebugLog:       debugLog,
 		Success:        d.simulation.Success,
 		FailureKind:    failureKind,
+		BotMetrics:     botMetricsOf(d.stream),
 	}
 }
 

@@ -71,6 +71,10 @@
 //	marker_first: <bool>     for llm_marker: the marker came before any text
 //	markers: <int>           for llm_marker: how many markers the response holds
 //	text_after: <bool>       for llm_marker: text follows the first marker
+//	metric: <str>            for metrics: the kind of metric the report must hold
+//	                         (ttfb, processing, tokens, ...)
+//	processor: <str>         for metrics: text the name of the processor that
+//	                         measured it must contain
 //	name: <str>              for function_call: the tool the call must be to
 //	args: <mapping>          for function_call: an argument subset the call must carry
 //	calls: <list>            for function_call: several calls, in any order
@@ -197,6 +201,44 @@
 // response holds, and text_after whether anything follows the first one, which a
 // complete turn should have and an incomplete one should not.
 //
+// # Asserting on the bot's metrics and its own messages
+//
+// metrics is a report of what the bot's processors measured, such as a
+// service's TTFB, its processing time or its usage. A bot sends them when its
+// pipeline has metrics on, grouped by kind (ttfb, processing, tokens, ...).
+// metric: names the kind the report must hold and processor: text the
+// measuring processor's name must contain; a bare metrics takes any report. The
+// zero a pipeline reports for every processor as it starts is not a
+// measurement and never matches. A report that arrived while an expectation
+// above was waiting for its own event is behind this one, so look back for it:
+//
+//	turns:
+//	  - user: "What is the capital of Germany?"
+//	    expect:
+//	      - event: user_transcription
+//	      - event: metrics
+//	        metric: ttfb
+//	        processor: STT
+//	        check_from: turn_start
+//
+// Every report of a run is kept with its result (ScriptResult.BotMetrics and
+// SimulationResult.BotMetrics, and bot_metrics in a suite's results.jsonl, for
+// passed and failed runs alike), expected or not, so an expectation is only
+// needed to hold a turn open until one arrives.
+//
+// server_message is a message of the bot's own making: whatever data it pushed
+// in an RTVI server message frame. It is how a bot built for an eval reports
+// what only it can know, such as a result it computed or that it has finished
+// its work on a turn. The event's text is the data as JSON (or the data itself
+// when it is a string), with a space after each comma and colon, so the content
+// checks read it and a matched expectation records it in the run's result:
+//
+//	turns:
+//	  - user: "What is the capital of Germany?"
+//	    expect:
+//	      - event: server_message
+//	        text_contains: '"done": true'
+//
 // # Asserting on function calls
 //
 // A function_call expectation holds the set of calls the turn should make.
@@ -240,7 +282,7 @@
 //	    absent: true
 //	    within_ms: 5000
 //
-// It matches on event type alone, so no content, call or marker check may
+// It matches on event type alone, so no content, call, marker or metric check may
 // accompany it, and it waits out its whole budget: set within_ms explicitly to
 // keep the quiet window short.
 //

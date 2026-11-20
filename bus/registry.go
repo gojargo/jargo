@@ -158,6 +158,7 @@ func init() {
 	Types.Register("TTSUpdateSettingsFrame", &frames.TTSUpdateSettingsFrame{})
 	Types.Register("TextFrame", &frames.TextFrame{})
 	Types.Register("TranscriptionFrame", &frames.TranscriptionFrame{})
+	Types.Register("TranscriptionFinalizedFrame", &frames.TranscriptionFinalizedFrame{})
 	Types.Register("TranslationFrame", &frames.TranslationFrame{})
 	Types.Register("UserAudioRawFrame", &frames.UserAudioRawFrame{})
 	Types.Register("UserIdleTimeoutUpdateFrame", &frames.UserIdleTimeoutUpdateFrame{})

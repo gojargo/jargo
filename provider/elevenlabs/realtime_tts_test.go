@@ -820,14 +820,14 @@ func TestRealtimeTTSAcceptsFlashModelsWithoutAWarning(t *testing.T) {
 	}
 }
 
-// Holding frames per turn is the default; turning it off lets contexts overlap.
+// Contexts overlap by default; turning the pause on holds frames per turn.
 func TestRealtimeTTSPauseFrameProcessingIsConfigurable(t *testing.T) {
-	if got := (RealtimeTTSConfig{}).withDefaults().PauseFrameProcessing; got == nil || !*got {
-		t.Errorf("PauseFrameProcessing = %v, want on by default", got)
+	if (RealtimeTTSConfig{}).withDefaults().PauseFrameProcessing {
+		t.Error("PauseFrameProcessing is on by default, want off")
 	}
-	cfg := RealtimeTTSConfig{PauseFrameProcessing: new(false)}.withDefaults()
-	if *cfg.PauseFrameProcessing {
-		t.Error("PauseFrameProcessing turned off came back on")
+	cfg := RealtimeTTSConfig{PauseFrameProcessing: true}.withDefaults()
+	if !cfg.PauseFrameProcessing {
+		t.Error("PauseFrameProcessing turned on came back off")
 	}
 }
 
@@ -857,6 +857,8 @@ type wordsHost struct {
 	mu        sync.Mutex
 	words     []contextWord
 	spaceless []bool
+	// ends are where the words end, parallel to words.
+	ends []float64
 }
 
 func newWordsHost(ids ...string) *wordsHost { return &wordsHost{fakeHost: newFakeHost(ids...)} }
@@ -867,7 +869,14 @@ func (h *wordsHost) AddWordTimestamps(contextID string, words []uctx.WordTiming,
 	for _, w := range words {
 		h.words = append(h.words, contextWord{contextID, w.Word, w.Offset})
 		h.spaceless = append(h.spaceless, opts.IncludesInterFrameSpaces)
+		h.ends = append(h.ends, w.End)
 	}
+}
+
+func (h *wordsHost) wordEnds() []float64 {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return slices.Clone(h.ends)
 }
 
 func (h *wordsHost) reported() []contextWord {
@@ -1063,6 +1072,27 @@ func TestRealtimeTTSWordlessAlignmentStillAdvancesTheClock(t *testing.T) {
 	// space.
 	if last := got[len(got)-1].offset; math.Abs(last-1.0) > 1e-9 {
 		t.Errorf("Bye starts at %v, want 1.0", last)
+	}
+}
+
+// A word ends where the space after it ends, even when it spans two messages,
+// so the context after this one is timed from there.
+func TestRealtimeTTSWordEndsRunToTheEndOfTheFollowingSpace(t *testing.T) {
+	s, host := timedSynth("")
+	for _, c := range []string{"Hi the", "re "} {
+		deliver(t, s, &realtimeTTSMessage{ContextID: "ctx-1", Alignment: alignmentChunk(c)})
+	}
+
+	got, ends := host.reported(), host.wordEnds()
+	if len(got) != 2 || got[0].word != "Hi" || got[1].word != "there" {
+		t.Fatalf("words = %v, want Hi, there", got)
+	}
+	// "Hi" ends with its space, 0.3s in. "re " starts 0.6s in; its space starts
+	// 0.2s later and lasts 0.1s.
+	for i, want := range []struct{ start, end float64 }{{0, 0.3}, {0.3, 0.9}} {
+		if math.Abs(got[i].offset-want.start) > 1e-9 || math.Abs(ends[i]-want.end) > 1e-9 {
+			t.Errorf("%s = %v to %v, want %v to %v", got[i].word, got[i].offset, ends[i], want.start, want.end)
+		}
 	}
 }
 

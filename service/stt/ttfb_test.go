@@ -74,6 +74,7 @@ func TestStreamServiceMeasuresFromTheEndOfSpeech(t *testing.T) {
 
 	stream := &answeringStream{told: make(chan struct{}, 1)}
 	svc := stt.NewStream("ConfirmingSTT", &answeringConnector{stream: stream}, 16000)
+	stream.request = svc.RequestFinalize
 	w := newTTFBWatcher()
 	task := newMeasuredTask(svc, w)
 
@@ -158,6 +159,7 @@ func (w *processingWatcher) observe(f frames.Frame) {
 func TestStreamServiceReportsNoProcessingTime(t *testing.T) {
 	stream := &answeringStream{told: make(chan struct{}, 1)}
 	svc := stt.NewStream("ConfirmingSTT", &answeringConnector{stream: stream}, 16000)
+	stream.request = svc.RequestFinalize
 	w := newProcessingWatcher()
 	no := false
 	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{
@@ -193,8 +195,9 @@ func TestStreamServiceReportsNoProcessingTime(t *testing.T) {
 // repeatAnsweringStream answers every finalize it is told to make, so a test can
 // run more than one utterance through it.
 type repeatAnsweringStream struct {
-	told chan struct{}
-	ctx  context.Context //nolint:containedctx // the session context, set on dial
+	told    chan struct{}
+	ctx     context.Context //nolint:containedctx // the session context, set on dial
+	request func()
 }
 
 func (s *repeatAnsweringStream) Send([]byte) error { return nil }
@@ -202,6 +205,9 @@ func (s *repeatAnsweringStream) Send([]byte) error { return nil }
 func (s *repeatAnsweringStream) Close() error { return nil }
 
 func (s *repeatAnsweringStream) Finalize() error {
+	if s.request != nil {
+		s.request()
+	}
 	select {
 	case s.told <- struct{}{}:
 	default:
@@ -230,6 +236,7 @@ func (c *repeatAnsweringConnector) Connect(ctx context.Context, _ int) (stt.Stre
 func TestStreamServiceReportsOnlyTheInitialTTFBWhenAsked(t *testing.T) {
 	stream := &repeatAnsweringStream{told: make(chan struct{}, 1)}
 	svc := stt.NewStream("OnceOnlySTT", &repeatAnsweringConnector{stream: stream}, 16000)
+	stream.request = svc.RequestFinalize
 	w := newTTFBWatcher()
 	no := false
 	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{
@@ -278,6 +285,7 @@ func TestStreamServiceMeasuresToTheLastTranscriptWhenNoneCloses(t *testing.T) {
 	// utterance rather than this one.
 	stream := &answeringStream{told: make(chan struct{}, 1)}
 	svc := stt.NewStream("OpenEndedSTT", &answeringConnector{stream: stream}, 16000)
+	stream.request = svc.RequestFinalize
 	svc.SetTTFBTimeout(deadline)
 	w := newTTFBWatcher()
 	task := newMeasuredTask(svc, w)
@@ -322,7 +330,7 @@ func (s *answeringEmptyStream) Recv() ([]stt.Result, error) {
 			return nil, s.ctx.Err()
 		}
 		s.sent = true
-		return []stt.Result{{Final: true, FromFinalize: true}}, nil
+		return []stt.Result{{Final: true, FromFinalize: true, PushFinalized: true}}, nil
 	}
 	<-s.ctx.Done()
 	return nil, s.ctx.Err()
@@ -340,6 +348,7 @@ func (c *answeringEmptyConnector) Connect(ctx context.Context, _ int) (stt.Strea
 func TestStreamServiceReportsOnAnEmptyFinalizeAnswer(t *testing.T) {
 	stream := &answeringEmptyStream{answeringStream{told: make(chan struct{}, 1)}}
 	svc := stt.NewStream("ConfirmingSTT", &answeringEmptyConnector{stream: stream}, 16000)
+	stream.request = svc.RequestFinalize
 	// Long enough that a measurement arriving promptly cannot have come from it.
 	svc.SetTTFBTimeout(30 * time.Second)
 	w := newTTFBWatcher()
@@ -363,6 +372,7 @@ func TestStreamServiceReportsOnAnEmptyFinalizeAnswer(t *testing.T) {
 func TestStreamServiceSkipsAVADThatDidNotSayHowLongItWaited(t *testing.T) {
 	stream := &answeringStream{told: make(chan struct{}, 1)}
 	svc := stt.NewStream("ConfirmingSTT", &answeringConnector{stream: stream}, 16000)
+	stream.request = svc.RequestFinalize
 	w := newTTFBWatcher()
 	task := newMeasuredTask(svc, w)
 

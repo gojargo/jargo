@@ -2,6 +2,7 @@ package aggregators_test
 
 import (
 	"context"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -86,6 +87,70 @@ func TestAggregatorDetectsSpeechItself(t *testing.T) {
 
 	task.StopWhenDone()
 	<-runDone
+}
+
+// TestDetectedSpeechIsBroadcastAsSiblings checks that the two copies of each
+// speaking frame the aggregator raises, the one queued back into itself and the
+// one sent upstream, are marked as a pair, so an observer reading both reports
+// the moment once.
+func TestDetectedSpeechIsBroadcastAsSiblings(t *testing.T) {
+	convo := frames.NewLLMContext("system")
+	pair := aggregators.New(convo, aggregators.WithVAD(aggregators.VADConfig{
+		Analyzer: newScriptedVAD(vad.StateSpeaking, vad.StateSpeaking, vad.StateQuiet),
+	}))
+
+	var mu sync.Mutex
+	var down, up []frames.Frame
+	task := pipeline.NewWorker(pipeline.New(pair.User()), pipeline.WorkerConfig{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
+		ReachedUpstreamFilter:   pipeline.AnyFrame,
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		mu.Lock()
+		down = append(down, f)
+		mu.Unlock()
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
+		mu.Lock()
+		up = append(up, f)
+		mu.Unlock()
+	})
+	runDone := make(chan error, 1)
+	go func() { runDone <- task.Run(context.Background()) }()
+
+	for range 3 {
+		task.QueueFrame(audioChunk())
+	}
+	flushPipeline(t, task)
+	task.StopWhenDone()
+	<-runDone
+
+	mu.Lock()
+	defer mu.Unlock()
+	checkPaired := func(name string, is func(frames.Frame) bool) {
+		t.Helper()
+		d, u := slices.IndexFunc(down, is), slices.IndexFunc(up, is)
+		if d < 0 || u < 0 {
+			t.Fatalf("%s: downstream copy %t, upstream copy %t, want both", name, d >= 0, u >= 0)
+		}
+		dSibling, dOK := down[d].Base().BroadcastSiblingID()
+		uSibling, uOK := up[u].Base().BroadcastSiblingID()
+		if !dOK || !uOK || dSibling != up[u].ID() || uSibling != down[d].ID() {
+			t.Errorf("%s: the two copies are not marked as each other's sibling", name)
+		}
+	}
+	checkPaired("VADUserStartedSpeakingFrame", func(f frames.Frame) bool {
+		_, ok := f.(*frames.VADUserStartedSpeakingFrame)
+		return ok
+	})
+	checkPaired("VADUserStoppedSpeakingFrame", func(f frames.Frame) bool {
+		_, ok := f.(*frames.VADUserStoppedSpeakingFrame)
+		return ok
+	})
+	checkPaired("UserSpeakingFrame", func(f frames.Frame) bool {
+		_, ok := f.(*frames.UserSpeakingFrame)
+		return ok
+	})
 }
 
 // TestDetectedSpeechDrivesTheTurn is what detecting inside the aggregator is

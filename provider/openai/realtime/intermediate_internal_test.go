@@ -343,9 +343,24 @@ func TestACanceledCallIsSettled(t *testing.T) {
 }
 
 func appendFrame(run bool) *frames.LLMMessagesAppendFrame {
-	f := frames.NewLLMMessagesAppendFrame([]frames.Message{{Role: frames.RoleUser, Text: "Backend: On it."}})
+	f := frames.NewLLMMessagesAppendFrame([]frames.Message{{Role: frames.RoleDeveloper, Text: "Backend: On it."}})
 	f.RunLLM = run
 	return f
+}
+
+func TestAnAppendedUserMessageGoesInAsAUserItem(t *testing.T) {
+	srv := newRecordingSession(t)
+	s := startedService(t, srv)
+
+	f := frames.NewLLMMessagesAppendFrame([]frames.Message{{Role: frames.RoleUser, Text: "Hello?"}})
+	f.RunLLM = true
+	s.handleMessagesAppend(t.Context(), f)
+	settle()
+
+	items := srv.items()
+	if len(items) != 1 || items[0]["role"] != "user" {
+		t.Fatalf("items = %v, want the message as a user item", items)
+	}
 }
 
 func TestAnAppendedMessageGoesInAsAnItemAndRunsWhenTheAggregatorAsks(t *testing.T) {

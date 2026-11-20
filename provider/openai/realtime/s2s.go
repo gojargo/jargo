@@ -431,6 +431,12 @@ func (s *Service) handleContext(ctx context.Context, convo *frames.LLMContext, d
 // aggregator pushes upstream, which creates the response (see handleContext).
 // Before the session's conversation is set up, nothing is sent: the setup sends
 // the conversation, which the aggregator records the messages in.
+//
+// A user or assistant message goes in under its own role; any other, such as a
+// developer message, goes in as a system message.
+//
+// The messages are taken from this frame, not read from the conversation. The
+// user aggregator's realtimeHandleMessagesAppend explains why.
 func (s *Service) handleMessagesAppend(ctx context.Context, f *frames.LLMMessagesAppendFrame) {
 	s.mu.Lock()
 	ready := s.sessionReady && !s.needsConversationSetup
@@ -443,9 +449,14 @@ func (s *Service) handleMessagesAppend(ctx context.Context, f *frames.LLMMessage
 		if text == "" {
 			continue
 		}
-		role := "system"
-		if m.Role == frames.RoleAssistant {
+		var role string
+		switch m.Role {
+		case frames.RoleUser:
+			role = roleUser
+		case frames.RoleAssistant:
 			role = roleAssistant
+		default:
+			role = "system"
 		}
 		s.sendMessageItem(ctx, text, role)
 	}

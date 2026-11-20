@@ -199,9 +199,10 @@ func TestTurnsStoppingDoesNotReconnect(t *testing.T) {
 	}
 }
 
-// TestTurnsTranscriptsAreInEnglish checks every transcript the Turns service
-// produces, interim and final, carries the language it transcribes.
-func TestTurnsTranscriptsAreInEnglish(t *testing.T) {
+// TestTurnsTranscriptsWithoutADetectedLanguageCarryNone checks a transcript
+// carries a language only when its event detected one. The fake server detects
+// none, and interim transcripts never carry one.
+func TestTurnsTranscriptsWithoutADetectedLanguageCarryNone(t *testing.T) {
 	server := &fakeInk2{openTurnAfter: 5}
 	res := run(t, turnsService(server.start(t)), time.Second)
 
@@ -210,13 +211,13 @@ func TestTurnsTranscriptsAreInEnglish(t *testing.T) {
 		switch fr := f.(type) {
 		case *frames.TranscriptionFrame:
 			seen++
-			if fr.Language != "en" {
-				t.Errorf("transcript %q is in %q, want en", fr.Text, fr.Language)
+			if fr.Language != "" {
+				t.Errorf("transcript %q is in %q, want no language", fr.Text, fr.Language)
 			}
 		case *frames.InterimTranscriptionFrame:
 			seen++
-			if fr.Language != "en" {
-				t.Errorf("interim %q is in %q, want en", fr.Text, fr.Language)
+			if fr.Language != "" {
+				t.Errorf("interim %q is in %q, want no language", fr.Text, fr.Language)
 			}
 		}
 	}

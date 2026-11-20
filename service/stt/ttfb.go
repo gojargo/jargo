@@ -32,10 +32,15 @@ const DefaultTTFBTimeout = 2 * time.Second
 type ttfbTracker struct {
 	svc   *processor.Base
 	model func() string
-	// onReport is told each latency reported, and the moment it was measured to.
-	// It is how the segment being traced learns its own latency, and when the
-	// wait ended without the transcript it was for, when to close.
-	onReport func(ttfb time.Duration, end time.Time)
+	// onReport is told each latency reported. It is how the segment being traced
+	// learns its own latency.
+	onReport func(ttfb time.Duration)
+	// onGiveUp is told when the deadline passed without the transcript the wait
+	// was for, and the moment the wait was measured to. It is how the segment
+	// being traced learns when to close: nothing else will close it. A wait that
+	// ends on the closing transcript, or on the service's confirmation that
+	// nothing more is coming, leaves the segment to what closes it.
+	onGiveUp func(end time.Time)
 
 	mu      sync.Mutex
 	timeout time.Duration
@@ -169,7 +174,7 @@ func (t *ttfbTracker) report(ctx context.Context, end time.Time) {
 	}
 	ttfb := end.Sub(start)
 	if t.onReport != nil {
-		t.onReport(ttfb, end)
+		t.onReport(ttfb)
 	}
 
 	model := t.model()
@@ -233,4 +238,7 @@ func (t *ttfbTracker) waitForTranscript(ctx context.Context, timeout time.Durati
 		return
 	}
 	t.report(ctx, last)
+	if t.onGiveUp != nil {
+		t.onGiveUp(last)
+	}
 }

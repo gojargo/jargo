@@ -49,9 +49,11 @@ VAD. They need the ONNX Runtime, like the getting-started voice agents.
 | [`voice-cartesia`](voice/voice-cartesia) | Cartesia speech-to-text and text- to-speech, with an OpenAI LLM. |
 | [`voice-cartesia-http`](voice/voice-cartesia-http) | Cartesia speech-to-text, an OpenAI LLM and Cartesia text-to-speech over HTTP. |
 | [`voice-cartesia-turns`](voice/voice-cartesia-turns) | Cartesia speech-to-text that detects the turns itself, an OpenAI LLM and Cartesia text-to-speech. |
+| [`voice-concurrent-tts`](voice/voice-concurrent-tts) | Several speak frames pushed at once, each synthesized in its own context, with Cartesia or ElevenLabs text-to-speech. |
 | [`voice-deepgram`](voice/voice-deepgram) | Deepgram speech-to-text and text-to-speech (over WebSocket), with an OpenAI LLM. |
 | [`voice-deepgram-flux`](voice/voice-deepgram-flux) | Deepgram Flux speech-to-text and text-to-speech, with an OpenAI LLM. |
 | [`voice-deepgram-flux-eager`](voice/voice-deepgram-flux-eager) | Deepgram Flux speech-to-text and text-to-speech, with an OpenAI LLM, answering Flux's eager end of turn while the LLM's turn-completion markers hold incomplete turns open. |
+| [`voice-deepgram-flux-manual`](voice/voice-deepgram-flux-manual) | Deepgram Flux speech-to-text and text-to-speech, with an OpenAI LLM, where the pipeline's own user turn strategies decide when the user's turn ends and each VAD stop asks Flux to finalize. |
 | [`voice-deepgram-http`](voice/voice-deepgram-http) | Deepgram speech-to-text and text-to-speech (over HTTP), with an OpenAI LLM. |
 | [`voice-elevenlabs`](voice/voice-elevenlabs) | ElevenLabs realtime speech-to- text and streaming text-to-speech, with an OpenAI LLM. |
 | [`voice-elevenlabs-http`](voice/voice-elevenlabs-http) | ElevenLabs speech-to-text and text-to-speech over HTTP, with an OpenAI LLM. |
@@ -65,7 +67,8 @@ VAD. They need the ONNX Runtime, like the getting-started voice agents.
 | [`voice-gradium`](voice/voice-gradium) | Gradium speech-to-text and text-to- speech, with an OpenAI LLM. |
 | [`voice-gradium-turns`](voice/voice-gradium-turns) | Gradium speech-to-text that detects the turns itself, an OpenAI LLM and Gradium text-to-speech. |
 | [`voice-groq`](voice/voice-groq) | Groq speech-to-text, LLM and text-to- speech. |
-| [`voice-hume`](voice/voice-hume) | Deepgram speech-to-text, an OpenAI LLM and Hume text-to-speech. |
+| [`voice-heygen`](voice/voice-heygen) | Deepgram speech-to-text, an OpenAI LLM and HeyGen Voice text-to-speech. |
+| [`voice-heygen-http`](voice/voice-heygen-http) | Deepgram speech-to-text, an OpenAI LLM and HeyGen Voice text-to-speech (over HTTP). |
 | [`voice-inworld`](voice/voice-inworld) | Deepgram speech-to-text, an OpenAI LLM and Inworld text-to-speech (over WebSocket). |
 | [`voice-inworld-http`](voice/voice-inworld-http) | Deepgram speech-to-text, an OpenAI LLM and Inworld (over HTTP) text-to-speech. |
 | [`voice-kokoro`](voice/voice-kokoro) | Deepgram speech-to-text, an OpenAI LLM and local Kokoro text-to-speech (espeak-ng and the ONNX Runtime, no server). |

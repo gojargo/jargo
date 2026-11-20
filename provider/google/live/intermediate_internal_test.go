@@ -276,16 +276,15 @@ func TestAnInterruptionDropsAReplyOwedForAppendedContent(t *testing.T) {
 	}
 }
 
-func TestWithoutAConversationAnAppendStartsOne(t *testing.T) {
+func TestNothingIsAppendedBeforeTheFirstConversation(t *testing.T) {
 	srv := newRecordingSession(t)
 	s := startedService(t, srv, defaultModel)
 
 	s.handleMessagesAppend(t.Context(), appendFrame())
 	settle()
 
-	got := srv.withKey("clientContent")
-	if len(got) != 1 || got[0]["turnComplete"] != true {
-		t.Fatalf("client content = %v, want one completing the turn", got)
+	if got := srv.withKey("clientContent"); len(got) != 0 {
+		t.Fatalf("client content = %v, want none", got)
 	}
 }
 

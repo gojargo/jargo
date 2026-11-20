@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"reflect"
 	"testing"
 
 	"github.com/gojargo/jargo/frames"
@@ -29,6 +30,25 @@ func deserialize(t *testing.T, s *ClientSerializer, data []byte) frames.Frame {
 		t.Fatal(err)
 	}
 	return f
+}
+
+// The bot's metrics and its server-message stay raw messages: the base
+// serializer drops both, and the harness reports the metrics as sent, and the
+// server-message's data as the bot's own.
+func TestClientSerializerKeepsMetricsAndServerMessagesRaw(t *testing.T) {
+	for msgType, data := range map[string]map[string]any{
+		rtvi.TypeMetrics:       {"ttfb": []any{map[string]any{"processor": "DeepgramSTTService#0", "value": 0.31}}},
+		rtvi.TypeServerMessage: {"done": true, "transcript": "hello"},
+	} {
+		f, ok := deserialize(t, NewClientSerializer(), serverMessage(t, msgType, data)).(*frames.InputTransportMessageFrame)
+		var message map[string]any
+		if ok {
+			_ = json.Unmarshal(f.Message, &message)
+		}
+		if !ok || message["type"] != msgType || !reflect.DeepEqual(message["data"], data) {
+			t.Fatalf("%s: frame = %+v, want the raw message with its data", msgType, f)
+		}
+	}
 }
 
 // The client-side serializer the harness pipeline uses to talk to the bot.

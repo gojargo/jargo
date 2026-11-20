@@ -117,6 +117,7 @@ func (d *ScriptDriver) result(
 		EventsSeen:   eventsSeen,
 		DebugLog:     debugLog,
 		Skipped:      skipped,
+		BotMetrics:   d.botMetrics(),
 	}
 }
 

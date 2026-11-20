@@ -312,6 +312,10 @@ func catalog() []catalogEntry {
 			build: func() frames.Frame { return frames.NewTranscriptionFrame("hello", "user-1", "ts") },
 		},
 		{
+			label: "TranscriptionFinalizedFrame", cat: data, wantString: "user: user-1",
+			build: func() frames.Frame { return frames.NewTranscriptionFinalizedFrame("user-1", "ts") },
+		},
+		{
 			label: "TranslationFrame", cat: data, wantString: "bonjour",
 			build: func() frames.Frame { return frames.NewTranslationFrame("bonjour", "user-1", "ts") },
 		},

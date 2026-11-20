@@ -15,8 +15,9 @@
 // and the options of a question take the same.
 //
 // The implementations live in the subpackages: classifier/llm answers through
-// any LLM service that runs a one-shot inference, and classifier/jev through
-// Jev, TypeSafe's hosted classification model.
+// any LLM service that runs a one-shot inference, classifier/jev through Jev,
+// TypeSafe's hosted classification model, and classifier/google/decisions
+// through Google's Decisions API.
 package classifier
 
 import (

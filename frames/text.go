@@ -247,6 +247,41 @@ func (f *TranscriptionFrame) String() string {
 		f.Name(), f.UserID, f.Speaker, f.Text, f.Language, f.Timestamp)
 }
 
+// TranscriptionFinalizedFrame confirms that the transcription of an utterance is
+// complete.
+//
+// An STT service asked to finalize may have delivered the last of the text
+// already, before it could tell that nothing more was coming. Its confirmation
+// then has no text to carry, and this frame is how it reaches the pipeline. It
+// means what Finalized means on a TranscriptionFrame, for the transcripts pushed
+// before it.
+//
+// An utterance is finalized by one or the other, never both: by its last
+// TranscriptionFrame when the confirmation arrives with text, and by this frame
+// when it arrives without.
+type TranscriptionFinalizedFrame struct {
+	BaseDataFrame
+	// UserID identifies the participant whose audio was transcribed, as on the
+	// transcripts this confirms.
+	UserID string
+	// Timestamp is when the confirmation arrived.
+	Timestamp string
+}
+
+// NewTranscriptionFinalizedFrame builds a TranscriptionFinalizedFrame.
+func NewTranscriptionFinalizedFrame(userID, timestamp string) *TranscriptionFinalizedFrame {
+	return &TranscriptionFinalizedFrame{
+		BaseDataFrame: NewBaseDataFrame("TranscriptionFinalizedFrame"),
+		UserID:        userID,
+		Timestamp:     timestamp,
+	}
+}
+
+// String implements fmt.Stringer.
+func (f *TranscriptionFinalizedFrame) String() string {
+	return fmt.Sprintf("%s(user: %s, timestamp: %s)", f.Name(), f.UserID, f.Timestamp)
+}
+
 // TranscriptionSpeaker is a speaker an STT service's diarization told apart in a
 // transcription stream.
 //
@@ -258,10 +293,10 @@ func (f *TranscriptionFrame) String() string {
 // segment separately keeps no labels across segments.
 type TranscriptionSpeaker struct {
 	// Label is the provider's label for the speaker ("A", "S1", "2").
-	Label string
+	Label string `json:"label"`
 	// Number is the speaker's place in the order speakers first appeared,
 	// starting at 1.
-	Number int
+	Number int `json:"number"`
 }
 
 // String implements fmt.Stringer, as the number with the label after it, and
@@ -398,6 +433,7 @@ var (
 	_ DataFrame = (*BotBackchannelFrame)(nil)
 	_ DataFrame = (*UserBackchannelFrame)(nil)
 	_ DataFrame = (*TranscriptionFrame)(nil)
+	_ DataFrame = (*TranscriptionFinalizedFrame)(nil)
 	_ DataFrame = (*InterimTranscriptionFrame)(nil)
 	_ DataFrame = (*EagerTranscriptionFrame)(nil)
 )

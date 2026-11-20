@@ -59,11 +59,45 @@ func TestQuerySendsU3ProSettingsToUniversal36Pro(t *testing.T) {
 	}
 }
 
-// universal-3-6-pro is the default model sent to AssemblyAI.
-func TestDefaultModelIsUniversal36Pro(t *testing.T) {
+// assemblyai-stt-3-7-realtime-agent is the default model sent to AssemblyAI.
+func TestDefaultModelIsAssemblyAISTT37RealtimeAgent(t *testing.T) {
 	cfg := Config{APIKey: "k"}.withDefaults()
-	if got := cfg.query(16000).Get("speech_model"); got != "universal-3-6-pro" {
-		t.Errorf("speech_model = %q, want universal-3-6-pro", got)
+	if got := cfg.query(16000).Get("speech_model"); got != "assemblyai-stt-3-7-realtime-agent" {
+		t.Errorf("speech_model = %q, want assemblyai-stt-3-7-realtime-agent", got)
+	}
+}
+
+// assemblyai-stt-3-7-realtime-agent is a U3 Pro model, so the U3 Pro settings
+// reach it as they reach any model of the family.
+func TestQuerySendsU3ProSettingsToAssemblyAISTT37RealtimeAgent(t *testing.T) {
+	cfg := Config{
+		APIKey:        "k",
+		Model:         "assemblyai-stt-3-7-realtime-agent",
+		Prompt:        "Outbound call to a health insurance payer.",
+		LanguageCodes: []language.Language{language.English},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	cfg = cfg.withDefaults()
+	q := cfg.query(16000)
+	if got := q.Get("speech_model"); got != "assemblyai-stt-3-7-realtime-agent" {
+		t.Errorf("speech_model = %q, want assemblyai-stt-3-7-realtime-agent", got)
+	}
+	if got := q.Get("prompt"); got != "Outbound call to a health insurance payer." {
+		t.Errorf("prompt = %q, want the configured prompt", got)
+	}
+	if got := q.Get("language_codes"); got != `["en"]` {
+		t.Errorf("language_codes = %q, want the declared list", got)
+	}
+}
+
+// assemblyai-stt-3-7-realtime is not meant for voice agents, so it is not a U3
+// Pro model and a prompt is refused for it.
+func TestValidateRejectsPromptForAssemblyAISTT37Realtime(t *testing.T) {
+	cfg := Config{APIKey: "k", Model: "assemblyai-stt-3-7-realtime", Prompt: "Transcribe the order."}
+	if err := cfg.Validate(); !errors.Is(err, errPromptNotSupported) {
+		t.Errorf("Validate = %v, want errPromptNotSupported", err)
 	}
 }
 
@@ -180,10 +214,15 @@ func TestValidateRejectsTooManyLanguages(t *testing.T) {
 // variants with.
 func TestIsU3ProModel(t *testing.T) {
 	cases := map[string]bool{
-		"u3-rt-pro":           true,
-		"u3-rt-pro-2026":      true,
-		"universal-3-5-pro":   true,
-		"universal-3-6-pro":   true,
+		"u3-rt-pro":                         true,
+		"u3-rt-pro-2026":                    true,
+		"universal-3-5-pro":                 true,
+		"universal-3-6-pro":                 true,
+		"assemblyai-stt-3-7-realtime-agent": true,
+		// Not intended for voice-agent use cases.
+		"assemblyai-stt-3-7-realtime": false,
+		// The Sync name is not a streaming model.
+		"assemblyai-stt-3-7":  false,
 		"universal-streaming": false,
 		"universal-3-5":       false,
 		"":                    false,

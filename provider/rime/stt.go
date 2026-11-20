@@ -567,14 +567,22 @@ func (s *sttSession) SpeechStarted() {
 	s.wg.Go(func() { s.transcribe(seg) })
 }
 
-// Finalize ends the segment, which asks Rime for its final transcript.
+// Finalize ends the segment, which asks Rime for its final transcript. With a
+// segment streaming, the finalize is recorded with the service, so the
+// segment's final confirms it.
 func (s *sttSession) Finalize() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.segment != nil {
+	streaming := s.segment != nil
+	if streaming && s.c != nil && s.c.svc != nil {
+		// Recorded before the segment ends, so its final has a request to
+		// confirm.
+		s.c.svc.RequestFinalize()
+	}
+	if streaming {
 		s.finalizeRequested = true
 	}
 	s.endSegmentLocked()
+	s.mu.Unlock()
 	return nil
 }
 

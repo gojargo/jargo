@@ -155,3 +155,43 @@ func TestFlushThroughNestedServiceSwitchers(t *testing.T) {
 		t.Errorf("outer inactive service saw %v, want nothing", got)
 	}
 }
+
+// TestFlushWithProbeReportsItFlushed checks a flush started with the caller's
+// probe settles under its FlushID, and the worker says so once.
+func TestFlushWithProbeReportsItFlushed(t *testing.T) {
+	up := make(chan struct{})
+	var once sync.Once
+	task := pipeline.NewWorker(pipeline.New(processor.NewIdentityFilter("Identity")), pipeline.WorkerConfig{
+		ReachedDownstreamFilter: pipeline.AnyFrame,
+	})
+	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		if _, ok := f.(*frames.StartFrame); ok {
+			once.Do(func() { close(up) })
+		}
+	})
+	flushed := make(chan uint64, 4)
+	events.On(&task.Registry, pipeline.EventPipelineFlushed, func(_ context.Context, f *frames.PipelineFlushFrame) {
+		flushed <- f.FlushID
+	})
+	done := runTask(t, task)
+	started(t, up)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	probe := frames.NewPipelineFlushFrame()
+	err := task.FlushWithProbe(ctx, probe)
+
+	task.StopWhenDone()
+	waitDone(t, done)
+	if err != nil {
+		t.Fatalf("flush = %v, want it settled", err)
+	}
+	close(flushed)
+	var ids []uint64
+	for id := range flushed {
+		ids = append(ids, id)
+	}
+	if !reflect.DeepEqual(ids, []uint64{probe.FlushID}) {
+		t.Errorf("flushed %v, want the probe's flush %d once", ids, probe.FlushID)
+	}
+}

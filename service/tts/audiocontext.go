@@ -141,6 +141,9 @@ type ctxItem struct {
 	// offset is where the word starts, in seconds from the beginning of the
 	// context's audio.
 	offset float64
+	// wordEnd is where the word ends, in the same terms, or zero when the
+	// provider does not report it.
+	wordEnd float64
 	// includesInterFrame reports whether the token carries whatever spacing
 	// separates it from the ones around it, so a consumer joining them adds none
 	// of its own.
@@ -241,19 +244,15 @@ func (c *audioContext) processTTFA(pcm []byte, rate, channels int) (ttfaMeter, b
 }
 
 // startWordTimestamps fixes the point the context's words are timed from, on the
-// first chunk of its audio, and returns the words that were waiting for it. now
-// is the pipeline clock; lastPTS carries the timeline across contexts whose
-// audio overlaps, so a later context's words cannot be timed before an earlier
-// context's last word.
-func (c *audioContext) startWordTimestamps(now, lastPTS time.Duration) []ctxItem {
+// first chunk of its audio, and returns the words that were waiting for it.
+// baseline is that point: see Base.wordTimingBaseline.
+func (c *audioContext) startWordTimestamps(baseline time.Duration) []ctxItem {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.initialWordTimestamp >= 0 {
 		return nil
 	}
-	// A context whose audio starts while an earlier one is still playing times
-	// its words after that one's last, so the timeline only moves forward.
-	c.initialWordTimestamp = max(now, lastPTS)
+	c.initialWordTimestamp = baseline
 	waiting := c.pendingWords
 	c.pendingWords = nil
 	return waiting
@@ -494,9 +493,11 @@ func (b *Base) interruptAudioContexts(ctx context.Context) {
 	interruptPlaying := !slices.Contains(preserved, b.playingContextID())
 	if interruptPlaying {
 		b.stopAudioContextLoop()
-		// The next words are timed after the uninterruptible ones still to play.
+		// The next words are timed after the uninterruptible ones still to play,
+		// not the end of the words just dropped.
 		b.audioCtxMu.Lock()
 		b.wordLastPTS = b.uninterruptibleLastPTS
+		b.wordLastEndPTS = 0
 		b.audioCtxMu.Unlock()
 	}
 
@@ -861,6 +862,7 @@ func (b *Base) AddWordTimestamps(contextID string, words []uctx.WordTiming, opts
 		c.push(ctxItem{
 			word:               w.Word,
 			offset:             w.Offset,
+			wordEnd:            w.End,
 			includesInterFrame: opts.IncludesInterFrameSpaces,
 			isWord:             true,
 		})
@@ -911,6 +913,19 @@ func (b *Base) ReplaceConnection() {
 		b.turnContext = uuid.NewString()
 	}
 	b.audioCtxMu.Unlock()
+}
+
+// RenewTurnContext moves the turn in progress to a new context ID when the turn
+// is spoken on contextID, for a provider that ended that context on its own
+// mid-turn. The turn's next sentence then opens a new context with the
+// provider, rather than reusing an ID the provider has closed. A turn spoken on
+// another context, or no turn at all, is left as it is.
+func (b *Base) RenewTurnContext(contextID string) {
+	b.audioCtxMu.Lock()
+	defer b.audioCtxMu.Unlock()
+	if contextID != "" && b.turnContext == contextID {
+		b.turnContext = uuid.NewString()
+	}
 }
 
 // RotateTurnContext closes the turn's context out and opens a fresh one for the
@@ -1290,7 +1305,7 @@ func (b *Base) pushContextAudio(
 	b.resampleContextAudio(ctx, contextID, rs, f)
 	if first {
 		b.reportTTFB(ctx, c)
-		for _, w := range c.startWordTimestamps(b.now(), b.lastWordPTS()) {
+		for _, w := range c.startWordTimestamps(b.wordTimingBaseline(b.now())) {
 			b.pushWord(ctx, c, contextID, w)
 		}
 		b.pushHeldFrames(ctx, held)
@@ -1446,6 +1461,10 @@ func (b *Base) pushWord(ctx context.Context, c *audioContext, contextID string, 
 		return
 	}
 	out := b.sequencer.ProcessWord(it.word, int64(pts), contextID, it.includesInterFrame)
+	if it.wordEnd != 0 {
+		end, _ := c.wordPTS(it.wordEnd)
+		b.endWord(end)
+	}
 	// The sequencer may have replayed earlier words when it promoted a sentence,
 	// and queued them here. This word comes after them, so it goes out behind
 	// them rather than ahead.
@@ -1549,6 +1568,25 @@ func (b *Base) lastWordPTS() time.Duration {
 	b.audioCtxMu.Lock()
 	defer b.audioCtxMu.Unlock()
 	return b.wordLastPTS
+}
+
+// wordTimingBaseline is the point the next context's words are timed from: the
+// later of now and where the words before it end. A context's audio is pushed as
+// soon as it arrives, often while the one before it is still playing, so it is
+// the previous words that say when it is heard. Where they end is known as far
+// as the provider reports word ends; otherwise their last word's start stands
+// for it.
+func (b *Base) wordTimingBaseline(now time.Duration) time.Duration {
+	b.audioCtxMu.Lock()
+	defer b.audioCtxMu.Unlock()
+	return max(b.wordLastPTS, b.wordLastEndPTS, now)
+}
+
+// endWord records where a timed word ends.
+func (b *Base) endWord(end time.Duration) {
+	b.audioCtxMu.Lock()
+	defer b.audioCtxMu.Unlock()
+	b.wordLastEndPTS = max(b.wordLastEndPTS, end)
 }
 
 // setLastWordPTS records when the last word pushed was spoken.

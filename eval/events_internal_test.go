@@ -291,7 +291,79 @@ func TestEmptyResponseStillEmitted(t *testing.T) {
 }
 
 func TestUnmappedMessageIgnored(t *testing.T) {
-	wantNoEvent(t, newStream(false).FrameToEvent(messageFrame(t, rtvi.TypeMetrics, map[string]any{})))
+	wantNoEvent(t, newStream(false).FrameToEvent(messageFrame(t, rtvi.TypeBotReady, map[string]any{})))
+}
+
+// metricsEvent is a metrics event reporting kinds.
+func metricsEvent(kinds map[string]any) map[string]any {
+	return map[string]any{keyType: EventMetrics, keyData: kinds}
+}
+
+// measurement is one entry of a metrics report.
+func measurement(processor string, value float64) []any {
+	return []any{map[string]any{"processor": processor, "value": value}}
+}
+
+// The bot's metrics reach the harness as sent, kept apart from its other
+// events.
+func TestMetricsEvent(t *testing.T) {
+	t.Run("a metrics message becomes an event with its data", func(t *testing.T) {
+		data := map[string]any{"ttfb": measurement("DeepgramSTTService#0", 0.31)}
+		event := newStream(false).FrameToEvent(messageFrame(t, rtvi.TypeMetrics, data))
+		wantEvent(t, event, metricsEvent(data))
+	})
+	t.Run("metrics are recorded apart from the events seen", func(t *testing.T) {
+		s := newStream(false)
+		s.Append(map[string]any{keyType: EventLLMStarted})
+		s.Append(metricsEvent(map[string]any{"ttfb": measurement("LLM#0", 0.2)}))
+		seen := s.EventsSeen()
+		if len(seen) != 1 || seen[0][keyType] != EventLLMStarted {
+			t.Fatalf("events seen = %v, want the llm_started alone", seen)
+		}
+		metrics := s.Metrics()
+		if len(metrics) != 1 || metrics[0][keyType] != EventMetrics {
+			t.Fatalf("metrics = %v, want the report", metrics)
+		}
+		if _, ok := metrics[0]["at"]; !ok {
+			t.Fatal("the report has no time")
+		}
+	})
+	t.Run("the result carries every report with its time", func(t *testing.T) {
+		stream := newStream(false)
+		driver := &ScriptDriver{scenario: &ScriptScenario{Name: "t"}}
+		driver.stream, driver.trace = stream, NewTrace()
+		data := map[string]any{"ttfb": measurement("STT#0", 0.3)}
+		stream.Append(map[string]any{keyType: EventMetrics, keyData: data, "at": 1.5})
+		result := driver.result(nil, 0, nil, nil, "")
+		want := []BotMetricsReport{{At: 1.5, Data: data}}
+		if !reflect.DeepEqual(result.BotMetrics, want) {
+			t.Fatalf("bot metrics = %v, want %v", result.BotMetrics, want)
+		}
+	})
+}
+
+// A message of the bot's own making is an event a scenario can read.
+func TestServerMessageEvent(t *testing.T) {
+	t.Run("it becomes an event with its data and its text", func(t *testing.T) {
+		data := map[string]any{"done": true, "transcript": "héllo"}
+		event := newStream(false).FrameToEvent(messageFrame(t, rtvi.TypeServerMessage, data))
+		wantEvent(t, event, map[string]any{
+			keyType: EventServerMessage, keyData: data, keyText: `{"done": true, "transcript": "héllo"}`,
+		})
+	})
+	t.Run("its text keeps the keys in the order the bot sent them", func(t *testing.T) {
+		raw := []byte(`{"label":"rtvi-ai","type":"server-message","data":{"z":[1,2.5,null],"a":{"b":"x\"y"}}}`)
+		event := newStream(false).FrameToEvent(frames.NewInputTransportMessageFrame(raw))
+		if got, want := event[keyText], `{"z": [1, 2.5, null], "a": {"b": "x\"y"}}`; got != want {
+			t.Fatalf("text = %v, want %v", got, want)
+		}
+	})
+	t.Run("string data is its own text", func(t *testing.T) {
+		event := newStream(false).FrameToEvent(messageFrame(t, rtvi.TypeServerMessage, "finished"))
+		if event[keyData] != "finished" || event[keyText] != "finished" {
+			t.Fatalf("event = %v, want the string as data and text", event)
+		}
+	})
 }
 
 // An image the bot reports becomes an image event.

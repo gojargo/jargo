@@ -3,6 +3,7 @@ package stt
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"sync"
 	"testing"
@@ -234,4 +235,55 @@ func TestASettingsReopenDrainsTheSessionItReplaces(t *testing.T) {
 	if steps, _, _ := conn.opened()[0].record(); !reflect.DeepEqual(steps, []string{"drain", "close"}) {
 		t.Errorf("the replaced session's teardown = %v, want it drained, then closed", steps)
 	}
+}
+
+// lingeringStream is a closingStream whose provider asks for a drain window and
+// then keeps the socket open through it, so the window runs out.
+type lingeringStream struct{ *closingStream }
+
+func (s lingeringStream) Drain() (time.Duration, error) { return 5 * time.Millisecond, nil }
+
+// lingeringConnector asks for a new session on any change, and hands out a
+// lingering stream per session.
+type lingeringConnector struct{ reopeningConnector }
+
+func (c *lingeringConnector) Connect(ctx context.Context, _ int) (Stream, error) {
+	st := newClosingStream()
+	st.ctx = ctx
+	c.mu.Lock()
+	c.streams = append(c.streams, st)
+	c.mu.Unlock()
+	return lingeringStream{st}, nil
+}
+
+// A drain whose window runs out leaves nothing behind it: the read loop is
+// ended and waited for before a reopen starts the next one, so the session it
+// opens is not raced by a wait still running on the one it replaced. Run with
+// -race.
+func TestADrainThatRunsOutLeavesNothingToRaceTheReopen(t *testing.T) {
+	t.Parallel()
+	conn := &lingeringConnector{}
+	svc := NewStream("FakeSTT", conn, 16000)
+	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{})
+	done := make(chan struct{})
+	go func() {
+		_ = task.Run(context.Background())
+		close(done)
+	}()
+	defer func() {
+		task.StopWhenDone()
+		waitForRun(t, done)
+	}()
+
+	for i := 1; i <= 20; i++ {
+		waitFor(t, "the session to be read", func() bool {
+			s := conn.opened()
+			return len(s) == i && s[i-1].isReading()
+		})
+		task.QueueFrame(updateFrame(t, "model", fmt.Sprintf("model-%d", i)))
+	}
+	waitFor(t, "the last session to be read", func() bool {
+		s := conn.opened()
+		return len(s) == 21 && s[20].isReading()
+	})
 }

@@ -14,7 +14,7 @@ import (
 	"github.com/gojargo/jargo/provider/deepseek"
 	"github.com/gojargo/jargo/provider/fireworks"
 	"github.com/gojargo/jargo/provider/groq"
-	"github.com/gojargo/jargo/provider/inception"
+	"github.com/gojargo/jargo/provider/inception" //nolint:staticcheck // the deprecated provider is still on the roster
 	"github.com/gojargo/jargo/provider/mistral"
 	"github.com/gojargo/jargo/provider/nebius"
 	"github.com/gojargo/jargo/provider/novita"
@@ -51,7 +51,7 @@ func TestDeveloperRoleRoster(t *testing.T) {
 		{"cerebras", cerebras.NewLLM, chat.RoleDeveloper},
 		{"crusoe", crusoe.NewLLM, chat.RoleUser},
 		{"deepseek", deepseekLLM, chat.RoleUser},
-		{"inception", inception.NewLLM, chat.RoleUser},
+		{"inception", inception.NewLLM, chat.RoleUser}, //nolint:staticcheck // the deprecated provider is still on the roster
 		{"mistral", mistral.NewLLM, chat.RoleUser},
 		{"nebius", nebius.NewLLM, chat.RoleUser},
 		{"ollama", ollama.NewLLM, chat.RoleUser},

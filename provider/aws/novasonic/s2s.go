@@ -527,7 +527,20 @@ func (s *Service) resetInputResampler() {
 // the model to take in: interactive when the append asks to run, which the
 // model answers as it would the user speaking, and plain text otherwise, which
 // it takes in without answering.
+//
+// If the session is not set up yet, the messages are not sent. The assistant
+// aggregator adds them to the conversation, and the session is set up from that
+// conversation, so the model gets them then.
+//
+// The messages are taken from this frame, not read from the conversation. The
+// user aggregator's realtimeHandleMessagesAppend explains why.
 func (s *Service) handleMessagesAppend(ctx context.Context, f *frames.LLMMessagesAppendFrame) {
+	s.mu.Lock()
+	started := s.audioInputStarted
+	s.mu.Unlock()
+	if !started {
+		return
+	}
 	for _, m := range f.Messages {
 		if text := m.StandardText(); text != "" {
 			s.sendTextEvent(ctx, text, roleUser, f.RunLLM)

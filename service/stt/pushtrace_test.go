@@ -114,6 +114,23 @@ func TestTraceTranscriptsFinalizedClosesAndRecordsTTFB(t *testing.T) {
 	}
 }
 
+// A finalization confirmed after its text closes the span holding that text.
+func TestTraceTranscriptsFinalizedFrameCloses(t *testing.T) {
+	p, rec := tracedPusher(t)
+	p.push(t, frames.NewTranscriptionFrame("hi", "", time.Now().Format(time.RFC3339)))
+	if got := sttSpans(rec); len(got) != 0 {
+		t.Fatalf("spans = %v, want the segment still open", got)
+	}
+	p.push(t, frames.NewTranscriptionFinalizedFrame("", time.Now().Format(time.RFC3339)))
+	spans := sttSpans(rec)
+	if len(spans) != 1 || spans[0]["transcript"] != "hi" || spans[0]["is_final"] != "true" {
+		t.Fatalf("spans = %v, want one finalized span with the text", spans)
+	}
+	if _, incomplete := spans[0]["stt.incomplete"]; incomplete {
+		t.Errorf("the span was closed as incomplete: %v", spans[0])
+	}
+}
+
 // Speech the VAD reports anchors the span where the speech began.
 func TestTraceTranscriptsAnchorsAtSpeechStart(t *testing.T) {
 	p, rec := tracedPusher(t)

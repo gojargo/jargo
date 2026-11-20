@@ -71,3 +71,26 @@ func TestAnEndedContextIsActiveWhenNothingElseIs(t *testing.T) {
 		t.Errorf("active context = %q, want the one playing", got)
 	}
 }
+
+// TestRenewTurnContextMovesOnlyTheTurnOnTheContextEnded checks a turn spoken on
+// the context a provider ended moves to a new one, and that any other turn, or
+// none, is left as it is.
+func TestRenewTurnContextMovesOnlyTheTurnOnTheContextEnded(t *testing.T) {
+	b := New("ActiveTTS", &chunkSynth{})
+
+	b.RenewTurnContext("ended")
+	if got := b.TurnContextID(); got != "" {
+		t.Fatalf("turn context = %q with no turn, want none", got)
+	}
+
+	b.setTurnContextID("turn")
+	b.RenewTurnContext("other")
+	if got := b.TurnContextID(); got != "turn" {
+		t.Fatalf("turn context = %q after another context ended, want it kept", got)
+	}
+
+	b.RenewTurnContext("turn")
+	if got := b.TurnContextID(); got == "turn" || got == "" {
+		t.Fatalf("turn context = %q after its context ended, want a new one", got)
+	}
+}

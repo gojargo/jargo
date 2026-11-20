@@ -23,7 +23,7 @@ import (
 	"github.com/gojargo/jargo/processor/aggregators"
 	"github.com/gojargo/jargo/provider/cartesia"
 	"github.com/gojargo/jargo/provider/deepgram"
-	"github.com/gojargo/jargo/provider/inception"
+	"github.com/gojargo/jargo/provider/inception" //nolint:staticcheck // deprecated, kept until Mercury stops being served
 	"github.com/gojargo/jargo/provider/openai/chat"
 	"github.com/gojargo/jargo/runner"
 	"github.com/gojargo/jargo/service/llm"
@@ -111,7 +111,7 @@ func runBot(ctx context.Context, t transport.Transport, args runner.Arguments) e
 		VoiceID: "86e30c1d-714b-4074-a1f2-1cb6b552fb49",
 	})
 
-	model := inception.NewLLM(chat.LLMConfig{
+	model := inception.NewLLM(chat.LLMConfig{ //nolint:staticcheck // deprecated, kept until Mercury stops being served
 		APIKey: os.Getenv("INCEPTION_API_KEY"),
 		Extra:  map[string]any{"reasoning_effort": "low"},
 	})

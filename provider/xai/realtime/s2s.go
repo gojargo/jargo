@@ -413,6 +413,9 @@ func (s *Service) handleContext(ctx context.Context, convo *frames.LLMContext, d
 // aggregator pushes upstream, which creates the response (see handleContext).
 // Before the session is ready and has a conversation, nothing is sent: the
 // first conversation carries what the aggregator recorded.
+//
+// The messages are taken from this frame, not read from the conversation. The
+// user aggregator's realtimeHandleMessagesAppend explains why.
 func (s *Service) handleMessagesAppend(ctx context.Context, f *frames.LLMMessagesAppendFrame) {
 	s.mu.Lock()
 	ready := s.sessionReady && s.convo != nil

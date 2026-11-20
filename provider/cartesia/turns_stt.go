@@ -16,6 +16,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/gojargo/jargo/internal/validate"
+	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/processor/turns"
 	"github.com/gojargo/jargo/service/settings"
 	"github.com/gojargo/jargo/service/stt"
@@ -33,7 +34,32 @@ const (
 	// turnsConnectionTimeout is how long to wait for the server's connected
 	// message after the handshake before treating the connection as failed.
 	turnsConnectionTimeout = 10 * time.Second
+	// maxLanguageHints is the most distinct base codes Cartesia accepts as
+	// language hints.
+	maxLanguageHints = 6
 )
+
+// errTooManyLanguageHints is returned when more distinct languages are hinted
+// than Cartesia accepts.
+//
+//nolint:gochecknoglobals // sentinel error
+var errTooManyLanguageHints = fmt.Errorf("cartesia: language_hints accepts at most %d distinct base codes",
+	maxLanguageHints)
+
+// prepareLanguageHints normalizes language hints to distinct base codes, in the
+// order given, and enforces Cartesia's limit on them.
+func prepareLanguageHints(hints []language.Language) ([]string, error) {
+	codes := make([]string, 0, len(hints))
+	for _, hint := range hints {
+		if code := hint.BaseCode(); !slices.Contains(codes, code) {
+			codes = append(codes, code)
+		}
+	}
+	if len(codes) > maxLanguageHints {
+		return nil, errTooManyLanguageHints
+	}
+	return codes, nil
+}
 
 // Cartesia turn-detection message types.
 const (
@@ -56,6 +82,8 @@ const (
 	// turnsClose asks the server to finish the session, so it flushes whatever
 	// turn it was still holding before the socket goes.
 	turnsClose = "close"
+	// turnsConfig replaces the language hints of an open session.
+	turnsConfig = "config"
 )
 
 // TurnsSTTConfig configures the Cartesia turn-detecting STT service.
@@ -84,6 +112,13 @@ type TurnsSTTConfig struct {
 	// binds them to a connection, so changing them while the pipeline runs
 	// reopens the session.
 	Keyterm []string
+	// LanguageHints are the languages to steer transcription toward, sent as
+	// repeated language_hint query parameters. Each is reduced to its base code
+	// (pt for pt-BR), and at most six distinct base codes are accepted. Hints do
+	// not stop the model transcribing other languages. Changing them while the
+	// pipeline runs replaces them on the open connection. Not every model
+	// accepts hints; see https://docs.cartesia.ai/use-the-api/stt/languages.
+	LanguageHints []language.Language
 	// TurnStartThreshold, TurnEagerEndThreshold and TurnEndThreshold tune the
 	// server's turn detection: how sure it must be that a turn started, is
 	// predicted to have ended, and ended. TurnEndTimeoutMs is how many
@@ -129,8 +164,15 @@ type TurnsSTTConfig struct {
 	Websocket wsservice.Options
 }
 
-// Validate reports whether the configuration is usable.
-func (c TurnsSTTConfig) Validate() error { return validate.Struct(c) }
+// Validate reports whether the configuration is usable. More distinct language
+// hints than Cartesia accepts are rejected here.
+func (c TurnsSTTConfig) Validate() error {
+	if err := validate.Struct(c); err != nil {
+		return err
+	}
+	_, err := prepareLanguageHints(c.LanguageHints)
+	return err
+}
 
 // NewTurnsSTT builds a Cartesia turn-detecting STT service. Unlike NewSTT, the
 // server decides where a turn begins and ends and reports those boundaries, so
@@ -156,9 +198,8 @@ func NewTurnsSTT(cfg TurnsSTTConfig) *stt.StreamService {
 
 type turnsConnector struct {
 	cfg TurnsSTTConfig
-	// live is what a caller may ask to change. Nothing here takes effect on a
-	// session already running, but an update still lands in it so the service
-	// can say so.
+	// live is what a caller may ask to change. An update to a setting that
+	// cannot take effect still lands in it so the service can say so.
 	live *TurnsSTTSettings
 	// svc is the service this connector drives, for reporting the errors the
 	// server sends over the connection.
@@ -166,17 +207,26 @@ type turnsConnector struct {
 	// connectionTimeout bounds the wait for the server to confirm a session.
 	// Held here rather than read from the constant so a test can shorten it.
 	connectionTimeout time.Duration
+
+	// mu guards the session language hints are sent on.
+	mu     sync.Mutex
+	stream *turnsStream
 }
 
 // TurnsSTTSettings is the part of the turn-detecting configuration that can
-// change while the pipeline runs. Only the keyterms take effect, and only by
-// opening a new session, since Cartesia binds them to a connection.
+// change while the pipeline runs. The language hints are replaced on the open
+// connection. The keyterms and the turn detection settings take effect by
+// opening a new session, since Cartesia binds them to a connection. The model
+// is set at construction.
 type TurnsSTTSettings struct {
 	settings.STT
 
 	// Keyterm biases transcription towards the given terms or phrases, sent as
 	// repeated keyterm query parameters.
 	Keyterm settings.Opt[[]string] `settings:"keyterm"`
+	// LanguageHints are the languages to steer transcription toward. See
+	// TurnsSTTConfig.LanguageHints.
+	LanguageHints settings.Opt[[]language.Language] `settings:"language_hints"`
 	// The turn detection thresholds and timeout, as TurnsSTTConfig describes
 	// them.
 	TurnStartThreshold    settings.Opt[float64] `settings:"turn_start_threshold"`
@@ -206,6 +256,10 @@ func newTurnsSettings(cfg TurnsSTTConfig) *TurnsSTTSettings {
 	s.Model = settings.Set(cfg.Model)
 	if len(cfg.Keyterm) > 0 {
 		s.Keyterm = settings.Set(cfg.Keyterm)
+	}
+	s.LanguageHints = settings.Cleared[[]language.Language]()
+	if len(cfg.LanguageHints) > 0 {
+		s.LanguageHints = settings.Set(slices.Clone(cfg.LanguageHints))
 	}
 	setIf(&s.TurnStartThreshold, cfg.TurnStartThreshold)
 	setIf(&s.TurnEagerEndThreshold, cfg.TurnEagerEndThreshold)
@@ -241,18 +295,72 @@ func (c *turnsConnector) turnDetectionQuery(q url.Values) {
 // Settings is the configuration a caller may change while the pipeline runs.
 func (c *turnsConnector) Settings() any { return c.live }
 
-// UpdateSettings reopens the session when the keyterms changed, and says so
-// when anything else did. Cartesia binds keyterms to a connection, so a new list
-// reaches it only by opening another; the rest of what this service is told at
-// the session cannot be changed on one already running, and a caller who asked
-// should hear that rather than assume it took effect.
+// PrepareSettings refuses an update hinting more distinct languages than
+// Cartesia accepts, whole, before any of it is applied.
+func (c *turnsConnector) PrepareSettings(delta any) error {
+	value, ok := settings.Get(delta, "language_hints")
+	if !ok {
+		return nil
+	}
+	hints, _ := value.([]language.Language)
+	_, err := prepareLanguageHints(hints)
+	return err
+}
+
+// UpdateSettings applies a settings change the way Cartesia takes it. The
+// keyterms and the turn detection settings are bound to a connection, so a
+// change to any of them reopens the session, whose URL carries the language
+// hints as they stand too. Otherwise new language hints are sent to the open
+// connection. The rest of what this service is told at the session cannot be
+// changed on one already running, and a caller who asked should hear that
+// rather than assume it took effect.
 func (c *turnsConnector) UpdateSettings(_ context.Context, changed settings.Changed) (bool, error) {
 	bound := append([]string{"keyterm"}, turnDetectionFields...)
-	if rest := changed.Except(bound...); len(rest) > 0 {
+	if rest := changed.Except(append(bound, "language_hints")...); len(rest) > 0 {
 		slog.Warn("runtime settings update is not supported by this service",
 			"service", "CartesiaTurnsSTT", "fields", strings.Join(rest, ", "))
 	}
-	return slices.ContainsFunc(bound, changed.Has), nil
+	// A new connection takes the current hints from its URL.
+	if slices.ContainsFunc(bound, changed.Has) {
+		return true, nil
+	}
+	if changed.Has("language_hints") {
+		c.sendLanguageHints()
+	}
+	return false, nil
+}
+
+// languageHints is the language hints as they stand, as the base codes sent to
+// Cartesia. The store only ever holds hints that were accepted, so they fit.
+func (c *turnsConnector) languageHints() []string {
+	hints, _ := prepareLanguageHints(c.live.LanguageHints.Or(nil))
+	return hints
+}
+
+// sendLanguageHints replaces the open connection's language hints with a
+// config message. The server sends no reply on success, and an error event for
+// hints it rejects, which leaves the connection open. With no connection open,
+// the next one takes the hints from its URL.
+func (c *turnsConnector) sendLanguageHints() {
+	c.mu.Lock()
+	s := c.stream
+	c.mu.Unlock()
+	if s == nil {
+		return
+	}
+	if err := s.sendConfig(c.languageHints()); err != nil && c.svc != nil {
+		c.svc.PushError(s.ctx, "Failed to send language hints: "+err.Error(), err, false)
+	}
+}
+
+// forget clears s as the session language hints are sent on, once it has
+// closed.
+func (c *turnsConnector) forget(s *turnsStream) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.stream == s {
+		c.stream = nil
+	}
 }
 
 // EagerEndOfTurn implements stt.EagerEndOfTurner: whether the server's
@@ -305,6 +413,9 @@ func (c *turnsConnector) Connect(ctx context.Context, sampleRate int) (stt.Strea
 	for _, term := range prepareKeyterms(c.live.Keyterm.Or(nil)) {
 		q.Add("keyterm", term)
 	}
+	for _, code := range c.languageHints() {
+		q.Add("language_hint", code)
+	}
 
 	header := http.Header{}
 	header.Set("X-API-Key", c.cfg.APIKey)
@@ -319,9 +430,13 @@ func (c *turnsConnector) Connect(ctx context.Context, sampleRate int) (stt.Strea
 	if err != nil {
 		return nil, err
 	}
-	return &turnsStream{
-		conn: conn, ctx: ctx, cfg: c.cfg, report: c.report, connectWait: c.connectionTimeout,
-	}, nil
+	s := &turnsStream{
+		conn: conn, ctx: ctx, cfg: c.cfg, report: c.report, closed: c.forget, connectWait: c.connectionTimeout,
+	}
+	c.mu.Lock()
+	c.stream = s
+	c.mu.Unlock()
+	return s, nil
 }
 
 // report puts an error the server sent on the pipeline, with the error behind
@@ -340,6 +455,8 @@ type turnsStream struct {
 	writeMu sync.Mutex
 	// report puts an error the server sent on the pipeline.
 	report func(ctx context.Context, err error)
+	// closed is told once the session is closed.
+	closed func(s *turnsStream)
 	// connectWait bounds the wait for the server to confirm this session.
 	connectWait time.Duration
 	// confirmed records that the server has confirmed the session. Read loop
@@ -359,15 +476,12 @@ func (s *turnsStream) SendErrorMessage(err error) string {
 	return "Cartesia Ink-2 ASR send error: " + err.Error()
 }
 
-// turnsLanguage is the language every Turns transcript is stamped with: the
-// endpoint transcribes English.
-const turnsLanguage = "en"
-
 // EndSession ends a turn the session was cut off in the middle of,
 // implementing stt.SessionEnder. The transcript received so far is reported
 // as the turn's transcription, since the server never got to commit it, and the
 // turn's end is proposed. If the user carries on talking on a new session, what
-// follows is transcribed as a turn of its own.
+// follows is transcribed as a turn of its own. No event detected a language for
+// it, so it carries none.
 func (s *turnsStream) EndSession() []stt.Result {
 	if !s.inTurn {
 		return nil
@@ -375,7 +489,21 @@ func (s *turnsStream) EndSession() []stt.Result {
 	slog.Debug("cartesia turns stt connection closed mid-turn, ending the turn")
 	text := s.turnText
 	s.inTurn, s.turnText = false, ""
-	return []stt.Result{{Text: text, Final: text != "", Speech: stt.SpeechStopped, Language: turnsLanguage}}
+	return []stt.Result{{Text: text, Final: text != "", Speech: stt.SpeechStopped}}
+}
+
+// detectedLanguage is the first language in an event's strongest-first
+// detection list, or "" when there is none or it names no language jargo knows.
+func detectedLanguage(m turnsMessage) string {
+	if len(m.Languages) == 0 {
+		return ""
+	}
+	code := language.Language(m.Languages[0].Language)
+	if !slices.Contains(language.All(), code) {
+		slog.Debug("cartesia turns stt: no Language for detected language", "language", string(code))
+		return ""
+	}
+	return string(code)
 }
 
 // awaitConnected handles messages until the server confirms the session.
@@ -452,6 +580,15 @@ type turnsMessage struct {
 	// the HTTP status it reports with it.
 	ErrorCode  string `json:"error_code"`
 	StatusCode int    `json:"status_code"`
+	// Languages are the languages detected in an eager or final transcript,
+	// strongest first.
+	Languages []turnsLanguageDetection `json:"languages"`
+}
+
+// turnsLanguageDetection is one language detected in a transcript.
+type turnsLanguageDetection struct {
+	Language   string  `json:"language"`
+	Confidence float64 `json:"confidence"`
 }
 
 // serverError is the error an error message reports.
@@ -503,7 +640,7 @@ func (s *turnsStream) Recv() ([]stt.Result, error) {
 				continue
 			}
 			s.turnText = m.Transcript
-			return []stt.Result{{Text: m.Transcript, Final: false, Language: turnsLanguage}}, nil
+			return []stt.Result{{Text: m.Transcript, Final: false}}, nil
 		case turnsStart:
 			call(s.cfg.OnTurnStart, m.Transcript)
 			s.inTurn, s.turnText = true, m.Transcript
@@ -515,14 +652,15 @@ func (s *turnsStream) Recv() ([]stt.Result, error) {
 				return []stt.Result{{Speech: stt.SpeechStopped}}, nil
 			}
 			return []stt.Result{{
-				Text: m.Transcript, Final: true, EndOfTurn: true, Speech: stt.SpeechStopped, Language: turnsLanguage,
+				Text: m.Transcript, Final: true, EndOfTurn: true, Speech: stt.SpeechStopped,
+				Language: detectedLanguage(m),
 			}}, nil
 		case turnsEagerEnd:
 			// A prediction the server may retract, so it opens no boundary
 			// here. It is answered when eager end of turn is on, which the
 			// service decides, and reported to an application that wants it.
 			call(s.cfg.OnTurnEagerEnd, m.Transcript)
-			return []stt.Result{{Text: m.Transcript, EagerEndOfTurn: true, Language: turnsLanguage}}, nil
+			return []stt.Result{{Text: m.Transcript, EagerEndOfTurn: true, Language: detectedLanguage(m)}}, nil
 		case turnsResume:
 			// The eager end above, retracted.
 			if s.cfg.OnTurnResume != nil {
@@ -562,10 +700,24 @@ func (s *turnsStream) Drain() (time.Duration, error) {
 	return turnsDrainWindow, nil
 }
 
+// sendConfig replaces the session's language hints with a config message.
+func (s *turnsStream) sendConfig(hints []string) error {
+	b, err := json.Marshal(map[string]any{"type": turnsConfig, "language_hints": hints})
+	if err != nil {
+		return err
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return s.conn.Write(s.ctx, websocket.MessageText, b)
+}
+
 // Close tears the session down. Cartesia ends a turn session by closing the
 // socket; there is no finalize command, and what it was still holding was asked
 // for by Drain.
 func (s *turnsStream) Close() error {
+	if s.closed != nil {
+		s.closed(s)
+	}
 	return s.conn.Close(websocket.StatusNormalClosure, "")
 }
 

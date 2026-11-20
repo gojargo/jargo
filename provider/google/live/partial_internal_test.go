@@ -36,7 +36,10 @@ func TestPartialAssistantMessageSurvivesInterruption(t *testing.T) {
 
 	// Replay that sequence into an assistant aggregator, with the interruption
 	// the pipeline broadcasts at the barge-in, one frame after another as
-	// upstream's harness delivers them.
+	// upstream's harness delivers them, and the EndFrame it closes with. The
+	// interrupted turn closes behind whatever is queued after the interruption,
+	// and the frame that closes it is never drained here, so the session ending
+	// is what writes it.
 	convo := frames.NewLLMContext("")
 	assistant := aggregators.New(convo).Assistant()
 	sinkAfter := newCapture()
@@ -46,7 +49,7 @@ func TestPartialAssistantMessageSurvivesInterruption(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = assistant.Cleanup(ctx) })
 	replay := append([]frames.Frame{frames.NewStartFrame()}, streamed...)
-	replay = append(replay, frames.NewInterruptionFrame())
+	replay = append(replay, frames.NewInterruptionFrame(), frames.NewEndFrame())
 	for _, f := range replay {
 		if err := assistant.ProcessFrame(ctx, f, processor.Downstream); err != nil {
 			t.Fatalf("%s: %v", f.Name(), err)

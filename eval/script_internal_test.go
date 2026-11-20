@@ -383,6 +383,36 @@ turns:
 	}
 }
 
+func TestScriptMetricsExpectation(t *testing.T) {
+	s := script(t, `
+name: metrics
+turns:
+  - user: "hello"
+    expect:
+      - event: metrics
+      - event: metrics
+        metric: ttfb
+        processor: STT
+        check_from: turn_start
+`)
+	bare, filtered := s.Turns[0].Expect[0], s.Turns[0].Expect[1]
+	if bare.Metric != "" || bare.Processor != "" {
+		t.Fatalf("a bare metrics expectation filters on %q from %q", bare.Metric, bare.Processor)
+	}
+	if filtered.Metric != "ttfb" || filtered.Processor != "STT" {
+		t.Fatalf("filters = %q from %q, want ttfb from STT", filtered.Metric, filtered.Processor)
+	}
+	for _, tc := range []struct{ bad, message string }{
+		{"expect: [{event: response, metric: ttfb}]", "only applies to the 'metrics' event"},
+		{"expect: [{event: response, processor: STT}]", "only applies to the 'metrics' event"},
+		{"expect: [{event: metrics, metric: 1}]", "'metric:' must be a non-empty string"},
+		{"expect: [{event: metrics, absent: true, metric: ttfb}]", "cannot be combined"},
+	} {
+		err := scriptErr(t, "name: bad\nturns:\n  - user: \"x\"\n    "+tc.bad+"\n")
+		wantErrContains(t, err, tc.message)
+	}
+}
+
 func TestScriptLLMMarkerUnknownKindRejected(t *testing.T) {
 	err := scriptErr(t, "name: bad_marker\nturns:\n  - user: \"x\"\n    expect: [{event: llm_marker, marker: done}]\n")
 	wantErrContains(t, err, "'marker:' must be one of")

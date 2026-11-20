@@ -330,9 +330,9 @@ func (o *Observer) userInputMessages(f frames.Frame) ([]Message, bool) {
 	var d UserInputData
 	switch fr := f.(type) {
 	case *frames.TranscriptionFrame:
-		return o.transcriptionMessages(fr.Text, fr.UserID, fr.Timestamp, true, fr.Perception), true
+		return o.transcriptionMessages(fr.Text, fr.UserID, fr.Timestamp, true, fr.Perception, fr.Speaker), true
 	case *frames.InterimTranscriptionFrame:
-		return o.transcriptionMessages(fr.Text, fr.UserID, fr.Timestamp, false, fr.Perception), true
+		return o.transcriptionMessages(fr.Text, fr.UserID, fr.Timestamp, false, fr.Perception, fr.Speaker), true
 	case *frames.UserBackchannelFrame:
 		d = UserInputData{
 			Text: fr.Text, InputType: UserInputBackchannel, Timestamp: fr.Timestamp, Final: true, UserID: &fr.UserID,
@@ -357,19 +357,24 @@ func (o *Observer) userInputMessages(f frames.Frame) ([]Message, bool) {
 
 // transcriptionMessages reports a transcription, final or interim, in each of
 // the messages enabled for it. Its user-input message carries how the user said
-// it, when the transcription comes with a reading.
+// it, when the transcription comes with a reading. Its user-input and
+// stt-raw-text messages carry who said it, when the STT service's diarization
+// tells speakers apart; the deprecated user-transcription does not.
 func (o *Observer) transcriptionMessages(
 	text, userID, timestamp string, final bool, perception []expressive.PerceptionSignal,
+	speaker *frames.TranscriptionSpeaker,
 ) []Message {
 	var msgs []Message
 	if o.enabled(userInputOf) {
 		msgs = append(msgs, UserInput(UserInputData{
 			Text: text, InputType: UserInputTranscription, Timestamp: timestamp, Final: final, UserID: &userID,
-			Perception: userPerception(perception),
+			Perception: userPerception(perception), Speaker: speaker,
 		}))
 	}
 	if o.rawTextEnabled(sttRawTextOf) {
-		msgs = append(msgs, STTRawText(text, userID, timestamp, final))
+		msgs = append(msgs, STTRawText(STTRawTextData{
+			Text: text, UserID: userID, Timestamp: timestamp, Final: final, Speaker: speaker,
+		}))
 	}
 	if o.enabled(transcriptionOf) {
 		msgs = append(msgs, UserTranscription(text, userID, timestamp, final)) //nolint:staticcheck // still sent
@@ -514,7 +519,7 @@ func (o *Observer) llmTextMessages(f frames.Frame) ([]Message, bool) {
 	}
 	msgs = append(msgs, BotLLMText(fr.Text)) //nolint:staticcheck // still sent
 	if sentence, done := o.gatherTranscription(fr.Text); done {
-		msgs = append(msgs, BotTranscription(sentence))
+		msgs = append(msgs, BotTranscription(sentence)) //nolint:staticcheck // still sent
 	}
 	return msgs, true
 }
@@ -827,12 +832,12 @@ func (p *Processor) handleIncoming(ctx context.Context, f *frames.InputTransport
 		// Not an RTVI message (e.g. transport signaling); ignore.
 		return nil
 	}
-	in, err := ParseIncoming(f.Message)
+	in, err := parseClientMessage(f.Message)
 	if err != nil {
 		// The label says this was meant for us, so the client is told its
 		// message was unreadable rather than left waiting on a reply. The id is
-		// part of what could not be read, so this is the general error rather
-		// than a response to a particular request.
+		// part of what could not be read, or is missing, so this is the general
+		// error rather than a response to a particular request.
 		slog.Warn("invalid RTVI message", "err", err)
 		return p.send(ctx, Error("Invalid RTVI transport message: "+err.Error(), false))
 	}
@@ -863,8 +868,20 @@ func (p *Processor) handleMessage(ctx context.Context, in Incoming, userID strin
 		return p.handleClientMessage(ctx, in)
 	case TypeFunctionCallResult:
 		return p.handleFunctionCallResult(ctx, in)
-	case TypeRawAudio, TypeRawAudioBatch:
-		return p.handleRawAudio(ctx, in)
+	case TypeRawAudio:
+		d, err := ParseRawAudioData(in.Data)
+		if err != nil {
+			slog.Warn("invalid RTVI raw-audio", "err", err)
+			return p.send(ctx, ErrorResponse(in.ID, "Invalid message: "+err.Error()))
+		}
+		return p.handleAudioBuffer(ctx, in.ID, []string{d.Base64Audio}, d.SampleRate, d.NumChannels)
+	case TypeRawAudioBatch:
+		d, err := ParseRawAudioBatchData(in.Data)
+		if err != nil {
+			slog.Warn("invalid RTVI raw-audio-batch", "err", err)
+			return p.send(ctx, ErrorResponse(in.ID, "Invalid message: "+err.Error()))
+		}
+		return p.handleAudioBuffer(ctx, in.ID, d.Base64AudioBatch, d.SampleRate, d.NumChannels)
 	default:
 		slog.Debug("unhandled RTVI message", "type", in.Type)
 		return p.send(ctx, ErrorResponse(in.ID, "Unsupported type "+in.Type))
@@ -920,26 +937,30 @@ func (p *Processor) handleFunctionCallResult(ctx context.Context, in Incoming) e
 	return p.PushFrame(ctx, f, processor.Downstream)
 }
 
-// handleRawAudio feeds the pipeline audio the client captured itself.
+// handleAudioBuffer feeds the pipeline the chunks of the user's audio a
+// raw-audio or raw-audio-batch message with id carried, which the client
+// captured itself: 16-bit PCM, each chunk base64-encoded, in order.
 //
 // This processor sits at the top of the pipeline, so the frames go downstream to
 // the input transport, which runs them through its own processing: a client
 // doing its own capture is heard exactly as one streaming a media track is.
-func (p *Processor) handleRawAudio(ctx context.Context, in Incoming) error {
-	d, err := ParseRawAudioData(in.Data)
-	if err != nil {
-		slog.Warn("invalid RTVI raw-audio", "err", err)
-		return p.send(ctx, ErrorResponse(in.ID, "Invalid message: "+err.Error()))
-	}
-	for _, chunk := range d.Chunks() {
+//
+// Every chunk is decoded before any is pushed, so a batch holding a bad one
+// pushes none of its audio, and the client is told its audio was not received.
+func (p *Processor) handleAudioBuffer(
+	ctx context.Context, id string, chunks []string, sampleRate, numChannels int,
+) error {
+	audio := make([][]byte, 0, len(chunks))
+	for _, chunk := range chunks {
 		pcm, err := base64.StdEncoding.DecodeString(chunk)
 		if err != nil {
-			// Logged, and the rest of the batch dropped, but not answered: the
-			// client streams audio and is waiting on no reply.
-			slog.Error("error processing an RTVI audio buffer", "err", err)
-			return nil
+			slog.Warn("error processing an RTVI audio buffer", "err", err)
+			return p.send(ctx, ErrorResponse(id, "Exception processing message: "+err.Error()))
 		}
-		f := frames.NewInputAudioRawFrame(pcm, d.SampleRate, d.NumChannels)
+		audio = append(audio, pcm)
+	}
+	for _, pcm := range audio {
+		f := frames.NewInputAudioRawFrame(pcm, sampleRate, numChannels)
 		if err := p.PushFrame(ctx, f, processor.Downstream); err != nil {
 			return err
 		}
@@ -981,7 +1002,7 @@ func (p *Processor) handleClientReady(ctx context.Context, in Incoming) error {
 	d, err := ParseClientReadyData(in.Data)
 	if err != nil {
 		slog.Warn("invalid RTVI client-ready data, treating the version as unknown", "err", err)
-		d = ClientReadyData{}
+		d = ClientReadyData{About: AboutClientData{Library: unknownLibrary}}
 	}
 	slog.Debug("RTVI client-ready", "id", in.ID, "version", d.Version, "client", d.About.Library)
 

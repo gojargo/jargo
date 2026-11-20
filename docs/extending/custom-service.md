@@ -161,6 +161,12 @@ aligns `TTSTextFrame`s to the audio actually spoken, and therefore what lets an
 interrupted response be recorded truncated instead of whole. Worth doing when the
 API supports it.
 
+If it also reports where each word ends, set `End` on each `WordTiming`. A
+context's audio often arrives while the one before it is still playing, and its
+words are then timed from where the earlier context's words end. Without word
+ends, they are timed from where its last word starts, and run ahead of the
+audio.
+
 ## An STT service
 
 Streaming, for conversation:

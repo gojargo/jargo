@@ -58,6 +58,10 @@ type TTSConfig struct {
 	// JSONConfig is an optional JSON configuration string forwarded to the model;
 	// empty omits it.
 	JSONConfig string
+	// LogLevel opts in to the server's log messages, such as a warning about an
+	// unknown or deprecated JSONConfig key: the lowest level to receive. They
+	// are logged at their own level. Empty asks for none, the default.
+	LogLevel LogLevel `validate:"omitempty,oneof=debug info warning error"`
 	// Websocket configures the connection: whether and how it reconnects, and
 	// how long it waits on a peer that has stopped answering.
 	Websocket wsservice.Options
@@ -288,6 +292,9 @@ func (s *ttsSynthesizer) setupMessage(contextID string) map[string]any {
 	if s.cfg.JSONConfig != "" {
 		msg["json_config"] = s.cfg.JSONConfig
 	}
+	if s.cfg.LogLevel != "" {
+		msg[keyLogLevel] = s.cfg.LogLevel
+	}
 	return msg
 }
 
@@ -304,6 +311,8 @@ type ttsMessage struct {
 	Text        string  `json:"text"`
 	StartS      float64 `json:"start_s"`
 	Message     string  `json:"message"`
+	// Level is the level of a server log message.
+	Level string `json:"level"`
 }
 
 // ReceiveMessages reads and handles messages until the connection ends,
@@ -373,6 +382,8 @@ func (s *ttsSynthesizer) handleMessage(ctx context.Context, data []byte) error {
 			s.mu.Unlock()
 		}
 		s.base.StopAllMetrics(ctx)
+	case msgLog:
+		logServerMessage(ctx, m.Level, m.Message)
 	case msgError:
 		stopped := frames.NewTTSStoppedFrame()
 		stopped.ContextID = contextID

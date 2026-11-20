@@ -89,8 +89,17 @@ type Result struct {
 	// and only then is the transcript that follows the last one for the
 	// utterance: a result may be final without being the end of the turn. A
 	// provider that flushes without confirming leaves it unset and says what it
-	// knows through EndOfTurn instead.
+	// knows through EndOfTurn instead. The confirmation only counts for a
+	// finalize the provider recorded with StreamService.RequestFinalize. A final
+	// answer with no text confirms it all the same, which marks the next
+	// transcript, unless PushFinalized says what it confirms.
 	FromFinalize bool
+	// PushFinalized reports that a final answer with no text confirms the
+	// transcripts already pushed: the provider's own endpointing can send the
+	// last of the text before it is asked to finalize, so the answer has none.
+	// The confirmation then goes out as a TranscriptionFinalizedFrame of its
+	// own.
+	PushFinalized bool
 	// KeepEmpty reports that a final result with no text is still a transcript
 	// to push: the provider's word that the stretch of speech it closes held no
 	// words. The empty transcript is what tells the user turn that nothing more
@@ -266,6 +275,10 @@ type Stopper interface {
 // Finalize is called once the VAD reports the user stopped, and the session
 // carries on afterwards for the next utterance. A Stream that does not implement
 // it is left to the provider's own endpointing.
+//
+// A provider that confirms the finalize records the request with
+// StreamService.RequestFinalize when it sends one, which is what lets its
+// confirmation mark the transcript that closes the utterance.
 type Finalizer interface {
 	Finalize() error
 }
@@ -442,6 +455,11 @@ type StreamService struct {
 	// readCancel ends the read loop, and with it the whole connection. It
 	// outlives any one session, so a reconnect does not stop the loop.
 	readCancel context.CancelFunc
+	// readDone is closed when the read loop started with readCancel ends. A
+	// drain waits on it, bounded by its window, rather than on the wait group:
+	// a wait left behind on the group once the window passed would still be
+	// running when a reopen starts the next read loop.
+	readDone chan struct{}
 	// receiving is whether the read loop hands what it reads on. It stops as
 	// the session is closed, ahead of the read itself.
 	receiving bool
@@ -458,8 +476,8 @@ type StreamService struct {
 	// says which transcript closes the utterance, so the request is recorded and
 	// matched against the confirmation rather than read off any one result.
 	//
-	// finalizeRequested is set when the provider is told the speech ended, and
-	// stands unanswered for a provider that does not confirm.
+	// finalizeRequested is set by a provider that confirms its finalizes, when
+	// it asks for one (see RequestFinalize).
 	finalizeRequested bool
 	// finalizePending is set once the provider confirms, and marks the next
 	// transcript as the last one for the utterance.
@@ -592,12 +610,10 @@ func NewStream(name string, conn Connector, sampleRate int) *StreamService {
 			VADEnabled: true,
 		}
 	})
-	s.ttfb.onReport = func(d time.Duration, end time.Time) {
-		s.tracer.recordTTFB(d)
-		// A wait that ended without the transcript it was for leaves a segment
-		// nothing will close, so it is closed here at the moment measured to.
-		s.tracer.abandon(end)
-	}
+	s.ttfb.onReport = s.tracer.recordTTFB
+	// A wait that ended without the transcript it was for leaves a segment
+	// nothing will close, so it is closed here at the moment measured to.
+	s.ttfb.onGiveUp = s.tracer.abandon
 	return s
 }
 
@@ -746,23 +762,32 @@ func (s *StreamService) Cleanup(ctx context.Context) error {
 // PushFrame pushes a frame on, timing the transcripts on their way out. A
 // transcript answering a finalize the provider confirmed is marked as the one
 // that closes the utterance, and the transcript that closes it ends the wait the
-// VAD started when it reported the speech over.
+// VAD started when it reported the speech over. A TranscriptionFinalizedFrame
+// ends the wait the same way a finalized transcript does, and closes the span
+// holding the text it confirms.
 func (s *StreamService) PushFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
-	tf, isTranscript := f.(*frames.TranscriptionFrame)
-	if isTranscript {
+	switch fr := f.(type) {
+	case *frames.TranscriptionFrame:
 		if s.takeFinalizePending() {
-			tf.Finalized = true
+			fr.Finalized = true
 		}
 		// Opened before the push so that the metrics frame the timing raises,
 		// which is pushed from inside this call, finds its span already open.
 		s.tracer.open()
-		s.ttfb.transcript(ctx, tf.Finalized)
+		s.ttfb.transcript(ctx, fr.Finalized)
+		err := s.Base.PushFrame(ctx, f, dir)
+		s.tracer.record(fr)
+		return err
+	case *frames.TranscriptionFinalizedFrame:
+		// The service has confirmed nothing more is coming, so the wait for the
+		// final transcript ends here.
+		s.ttfb.reportNow(ctx)
+		err := s.Base.PushFrame(ctx, f, dir)
+		s.tracer.finalized()
+		return err
+	default:
+		return s.Base.PushFrame(ctx, f, dir)
 	}
-	err := s.Base.PushFrame(ctx, f, dir)
-	if isTranscript {
-		s.tracer.record(tf)
-	}
-	return err
 }
 
 // ClassifyError asks the provider what one of its own failures means, so a
@@ -801,9 +826,11 @@ func (s *StreamService) ServiceMetadataFrame() frames.ServiceMetadata {
 // session is, with the same backoff and the same limit on attempts.
 func (s *StreamService) connect(ctx context.Context) {
 	readCtx, cancel := context.WithCancel(ctx)
+	readDone := make(chan struct{})
 	s.ws.Connect()
 	s.mu.Lock()
 	s.readCancel = cancel
+	s.readDone = readDone
 	s.receiving = true
 	s.mu.Unlock()
 	if err := s.ConnectWebsocket(readCtx); err != nil {
@@ -814,7 +841,10 @@ func (s *StreamService) connect(ctx context.Context) {
 		s.PushError(readCtx, "stt: unable to connect", err, false, opts...)
 	}
 	s.startKeepalive(readCtx)
-	s.wg.Go(func() { s.ws.ReceiveTaskHandler(readCtx, s.reportConnectionError) })
+	s.wg.Go(func() {
+		defer close(readDone)
+		s.ws.ReceiveTaskHandler(readCtx, s.reportConnectionError)
+	})
 }
 
 // disconnect closes the session. stopping says the pipeline is ending
@@ -864,10 +894,13 @@ func (s *StreamService) disconnect(ctx context.Context, stopping bool) {
 // drainSession tells a provider that answers the end of a session that it is
 // ending, and gives the read loop the window the provider asked for to deliver
 // what comes back. It returns as soon as the loop ends on its own, which is what
-// the provider closing the socket looks like from here.
+// the provider closing the socket looks like from here. Nothing it starts
+// outlives the window: the read loop is ended and waited for by disconnect,
+// before a reopen starts another.
 func (s *StreamService) drainSession() {
 	s.mu.Lock()
 	stream := s.stream
+	readDone := s.readDone
 	s.mu.Unlock()
 	d, ok := stream.(Drainer)
 	if !ok {
@@ -882,14 +915,11 @@ func (s *StreamService) drainSession() {
 	if window <= 0 {
 		return
 	}
-	done := make(chan struct{})
-	go func() {
-		s.wg.Wait()
-		close(done)
-	}()
+	timer := time.NewTimer(window)
+	defer timer.Stop()
 	select {
-	case <-done:
-	case <-time.After(window):
+	case <-readDone:
+	case <-timer.C:
 		slog.Debug("the transcription session did not finish within its drain window",
 			"service", s.Name(), "window", window)
 	}
@@ -1338,19 +1368,28 @@ func (s *StreamService) finalize() {
 	if !ok {
 		return
 	}
-	// Recorded before the request goes out, so a provider that answers straight
-	// away has something to be matched against. A provider that never confirms
-	// leaves it standing, and it is cleared at the next utterance.
-	s.mu.Lock()
-	s.finalizeRequested = true
-	s.mu.Unlock()
 	if err := fin.Finalize(); err != nil {
 		slog.Debug("stt finalize failed", "service", s.Name(), "err", err)
 	}
 }
 
+// RequestFinalize records that the provider has been asked to finalize the
+// utterance and will confirm it, so the transcript answering it is marked as
+// the one that closes the utterance. A provider that confirms its finalizes
+// calls it when it sends one, from Finalize or on a signal of its own, and
+// then reports the confirmation with Result.FromFinalize. A provider without
+// confirmation does not call it, and is left to the TTFB timeout. A request no
+// confirmation answers is cleared when the user next starts speaking.
+func (s *StreamService) RequestFinalize() {
+	s.mu.Lock()
+	s.finalizeRequested = true
+	s.mu.Unlock()
+}
+
 // confirmFinalize takes the provider's word that it flushed what it was asked
-// to, which marks the next transcript as the last one for the utterance. A
+// to, which marks the next transcript as the last one for the utterance. When
+// the confirmation comes with no text to push and says it confirms the
+// transcripts already pushed, it is followed by pushTranscriptionFinalized. A
 // confirmation for a finalize that was never asked for says nothing and is
 // ignored.
 func (s *StreamService) confirmFinalize() {
@@ -1370,6 +1409,27 @@ func (s *StreamService) takeFinalizePending() bool {
 	pending := s.finalizePending
 	s.finalizePending = false
 	return pending
+}
+
+// pushTranscriptionFinalized pushes a confirmed finalization that has no
+// transcript to carry it.
+//
+// A provider's own endpointing can deliver the last of the text before the
+// service asks it to finalize, so its confirmation arrives empty. It is called
+// after confirmFinalize in that case, for a result the provider marks with
+// PushFinalized: the transcripts already pushed are
+// confirmed with a TranscriptionFinalizedFrame, which the pipeline treats as it
+// does a finalized transcript.
+//
+// It only has effect while a confirmed finalization is waiting for a
+// transcript, so a confirmation that arrives after the user started speaking
+// again finalizes nothing.
+func (s *StreamService) pushTranscriptionFinalized(ctx context.Context) {
+	if !s.takeFinalizePending() {
+		return
+	}
+	f := frames.NewTranscriptionFinalizedFrame(s.transcriptUserID(), frames.NowTimestamp())
+	_ = s.PushFrame(ctx, f, processor.Downstream)
 }
 
 // startKeepalive replaces the running keepalive, if any, with one for the
@@ -1636,10 +1696,12 @@ func (s *StreamService) emitTranscript(ctx context.Context, r Result) {
 		s.confirmFinalize()
 	}
 	if r.Text == "" && (!r.Final || !r.KeepEmpty) {
-		if answered {
-			// The transcript went out ahead of the confirmation, so the wait
-			// ended with it. Reported now rather than left to the deadline.
-			s.ttfb.reportNow(ctx)
+		if r.PushFinalized {
+			// The provider's own endpointing already sent the transcript as a
+			// final result, before it was asked to finalize, so the confirmation
+			// has no text to mark as finalized. It is pushed on its own: that
+			// finalizes those transcripts for the pipeline and reports the TTFB.
+			s.pushTranscriptionFinalized(ctx)
 		}
 		return
 	}

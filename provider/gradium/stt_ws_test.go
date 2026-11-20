@@ -13,6 +13,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/gojargo/jargo/language"
+	"github.com/gojargo/jargo/service/stt"
 )
 
 // Tests for the transcription session. Gradium acknowledges a setup handshake
@@ -102,6 +103,19 @@ func (c *sttCapture) await(t *testing.T) map[string]any {
 	case <-time.After(2 * time.Second):
 		t.Fatal("no message arrived at the endpoint")
 		return nil
+	}
+}
+
+// finalize asks the session to finalize, as the VAD reporting the user stopped
+// does.
+func finalize(t *testing.T, s stt.Stream) {
+	t.Helper()
+	f, ok := s.(stt.Finalizer)
+	if !ok {
+		t.Fatalf("%T does not finalize", s)
+	}
+	if err := f.Finalize(); err != nil {
+		t.Fatalf("Finalize: %v", err)
 	}
 }
 
@@ -277,12 +291,14 @@ func TestSTTAudioAtAnUnsupportedRateIsResampled(t *testing.T) {
 }
 
 // TestSTTRecvAccumulatesUntilTheFlush checks text fragments build the running
-// transcript and a flush settles it, ending the turn.
+// transcript and the acknowledgement of the flush the VAD stop asked for
+// settles it, confirming the finalize.
 func TestSTTRecvAccumulatesUntilTheFlush(t *testing.T) {
 	endpoint, _ := sttServer(t, nil, []map[string]any{
 		{msgType: msgText, "text": "hello"},
 		{msgType: msgText, "text": "there"},
-		{msgType: msgFlushed},
+		// The server returns the id as a number.
+		{msgType: msgFlushed, "flush_id": 1},
 	})
 
 	s, err := sttConn(endpoint).Connect(context.Background(), 16000)
@@ -290,6 +306,7 @@ func TestSTTRecvAccumulatesUntilTheFlush(t *testing.T) {
 		t.Fatalf("Connect: %v", err)
 	}
 	defer func() { _ = s.Close() }()
+	finalize(t, s)
 
 	first, err := s.Recv()
 	if err != nil {
@@ -311,8 +328,8 @@ func TestSTTRecvAccumulatesUntilTheFlush(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Recv: %v", err)
 	}
-	if final[0].Text != "hello there" || !final[0].Final || !final[0].EndOfTurn {
-		t.Errorf("result = %+v, want the settled utterance ending the turn", final[0])
+	if final[0].Text != "hello there" || !final[0].Final || !final[0].FromFinalize {
+		t.Errorf("result = %+v, want the settled utterance confirming the finalize", final[0])
 	}
 }
 
@@ -349,7 +366,7 @@ func TestSTTRecvGathersTrailingWords(t *testing.T) {
 // so text arriving just behind it settles as the utterance it closed.
 func TestSTTRecvSettlesTrailingTextAfterAFlushWithNothingHeld(t *testing.T) {
 	endpoint, _ := sttServer(t, nil, []map[string]any{
-		{msgType: msgFlushed},
+		{msgType: msgFlushed, "flush_id": 1},
 		{msgType: msgText, "text": "after"},
 	})
 
@@ -358,12 +375,13 @@ func TestSTTRecvSettlesTrailingTextAfterAFlushWithNothingHeld(t *testing.T) {
 		t.Fatalf("Connect: %v", err)
 	}
 	defer func() { _ = s.Close() }()
+	finalize(t, s)
 
 	got, err := s.Recv()
 	if err != nil {
 		t.Fatalf("Recv: %v", err)
 	}
-	if got[0].Text != "after" || !got[0].Final || !got[0].EndOfTurn {
+	if got[0].Text != "after" || !got[0].Final || !got[0].FromFinalize {
 		t.Errorf("result = %+v, want the trailing text settled by the flush", got[0])
 	}
 }

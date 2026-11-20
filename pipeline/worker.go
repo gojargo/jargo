@@ -277,6 +277,13 @@ const (
 	// CancelFrame. It fires for a CancelFrame even when the frame never arrived
 	// and the wait timed out, so a caller always hears the run end.
 	EventPipelineFinished = "on_pipeline_finished"
+	// EventPipelineFlushed fires when a flush has made its whole trip through
+	// this worker's pipeline, so every frame queued ahead of it has been
+	// processed, carrying the flush's last probe. Its FlushID tells flushes
+	// apart; start one with FlushWithProbe to know it beforehand. It fires for a
+	// PipelineFlushFrame queued directly too, and, for a probe that crossed in
+	// from another worker, on the worker that answered it.
+	EventPipelineFlushed = "on_pipeline_flushed"
 	// EventPipelineTimeout fires when a frame the worker was waiting on never
 	// reached the end of the pipeline: the StartFrame within StartTimeout, or a
 	// CancelFrame within CancelTimeout. Handlers receive the worker and that
@@ -687,6 +694,7 @@ func (t *Worker) registerEvents() {
 	t.Register(EventIdleTimeout, false)
 	t.Register(EventPipelineStarted, false)
 	t.Register(EventPipelineFinished, false)
+	t.Register(EventPipelineFlushed, false)
 	t.Register(EventPipelineError, false)
 	t.Register(EventPipelineTimeout, false)
 	t.Register(EventSetupTimeout, false)
@@ -786,7 +794,17 @@ var ErrFlushNoProgress = errors.New("pipeline flush gave up with nothing happeni
 // answering the probe once it has crossed into another worker. A pipeline still
 // working keeps the wait alive; one that is stuck, or that nobody will answer,
 // gives up after that much quiet.
+//
+// The pipeline raises EventPipelineFlushed as the flush settles.
 func (t *Worker) Flush(ctx context.Context) error {
+	return t.FlushWithProbe(ctx, nil)
+}
+
+// FlushWithProbe is Flush pushing probe, so the caller knows its FlushID before
+// the flush starts, to match it in EventPipelineFlushed say. Its Done and
+// Origin are set here, because the flush waits on Done and other workers report
+// progress to Origin. A nil probe is a new one.
+func (t *Worker) FlushWithProbe(ctx context.Context, probe *frames.PipelineFlushFrame) error {
 	// Nothing goes into the pipeline before it is running, and a probe handed to
 	// a processor that has yet to see its StartFrame would be dropped, leaving
 	// the caller waiting for nothing.
@@ -796,7 +814,10 @@ func (t *Worker) Flush(ctx context.Context) error {
 		return ctx.Err()
 	}
 
-	probe := frames.NewPipelineFlushFrame()
+	if probe == nil {
+		probe = frames.NewPipelineFlushFrame()
+	}
+	probe.ResetDone()
 	probe.Origin = t.Name()
 
 	t.flushMu.Lock()
@@ -808,14 +829,15 @@ func (t *Worker) Flush(ctx context.Context) error {
 		t.flushMu.Unlock()
 	}()
 
-	slog.DebugContext(ctx, "pushing flush probe downstream", "worker", t.Name())
+	slog.DebugContext(ctx, "pushing the flush probe downstream", "worker", t.Name(), "probe", probe)
+	done := probe.Done
 	t.QueueFrame(probe)
 
 	for {
 		atSink, reports := t.framesAtSink.Load(), t.flushReports(probe.FlushID)
 		timer := time.NewTimer(FlushNoProgressTimeout)
 		select {
-		case <-probe.Done:
+		case <-done:
 			timer.Stop()
 			return nil
 		case <-ctx.Done():
@@ -878,18 +900,19 @@ func (t *Worker) advanceFlushProbe(
 	switch {
 	case !atSink:
 		slog.DebugContext(ctx, "flush probe reached the source, sending it down again",
-			"worker", t.Name())
+			"worker", t.Name(), "probe", probe)
 		return t.source.PushFrame(ctx, probe.NextLeg(true), processor.Downstream)
 	case !probe.Returning:
 		slog.DebugContext(ctx, "flush probe reached the sink, bouncing it upstream",
-			"worker", t.Name())
+			"worker", t.Name(), "probe", probe)
 		return t.sink.PushFrame(ctx, probe.NextLeg(false), processor.Upstream)
 	default:
 		slog.DebugContext(ctx, "flush probe reached the sink again, the pipeline has drained",
-			"worker", t.Name())
+			"worker", t.Name(), "probe", probe)
 		t.flushMu.Lock()
 		delete(t.foreignProbes, probe.FlushID)
 		t.flushMu.Unlock()
+		t.Call(ctx, EventPipelineFlushed, t, probe)
 		probe.CloseDone()
 		return nil
 	}

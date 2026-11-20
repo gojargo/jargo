@@ -575,11 +575,12 @@ type wsMessage struct {
 }
 
 // wsWordTimings is the payload of a Cartesia "timestamps" message: parallel
-// arrays of spoken words and their start times, in seconds from the start of the
-// synthesis.
+// arrays of spoken words, their start times and, when reported, their end
+// times, in seconds from the start of the synthesis.
 type wsWordTimings struct {
 	Words []string  `json:"words"`
 	Start []float64 `json:"start"`
+	End   []float64 `json:"end"`
 }
 
 // Compile-time checks that the synthesizer answers to everything the base asks
@@ -777,9 +778,9 @@ func alnumAt(text string, i int) bool {
 func isAlnum(r rune) bool { return unicode.IsLetter(r) || unicode.IsNumber(r) }
 
 // normalizeWordTimings turns one timestamps message into the tokens to report:
-// each entry keeps its own start, with Cartesia's markup taken off and an
-// entry left empty by that dropped, so one entry in is at most one token out,
-// whatever the language.
+// each entry keeps its own start and end, with Cartesia's markup taken off and
+// an entry left empty by that dropped, so one entry in is at most one token
+// out, whatever the language.
 //
 // Cartesia reports Chinese and Japanese one character at a time, with each
 // punctuation mark as a token of its own. For those the base is asked to merge
@@ -802,7 +803,11 @@ func normalizeWordTimings(
 		if i < len(wt.Start) {
 			start = wt.Start[i]
 		}
-		batch = append(batch, uctx.WordTiming{Word: cleaned, Offset: start})
+		var end float64
+		if i < len(wt.End) {
+			end = wt.End[i]
+		}
+		batch = append(batch, uctx.WordTiming{Word: cleaned, Offset: start, End: end})
 	}
 	return batch, opts
 }

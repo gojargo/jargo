@@ -7,9 +7,15 @@ import (
 
 // WordTiming is a single word-timestamp event from a synthesizer: the spoken
 // token and its start offset in seconds from the beginning of the synthesis.
+//
+// End is where the word ends, in seconds from the same point, for a
+// synthesizer that reports it; zero when it does not. Word ends let the next
+// context's words start where this context's words end, rather than where its
+// last word starts.
 type WordTiming struct {
 	Word   string
 	Offset float64
+	End    float64
 }
 
 // MergePunctTokens merges punctuation- and space-only tokens into the preceding
@@ -21,7 +27,8 @@ type WordTiming struct {
 // A token is punct/space-only when it has no alphanumeric character once its
 // complete tags are stripped; a lone '<' is not a tag, so "<3" is a word. Such
 // a token is appended to the preceding word's text and its offset discarded
-// (the preceding word's offset is kept). Leading punct/space
+// (the preceding word's offset is kept); when tokens carry an end, the merged
+// word ends where the last token merged into it does. Leading punct/space
 // tokens with no preceding word are dropped. Every returned token is trimmed of
 // leading and trailing whitespace.
 func MergePunctTokens(words []WordTiming) []WordTiming {
@@ -33,6 +40,9 @@ func MergePunctTokens(words []WordTiming) []WordTiming {
 		}
 		if n := len(merged); n > 0 {
 			merged[n-1].Word += wt.Word
+			if wt.End != 0 {
+				merged[n-1].End = wt.End
+			}
 		}
 		// A leading punct/space token with no preceding word is dropped.
 	}

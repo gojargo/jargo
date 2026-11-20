@@ -17,6 +17,8 @@ import (
 //   - speech the VAD reports anchors the next span where the speech began;
 //   - a transcript opens the span before it is pushed and is recorded on it
 //     after, and a finalized one closes it;
+//   - a TranscriptionFinalizedFrame, a finalization confirmed after its text,
+//     closes it too;
 //   - a time to first byte the service reports while a span is open is recorded
 //     on it;
 //   - the end of the user's turn closes a span no finalized transcript closed,
@@ -46,6 +48,8 @@ func TraceTranscripts(p *processor.Base, baseline func() tracing.STTAttributes) 
 			}
 		case *frames.TranscriptionFrame:
 			t.record(f)
+		case *frames.TranscriptionFinalizedFrame:
+			t.finalized()
 		}
 	})
 }

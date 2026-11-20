@@ -2,6 +2,7 @@ package context_test
 
 import (
 	"errors"
+	"math"
 	"testing"
 
 	uctx "github.com/gojargo/jargo/utils/context"
@@ -68,6 +69,48 @@ func TestCharAccumulatorWordAtZero(t *testing.T) {
 	if wt.Word != "hi" || wt.Offset != 0.0 {
 		t.Errorf("Flush() = %+v, want hi at offset 0", wt)
 	}
+}
+
+// TestCharAccumulatorWordEndsRunToTheEndOfTheFollowingSpace checks a word ends
+// where the space after it ends, even when it spans two batches, and that no
+// end is reported unless asked for.
+func TestCharAccumulatorWordEndsRunToTheEndOfTheFollowingSpace(t *testing.T) {
+	// batch times each character of text 0.1s after the last from offset, each
+	// lasting 0.1s.
+	batch := func(text string, offset float64) (chars []string, starts, durations []float64) {
+		for i, r := range []rune(text) {
+			chars = append(chars, string(r))
+			starts = append(starts, offset+float64(i)*0.1)
+			durations = append(durations, 0.1)
+		}
+		return chars, starts, durations
+	}
+	near := func(a, b float64) bool { return math.Abs(a-b) < 1e-9 }
+
+	acc := uctx.CharAccumulator{WordEnds: true}
+	first, err := acc.AddWithDurations(batch("Hi the", 0))
+	if err != nil {
+		t.Fatalf("first AddWithDurations: %v", err)
+	}
+	if len(first) != 1 || first[0].Word != "Hi" || first[0].Offset != 0 || !near(first[0].End, 0.3) {
+		t.Fatalf("first batch = %+v, want Hi from 0 to 0.3", first)
+	}
+
+	// "re " starts 0.6s in; its space starts 0.2s later and lasts 0.1s.
+	second, err := acc.AddWithDurations(batch("re ", 0.6))
+	if err != nil {
+		t.Fatalf("second AddWithDurations: %v", err)
+	}
+	if len(second) != 1 || second[0].Word != "there" || !near(second[0].Offset, 0.3) || !near(second[0].End, 0.9) {
+		t.Fatalf("second batch = %+v, want there from 0.3 to 0.9", second)
+	}
+
+	var plain uctx.CharAccumulator
+	got, err := plain.AddWithDurations(batch("Hi ", 0))
+	if err != nil {
+		t.Fatalf("AddWithDurations: %v", err)
+	}
+	assertWords(t, got, []uctx.WordTiming{{Word: "Hi", Offset: 0}})
 }
 
 // TestCharAccumulatorResetDiscardsPartial checks Reset drops a partial word, so
