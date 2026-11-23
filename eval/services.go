@@ -121,6 +121,7 @@ var registry = struct {
 	factories: map[string]Factory{
 		typesafeClassifierFactory: TypesafeClassifier,
 		googleClassifierFactory:   GoogleClassifier,
+		zoomClassifierFactory:     ZoomClassifier,
 	},
 	stt: map[string]STTServiceBuilder{sttMoonshine: moonshineService, sttWhisper: nil},
 	tts: map[string]TTSServiceBuilder{ttsKokoro: kokoroService},
@@ -146,8 +147,9 @@ var (
 // RegisterFactory registers a factory under name, the dotted name a block's
 // `factory:` gives, replacing any registered before. The names the release
 // suite uses come registered, so its scenarios load unchanged:
-// "evals.judges.typesafe_classifier" is TypesafeClassifier and
-// "evals.judges.google_classifier" is GoogleClassifier.
+// "evals.judges.typesafe_classifier" is TypesafeClassifier,
+// "evals.judges.google_classifier" is GoogleClassifier and
+// "evals.judges.zoom_classifier" is ZoomClassifier.
 func RegisterFactory(name string, f Factory) {
 	registry.Lock()
 	defer registry.Unlock()
