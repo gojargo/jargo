@@ -83,7 +83,7 @@ worth knowing:
 - `transport/`: Pion WebRTC, plus WebSocket/telephony and LiveKit.
 - `service/` + `provider/`: STT/LLM/TTS/S2S interfaces and their providers.
 - `classifier/`: typed yes/no, choice and score questions about a state,
-  answered through an LLM service, Jev or Google's Decisions API.
+  answered through an LLM service, Jev, or Google's or Zoom's Decisions API.
 - `audio/`: Opus, resampling, mixing, VAD and Smart Turn analyzers.
 - `processor/turns`, `processor/aggregators`, `processor/rtvi`: turn-taking,
   conversation context, RTVI.
