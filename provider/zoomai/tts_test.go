@@ -439,22 +439,3 @@ func TestInterruptionClosesTheRequest(t *testing.T) {
 		t.Fatal("the request was still open after the interruption")
 	}
 }
-
-// A plaintext endpoint on another host is warned about; one on this machine is
-// not.
-func TestCheckURLWarnsAboutAPlaintextRemoteEndpoint(t *testing.T) {
-	for endpoint, wantWarning := range map[string]bool{
-		"https://api.zoom.us/v2/aiservices/tts/synthesize": false,
-		"http://localhost:8080/tts":                        false,
-		"http://127.0.0.1:8080/tts":                        false,
-		"http://tts.example.com/tts":                       true,
-	} {
-		logs := captureWarnings(t)
-		if got := checkURL(endpoint, "Zoom TTS", "text"); got != endpoint {
-			t.Errorf("checkURL(%q) = %q, want the URL back", endpoint, got)
-		}
-		if warned := strings.Contains(logs(), "not encrypted"); warned != wantWarning {
-			t.Errorf("checkURL(%q) warned = %t, want %t", endpoint, warned, wantWarning)
-		}
-	}
-}

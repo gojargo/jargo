@@ -14,6 +14,7 @@ import (
 
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/validate"
+	"github.com/gojargo/jargo/internal/zoomaiutil"
 	"github.com/gojargo/jargo/service/settings"
 	"github.com/gojargo/jargo/service/tts"
 	errs "github.com/gojargo/jargo/utils/errors"
@@ -98,7 +99,7 @@ func NewHTTPTTS(cfg HTTPTTSConfig) *tts.Base {
 
 // newHTTPTTS builds the service and returns its synthesizer alongside it.
 func newHTTPTTS(cfg HTTPTTSConfig) (*tts.Base, *httpSynthesizer) {
-	cfg.URL = checkURL(cmp.Or(cfg.URL, defaultTTSURL), "Zoom TTS", "text")
+	cfg.URL = zoomaiutil.CheckURL(cmp.Or(cfg.URL, defaultTTSURL), "Zoom TTS", "text")
 	if cfg.SampleRate == 0 {
 		cfg.SampleRate = defaultSampleRate
 	}
@@ -183,7 +184,7 @@ func (s *httpSynthesizer) RunTTS(ctx context.Context, text, _ string, yield func
 // synthesize sends one request and streams its audio. What fails is yielded as
 // an error naming the request's tracking ID, and ends this request alone.
 func (s *httpSynthesizer) synthesize(ctx context.Context, text string, yield func(f frames.Frame) error) error {
-	trackingID := newTrackingID()
+	trackingID := zoomaiutil.NewTrackingID()
 	fail := func(message string, cause error, category errs.Category) error {
 		if ctx.Err() != nil {
 			// An interruption closed the request, which is how Zoom TTS is told
@@ -212,7 +213,7 @@ func (s *httpSynthesizer) synthesize(ctx context.Context, text string, yield fun
 	if err != nil {
 		return requestFailed(err)
 	}
-	setRequestHeaders(req.Header, s.cfg.APIKey, trackingID)
+	zoomaiutil.SetRequestHeaders(req.Header, s.cfg.APIKey, trackingID)
 	req.Header.Set("Content-Type", "application/json")
 
 	// Leaving this function mid-stream, as an interruption or a failed stream
