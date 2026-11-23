@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -461,6 +462,103 @@ func TestTTSLLMTurnFlushesEachSentenceIntoOneContext(t *testing.T) {
 	}
 	if d := time.Duration(times[2] - times[0]); d != 2*chunkMs*time.Millisecond {
 		t.Errorf("the second sentence starts %v after the first, want %v", d, 2*chunkMs*time.Millisecond)
+	}
+}
+
+// Filler speech does not steal an LLM turn's unflushed request.
+func TestTTSTokenSpeakFramePreservesUnflushedLLMRequest(t *testing.T) {
+	for _, protected := range []bool{false, true} {
+		for _, fillers := range []int{1, 2} {
+			t.Run(fmt.Sprintf("protected=%t/fillers=%d", protected, fillers), func(t *testing.T) {
+				endpoint, got := fakeTTSServer(t, ttsServerOptions{})
+				svc, _ := testTTS(endpoint, TTSConfig{TextAggregation: frames.TextTypeToken})
+				var mu sync.Mutex
+				var requests []tts.TTSRequest
+				events.On(svc.Events(), tts.EventTTSRequest,
+					func(_ context.Context, req tts.TTSRequest) {
+						mu.Lock()
+						requests = append(requests, req)
+						mu.Unlock()
+					})
+
+				steps := []step{responseStart(), llmText("Before ")}
+				wantGroups := []string{"Before "}
+				for number := range fillers {
+					if number > 0 {
+						steps = append(steps, llmText("Middle "))
+						wantGroups = append(wantGroups, "Middle ")
+					}
+					speech := frames.NewTTSSpeakFrame(fmt.Sprintf("Filler %d.", number))
+					speech.AppendToContext = false
+					speech.SetInterruptible(!protected)
+					steps = append(steps, queue(speech))
+					wantGroups = append(wantGroups, speech.Text)
+				}
+				steps = append(steps, llmText("after."), responseEnd(), waitMs(600), botStopped())
+				wantGroups = append(wantGroups, "after.")
+				down, up := runTest(t, svc, steps...)
+
+				var groups []string
+				var buffer strings.Builder
+				got.mu.Lock()
+				for _, msg := range got.messages {
+					switch msg["type"] {
+					case ttsMsgGenerate:
+						text, _ := msg["text"].(string)
+						buffer.WriteString(text)
+					case ttsMsgFlush:
+						groups = append(groups, buffer.String())
+						buffer.Reset()
+					}
+				}
+				got.mu.Unlock()
+				if !slices.Equal(groups, wantGroups) {
+					t.Errorf("flushed groups = %q, want %q", groups, wantGroups)
+				}
+
+				mu.Lock()
+				defer mu.Unlock()
+				if len(requests) == 0 {
+					t.Fatal("no TTS request was made")
+				}
+				llmID := requests[0].ContextID
+				byContext := map[string]int{}
+				for _, f := range down {
+					audio, ok := f.(*frames.TTSAudioRawFrame)
+					if !ok {
+						continue
+					}
+					byContext[audio.ContextID] += len(audio.Audio)
+					wantInterruptible := true
+					for _, req := range requests {
+						if req.ContextID == audio.ContextID && strings.HasPrefix(req.Text, "Filler") {
+							wantInterruptible = !protected
+						}
+					}
+					if frames.Interruptible(audio) != wantInterruptible {
+						t.Errorf("audio of context %s interruptible = %t, want %t",
+							audio.ContextID, frames.Interruptible(audio), wantInterruptible)
+					}
+				}
+				if want := len(audioChunk()) * 2 * (fillers + 1); byContext[llmID] != want {
+					t.Errorf("the LLM turn's audio = %d bytes, want %d", byContext[llmID], want)
+				}
+				for _, req := range requests {
+					if !strings.HasPrefix(req.Text, "Filler") {
+						continue
+					}
+					if want := len(audioChunk()) * 2; byContext[req.ContextID] != want {
+						t.Errorf("%q audio = %d bytes, want %d", req.Text, byContext[req.ContextID], want)
+					}
+				}
+				if errs := errorTexts(up); len(errs) > 0 {
+					t.Errorf("errors = %q, want none", errs)
+				}
+				if n := got.connectionCount(); n != 1 {
+					t.Errorf("connections = %d, want 1", n)
+				}
+			})
+		}
 	}
 }
 

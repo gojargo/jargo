@@ -155,6 +155,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - **`ExpandPhoneNumbers` no longer spaces out the digits of long decimals and
   of currency amounts** such as `$2500000000`, which the voice formatter then
   read as "two dollars 5 0 0 0 0 0 0 0 0".
+- **AssemblyAI TTS streaming tokens no longer attributes an LLM turn's
+  unflushed text and audio to a `TTSSpeakFrame` spoken mid-turn.** The pending
+  text is flushed before another context's request is written.
 
 ## [0.7.0] - 2026-11-20
 

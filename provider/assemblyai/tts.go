@@ -890,6 +890,19 @@ func (s *synthesizer) sendText(ctx context.Context, text, contextID string) erro
 
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
+	s.mu.Lock()
+	owner := s.requests[s.nextFlushID]
+	takesOver := owner != "" && owner != contextID
+	if takesOver {
+		s.nextFlushID++
+	}
+	s.mu.Unlock()
+	if takesOver {
+		// A separate utterance must not take over unflushed token text.
+		if err := s.sendLocked(ctx, map[string]any{fieldType: ttsMsgFlush}); err != nil {
+			return err
+		}
+	}
 	// Recorded before sending, so audio that arrives while the messages are
 	// still being sent is attributed to this context.
 	s.mu.Lock()
