@@ -14,13 +14,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/coder/websocket"
 	"github.com/gojargo/jargo/internal/validate"
+	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/service/settings"
 	"github.com/gojargo/jargo/service/stt"
 	"github.com/gojargo/jargo/service/wsservice"
@@ -48,6 +51,13 @@ const (
 	sttEventError     = "error"
 )
 
+// sttModelsWithoutLanguage are the Voxtral realtime models that do not accept a
+// session-level language hint. voxtral-mini-transcribe-realtime-3 and later
+// document language support.
+//
+//nolint:gochecknoglobals // immutable lookup table
+var sttModelsWithoutLanguage = map[string]bool{"voxtral-mini-transcribe-realtime-2602": true}
+
 // errSTTServer wraps an error reported by the Mistral realtime STT API.
 //
 //nolint:gochecknoglobals // sentinel error
@@ -61,6 +71,10 @@ type STTConfig struct {
 	URL string
 	// Model is the transcription model; empty uses a current default.
 	Model string
+	// Language is a language hint for the transcription; the zero value sends
+	// none. It needs a model that takes language hints, such as
+	// voxtral-mini-transcribe-realtime-3.
+	Language language.Language
 	// SampleRate is the input audio sample rate; 0 uses the transport's rate.
 	SampleRate int
 	// TargetStreamingDelayMs trades latency for accuracy: higher values may
@@ -108,6 +122,9 @@ type STTSettings struct {
 func newSTTConnector(cfg STTConfig) *sttConnector {
 	live := &STTSettings{}
 	live.Model = settings.Set(cfg.Model)
+	if cfg.Language != "" {
+		live.Language = settings.Set(cfg.Language.Code())
+	}
 	return &sttConnector{cfg: cfg, live: live}
 }
 
@@ -161,6 +178,17 @@ func (c *sttConnector) sessionUpdate(sampleRate int) []byte {
 	}
 	if c.cfg.TargetStreamingDelayMs > 0 {
 		session["target_streaming_delay_ms"] = c.cfg.TargetStreamingDelayMs
+	}
+	if lang := c.live.Language.Or(""); lang != "" {
+		model := c.live.Model.Or(c.cfg.Model)
+		if sttModelsWithoutLanguage[model] {
+			slog.Warn("mistral stt: the model does not support a language hint; ignoring the language setting",
+				"model", model)
+		} else {
+			// The hint is the base ISO 639-1 code.
+			base, _, _ := strings.Cut(lang, "-")
+			session["language"] = strings.ToLower(base)
+		}
 	}
 	b, _ := json.Marshal(map[string]any{ //nolint:errchkjson // map of known-serializable values
 		msgType:   sttMsgSessionUpdate,

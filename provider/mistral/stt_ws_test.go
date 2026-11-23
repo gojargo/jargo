@@ -1,10 +1,12 @@
 package mistral
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -13,6 +15,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/service/settings"
 	"github.com/gojargo/jargo/service/stt"
 )
@@ -479,5 +482,79 @@ func TestSTTConnectsWithTheUpdatedModel(t *testing.T) {
 	}
 	if m := c.Metadata().Model; m != "voxtral-other" {
 		t.Errorf("Metadata model = %q, want the updated one", m)
+	}
+}
+
+// sttLanguageModel is a model that takes a session language hint.
+const sttLanguageModel = "voxtral-mini-transcribe-realtime-3"
+
+// captureWarnings collects what the test logs at warning level and above.
+func captureWarnings(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	return &logs
+}
+
+// The hint "fr-FR" is forwarded as the base ISO 639-1 code to a model that
+// takes one.
+func TestSTTLanguageIsForwardedWhenTheModelSupportsIt(t *testing.T) {
+	endpoint, seen := sttServer(t, nil)
+	c := sttConn(endpoint, func(c *STTConfig) {
+		c.Model = sttLanguageModel
+		c.Language = language.FrenchFR
+	})
+	s, err := c.Connect(context.Background(), 16000)
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	defer func() { _ = s.Close() }()
+
+	session, _ := seen.await(t)["session"].(map[string]any)
+	if session["language"] != "fr" {
+		t.Errorf("language = %v, want fr", session["language"])
+	}
+	if got := seen.query.Get("model"); got != sttLanguageModel {
+		t.Errorf("model = %q, want %q", got, sttLanguageModel)
+	}
+}
+
+// The default 2602 model does not accept a session language hint.
+func TestSTTLanguageIsNotSentToAnUnsupportedModel(t *testing.T) {
+	logs := captureWarnings(t)
+	endpoint, seen := sttServer(t, nil)
+	c := sttConn(endpoint, func(c *STTConfig) { c.Language = language.French })
+	s, err := c.Connect(context.Background(), 16000)
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	defer func() { _ = s.Close() }()
+
+	session, _ := seen.await(t)["session"].(map[string]any)
+	if _, ok := session["language"]; ok {
+		t.Errorf("language = %v was sent to a model that takes none", session["language"])
+	}
+	if !strings.Contains(logs.String(), "does not support a language hint") {
+		t.Errorf("logs = %q, want a warning that the hint is ignored", logs.String())
+	}
+}
+
+func TestSTTNoLanguageNoWarning(t *testing.T) {
+	logs := captureWarnings(t)
+	endpoint, seen := sttServer(t, nil)
+	s, err := sttConn(endpoint).Connect(context.Background(), 16000)
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	defer func() { _ = s.Close() }()
+
+	session, _ := seen.await(t)["session"].(map[string]any)
+	if _, ok := session["language"]; ok {
+		t.Errorf("language = %v was sent though none was configured", session["language"])
+	}
+	if strings.Contains(logs.String(), "language") {
+		t.Errorf("logs = %q, want no language warning", logs.String())
 	}
 }

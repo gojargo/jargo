@@ -97,6 +97,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - **The `openai-responses-frontend-filter-incomplete-turns` example**:
   an LLMWithBackend frontend on the Responses API with incomplete user turns
   filtered.
+- **Mistral STT takes a language hint.** `mistral.STTConfig.Language` (and the
+  `language` setting) is sent in the session update as its base ISO 639-1 code.
+  A model that takes no hint, such as `voxtral-mini-transcribe-realtime-2602`,
+  is sent none, with a warning.
 
 ### Changed
 
