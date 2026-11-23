@@ -143,6 +143,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `stt.TranscriptionFinal` and an interim one as `stt.TranscriptionInterim`. A
   transcription whose text a transform changed loses its `Result`, and one
   whose transform failed is not pushed.
+- **Zoom AI text-to-speech.** `zoomai.NewHTTPTTS` speaks with the Zoom AI
+  Services Text-to-Speech API. Each sentence is one HTTPS request and its audio
+  streams back in the response; the API returns 44.1 kHz audio, which is
+  resampled to the service's output rate. `HTTPTTSConfig.Voice` picks one of
+  Zoom's voices (default `jenna`), and `Speed` and `Volume` set the rate and
+  volume; all three are settings (`zoomai.HTTPTTSSettings`) read for every
+  request. Text longer than one request accepts is split at whitespace, an
+  error names the request's `x-zm-trackingid`, and an interruption closes the
+  request, which stops synthesis on the server.
 
 ### Changed
 
