@@ -84,6 +84,8 @@ type SegmentService struct {
 	// diarization numbers the speakers a provider's diarization told apart and
 	// formats what they said.
 	diarization
+	// textTransforms rewrites each transcript before it is pushed.
+	textTransforms
 	// provider is the Transcriber or SegmentRunner the service was built
 	// with. The optional interfaces are asked of it.
 	provider any
@@ -488,7 +490,15 @@ func (s *SegmentService) segmentTask(ctx context.Context) {
 // is pushed from inside this call, find the span it belongs to already open. A
 // TranscriptionFinalizedFrame ends the wait and closes the span the way a
 // finalized transcript does.
+//
+// A transcription going downstream is rewritten with the text transforms
+// first, so nothing after this service sees the text as heard.
 func (s *SegmentService) PushFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
+	if dir == processor.Downstream {
+		if err := s.transformTranscription(ctx, f); err != nil {
+			return err
+		}
+	}
 	switch fr := f.(type) {
 	case *frames.TranscriptionFrame:
 		s.mu.Lock()

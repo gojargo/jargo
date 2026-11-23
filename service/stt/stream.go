@@ -419,6 +419,8 @@ type StreamService struct {
 	// diarization numbers the speakers the provider's diarization told apart
 	// and formats what they said.
 	diarization
+	// textTransforms rewrites each transcript before it is pushed.
+	textTransforms
 	conn    Connector
 	cfgRate int
 	model   string
@@ -764,7 +766,15 @@ func (s *StreamService) Cleanup(ctx context.Context) error {
 // VAD started when it reported the speech over. A TranscriptionFinalizedFrame
 // ends the wait the same way a finalized transcript does, and closes the span
 // holding the text it confirms.
+//
+// A transcription going downstream is rewritten with the text transforms
+// first, so nothing after this service sees the text as heard.
 func (s *StreamService) PushFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
+	if dir == processor.Downstream {
+		if err := s.transformTranscription(ctx, f); err != nil {
+			return err
+		}
+	}
 	switch fr := f.(type) {
 	case *frames.TranscriptionFrame:
 		if s.takeFinalizePending() {

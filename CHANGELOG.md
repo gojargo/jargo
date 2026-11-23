@@ -134,6 +134,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - **`flows.TransitionInYAML`**, the sentinel a tool named by a flow config
   returns in its next-node slot to let the config decide the transition. A node
   built in code rejects it.
+- **STT services take text transforms.** `StreamService` and `SegmentService`
+  gain `AddTextTransformer` and `SetTextTransformers`, as the TTS base and the
+  LLM text processor have. Each transcript is rewritten before the service
+  pushes it, so the context, observers such as the RTVI client transcript, and
+  the STT tracing span see only the rewritten text: for example, to redact card
+  numbers a caller reads out. A transform sees a final transcript as
+  `stt.TranscriptionFinal` and an interim one as `stt.TranscriptionInterim`. A
+  transcription whose text a transform changed loses its `Result`, and one
+  whose transform failed is not pushed.
 
 ### Changed
 

@@ -99,6 +99,26 @@ that key on partial transcripts never fire, so turn starts fall back to VAD alon
 `chat.NewSTT` and `deepgram.NewSegmentedSTT` (Deepgram's pre-recorded API, one
 request per segment) are segment-based; `deepgram.NewSTT` streams.
 
+#### Rewriting transcripts
+
+Both STT services take text transforms, as a TTS service does. Each transcript
+is rewritten before the service pushes it, so the context, observers such as
+the RTVI client's transcript and the STT tracing span see only the rewritten
+text: for example, to redact a card number a caller reads out.
+
+```go
+svc.AddTextTransformer(stt.TextTransformer{
+    TextType:  frames.AnyTextType, // or stt.TranscriptionFinal, stt.TranscriptionInterim
+    Transform: maskCardNumbers,
+})
+```
+
+A transform sees a final transcript as `stt.TranscriptionFinal` and an interim
+one as `stt.TranscriptionInterim`. A transcription whose text a transform
+changed loses its `Result`, the provider's response with the text as heard, and
+one whose transform failed is not pushed at all. `SetTextTransformers` replaces
+the list, which is also how a transform is withdrawn.
+
 ### LLM
 
 ```go
