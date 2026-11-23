@@ -180,6 +180,7 @@ func TestASkippedSegmentSpokenInOnePieceIsForgotten(t *testing.T) {
 func (o *segmentObserver) connectClient(version [3]int) {
 	sink := NewProcessor()
 	sink.clientVersion = version
+	sink.clientReady = true
 	o.sink = sink
 }
 

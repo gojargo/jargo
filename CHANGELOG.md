@@ -101,6 +101,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `language` setting) is sent in the session update as its base ISO 639-1 code.
   A model that takes no hint, such as `voxtral-mini-transcribe-realtime-2602`,
   is sent none, with a warning.
+- **The RTVI `flow-node-entered` message.** It tells a client each time a
+  conversation flow enters a node, so a client UI can follow the flow. Its data
+  (`rtvi.FlowNodeEnteredData`) is the node, the node the flow left, the
+  function that moved it there, their metadata and, for a node of a subflow,
+  the node that runs the subflow. Push a `rtvi.FlowNodeEnteredFrame` to send
+  it; clients of RTVI protocol 2.4.0 or later receive it.
+  `Processor.ClientReady` reports whether the client has sent its
+  `client-ready`.
+- **Eval scenarios can expect a `flow_node` event**, sent each time a flows bot
+  enters a node. Its text is the node's name, so `text_matches:` and the other
+  content checks read it, and its data is the `flow-node-entered` message's.
 
 ### Changed
 
@@ -136,6 +147,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   streaming service gains `language_hint`, a runtime-changeable `version`
   (seeded from `Config.Version`) and a local `speaker_format`; changing only
   `speaker_format` no longer reopens the session.
+- **The RTVI protocol version is now 2.4.0.**
 
 ### Deprecated
 
@@ -162,6 +174,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - **AssemblyAI TTS streaming tokens no longer attributes an LLM turn's
   unflushed text and audio to a `TTSSpeakFrame` spoken mid-turn.** The pending
   text is flushed before another context's request is written.
+- **RTVI messages for newer clients are no longer dropped when the bot speaks
+  before the client sends `client-ready`**, such as a greeting started on
+  connect: raw text, backchannels and expression parts were sent as if to the
+  oldest client. Until `client-ready`, the server now sends messages as it does
+  to a client of its own protocol version.
 
 ## [0.7.0] - 2026-11-20
 

@@ -62,16 +62,22 @@ func botReadyVersion(t *testing.T, m rtvi.Message) string {
 // generation is answered with this implementation's version and told nothing is
 // wrong, whatever minor and patch it declares.
 func TestClientReadyAcceptsThisProtocolGeneration(t *testing.T) {
-	declared := map[string][3]int{"2.0.0": {2, 0, 0}, "2.3.1": {2, 3, 1}}
-	for _, version := range []string{"2.0.0", "2.3.1"} {
+	declared := map[string][3]int{"2.0.0": {2, 0, 0}, "2.4.1": {2, 4, 1}}
+	for _, version := range []string{"2.0.0", "2.4.1"} {
 		t.Run(version, func(t *testing.T) {
 			c := newClient(t)
+			if c.proc.ClientReady() {
+				t.Error("ClientReady() = true before any client-ready")
+			}
 			ready, complaint := clientReady(t, c, version)
 			if complaint != "" {
 				t.Errorf("a %s client was told %q, want nothing", version, complaint)
 			}
 			if got := botReadyVersion(t, ready); got != rtvi.ProtocolVersion {
 				t.Errorf("bot-ready version = %q, want %q", got, rtvi.ProtocolVersion)
+			}
+			if !c.proc.ClientReady() {
+				t.Error("ClientReady() = false after a client-ready")
 			}
 			if got := c.proc.ClientVersion(); got != declared[version] {
 				t.Errorf("ClientVersion() = %v, want %v", got, declared[version])

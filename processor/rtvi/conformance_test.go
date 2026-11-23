@@ -20,7 +20,7 @@ import (
 //
 //nolint:gochecknoglobals // fixed table, read only
 var examples = map[string]string{
-	rtvi.TypeClientReady:        `{"version":"2.3.0","about":{"library":"rtvi-web","library_version":"1.16.0"}}`,
+	rtvi.TypeClientReady:        `{"version":"2.4.0","about":{"library":"rtvi-web","library_version":"1.16.0"}}`,
 	rtvi.TypeDisconnectBot:      ``,
 	rtvi.TypeClientMessage:      `{"t":"get-weather","d":{"city":"Lisbon"}}`,
 	rtvi.TypeSendText:           `{"content":"What's the weather like?","options":{"run_immediately":true}}`,
@@ -160,9 +160,9 @@ func TestMessagesTheProtocolForbidsGetAnErrorResponse(t *testing.T) {
 // the session starts as with a client of an unknown library.
 func TestClientReadyIsLenientAboutTheClient(t *testing.T) {
 	for problem, data := range map[string]string{
-		"no about":                `{"version":"2.3.0"}`,
-		"about of the wrong type": `{"version":"2.3.0","about":["unexpected"]}`,
-		"about without a library": `{"version":"2.3.0","about":{"platform":"iOS"}}`,
+		"no about":                `{"version":"2.4.0"}`,
+		"about of the wrong type": `{"version":"2.4.0","about":["unexpected"]}`,
+		"about without a library": `{"version":"2.4.0","about":{"platform":"iOS"}}`,
 	} {
 		t.Run(problem, func(t *testing.T) {
 			h := clientSends(t, clientMessage(rtvi.TypeClientReady, data))

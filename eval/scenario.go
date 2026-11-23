@@ -256,6 +256,16 @@
 //	      - event: server_message
 //	        text_contains: '"done": true'
 //
+// flow_node is the bot's conversation flow, built with the flows package,
+// entering a node. The event's text is the node's name, so text_matches pins
+// the node a turn leads to; a node of a subflow is named "<parent>.<node>":
+//
+//	turns:
+//	  - user: "I'd like to book an appointment."
+//	    expect:
+//	      - event: flow_node
+//	        text_matches: ['^verify_to_book[.]']
+//
 // # Asserting on function calls
 //
 // A function_call expectation holds the set of calls the turn should make.

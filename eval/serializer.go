@@ -71,6 +71,8 @@ var reportedEventTypes = map[string]bool{
 	// its transcriptions and backchannels.
 	rtvi.TypeBotOutput: true,
 	rtvi.TypeUserInput: true,
+	// The bot's conversation flow entering a node.
+	rtvi.TypeFlowNodeEntered: true,
 }
 
 // ClientSerializer implements wsserver.Serializer.

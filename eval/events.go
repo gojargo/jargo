@@ -64,6 +64,9 @@ import (
 //	                           kept in Metrics and out of the events seen
 //	server_message             server-message: a message of the bot's own making,
 //	                           with its "data" and, as "text", the data as JSON
+//	flow_node                  flow-node-entered: the bot's conversation flow
+//	                           entered a node, with the message's "data" and, as
+//	                           "text", the node's name
 //	expression                 bot-output in expressive conversation: the expression
 //	                           the bot's TTS performed, in the tags the LLM writes
 //
@@ -923,6 +926,9 @@ func (s *EventStream) messageToEventLocked(message map[string]any, raw []byte) m
 		return map[string]any{keyType: EventMetrics, keyData: data}
 	case rtvi.TypeServerMessage:
 		return serverMessageEvent(message[keyData], raw)
+	case rtvi.TypeFlowNodeEntered:
+		node, _ := data["node"].(string)
+		return map[string]any{keyType: EventFlowNode, keyData: maps.Clone(data), keyText: node}
 	case evalws.BotImageType:
 		return map[string]any{
 			keyType: EventImage, "width": data["width"], "height": data["height"], "format": data["format"],

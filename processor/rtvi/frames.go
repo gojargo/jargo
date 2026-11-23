@@ -131,6 +131,28 @@ func (f *ServerMessageFrame) String() string {
 	return fmt.Sprintf("%s(data: %v)", f.Name(), f.Data)
 }
 
+// FlowNodeEnteredFrame tells the client that the conversation flow entered a
+// node. It is the pipeline-side counterpart of the flow-node-entered message,
+// which the Observer sends to clients of protocol 2.4.0 or later.
+type FlowNodeEnteredFrame struct {
+	frames.BaseSystemFrame
+	// Data is the node entered, and how the flow got there.
+	Data FlowNodeEnteredData
+}
+
+// NewFlowNodeEnteredFrame builds a FlowNodeEnteredFrame.
+func NewFlowNodeEnteredFrame(data FlowNodeEnteredData) *FlowNodeEnteredFrame {
+	return &FlowNodeEnteredFrame{
+		BaseSystemFrame: frames.NewBaseSystemFrame("RTVIFlowNodeEnteredFrame"),
+		Data:            data,
+	}
+}
+
+// String implements fmt.Stringer.
+func (f *FlowNodeEnteredFrame) String() string {
+	return fmt.Sprintf("%s(node: %s)", f.Name(), f.Data.Node)
+}
+
 // ServerResponseFrame answers one ClientMessageFrame. It names the frame it
 // answers, so the client can pair the answer with the request it made.
 //

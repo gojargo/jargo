@@ -39,6 +39,8 @@ func TestClientSerializerKeepsMetricsAndServerMessagesRaw(t *testing.T) {
 	for msgType, data := range map[string]map[string]any{
 		rtvi.TypeMetrics:       {"ttfb": []any{map[string]any{"processor": "DeepgramSTTService#0", "value": 0.31}}},
 		rtvi.TypeServerMessage: {"done": true, "transcript": "hello"},
+		// The bot's flow entering a node stays a raw message too.
+		rtvi.TypeFlowNodeEntered: {"node": "verify.ask", "previous_node": "start", "parent": "verify"},
 	} {
 		f, ok := deserialize(t, NewClientSerializer(), serverMessage(t, msgType, data)).(*frames.InputTransportMessageFrame)
 		var message map[string]any

@@ -654,10 +654,10 @@ func (o *Observer) isLegacyClient() bool {
 }
 
 // clientIsAtLeast reports whether the connected client speaks version or a
-// later one. With no processor to have negotiated a version, the current
-// protocol is assumed, as isLegacyClient does.
+// later one. Until a client has negotiated a version the current protocol is
+// assumed: a bot may speak before client-ready, as when it greets on connect.
 func (o *Observer) clientIsAtLeast(version [3]int) bool {
-	if o.sink == nil {
+	if o.sink == nil || !o.sink.ClientReady() {
 		return true
 	}
 	client := o.sink.ClientVersion()
@@ -680,6 +680,12 @@ func (o *Observer) clientSupportsRawText() bool {
 // expression sound and pause text types, which came with protocol 2.3.0.
 func (o *Observer) clientSupportsExpression() bool {
 	return o.clientIsAtLeast([3]int{2, 3, 0})
+}
+
+// clientSupportsFlowNodes reports whether the connected client knows the
+// flow-node-entered message, which came with protocol 2.4.0.
+func (o *Observer) clientSupportsFlowNodes() bool {
+	return o.clientIsAtLeast([3]int{2, 4, 0})
 }
 
 // rawTextEnabled reports whether the raw text messages pick chooses are sent:

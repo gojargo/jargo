@@ -342,6 +342,27 @@ func TestMetricsEvent(t *testing.T) {
 	})
 }
 
+// The bot's flow entering a node is an event named by the node.
+func TestFlowNodeEvent(t *testing.T) {
+	t.Run("a node entered becomes an event with its data and the node as text", func(t *testing.T) {
+		data := map[string]any{"node": "verify.ask", "previous_node": "start", "parent": "verify"}
+		event := newStream(false).FrameToEvent(messageFrame(t, rtvi.TypeFlowNodeEntered, data))
+		wantEvent(t, event, map[string]any{keyType: EventFlowNode, keyData: data, keyText: "verify.ask"})
+	})
+	t.Run("an expectation matches the node", func(t *testing.T) {
+		m := newMatcher(nil, false)
+		m.stream.Append(m.stream.FrameToEvent(
+			messageFrame(t, rtvi.TypeFlowNodeEntered, map[string]any{"node": "verify.ask"})))
+		exp := Expectation{Event: EventFlowNode, TextMatches: []string{"^verify[.]"}}
+		if f := mustMatch(t, m, exp, 1000); f != nil {
+			t.Fatalf("failure = %v", f)
+		}
+		if m.LastMatchText != "verify.ask" {
+			t.Errorf("recorded %q, want the node's name", m.LastMatchText)
+		}
+	})
+}
+
 // A message of the bot's own making is an event a scenario can read.
 func TestServerMessageEvent(t *testing.T) {
 	t.Run("it becomes an event with its data and its text", func(t *testing.T) {

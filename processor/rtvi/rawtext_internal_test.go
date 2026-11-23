@@ -1,6 +1,7 @@
 package rtvi
 
 import (
+	"encoding/json"
 	"slices"
 	"testing"
 
@@ -144,5 +145,83 @@ func TestRawTextIsKeptFromOlderClients(t *testing.T) {
 		if got := o.rawText(); len(got) != 0 {
 			t.Errorf("%v: sent %+v, want no raw text", version, got)
 		}
+	}
+}
+
+// Until a client has declared its version the bot serves its own protocol
+// version: it may speak before client-ready, as when it greets on connect.
+// llm-raw-text is sent only to clients of 2.2.0 and later.
+func TestBeforeClientReadyTheCurrentProtocolIsServed(t *testing.T) {
+	o := rawTextObserver()
+	o.sink = NewProcessor()
+	o.push(frames.NewLLMTextFrame("Hello"))
+
+	if !slices.Contains(o.types(), TypeLLMRawText) {
+		t.Errorf("sent %v, want llm-raw-text before client-ready", o.types())
+	}
+}
+
+func TestAfterClientReadyTheClientVersionIsServed(t *testing.T) {
+	o := rawTextObserver()
+	o.connectClient([3]int{2, 1, 0})
+	o.push(frames.NewLLMTextFrame("Hello"))
+
+	if slices.Contains(o.types(), TypeLLMRawText) {
+		t.Errorf("sent %v, want no llm-raw-text to a 2.1.0 client", o.types())
+	}
+}
+
+// The flow-node-entered message came with protocol 2.4.0: a client of that
+// version or later is sent it, as is any client before its client-ready, and
+// an earlier client is not.
+func TestFlowNodeEnteredIsSentToClientsThatKnowIt(t *testing.T) {
+	data := FlowNodeEnteredData{
+		Node:             "verify.check_birthday",
+		PreviousNode:     "greet",
+		Function:         "wants_to_book",
+		Metadata:         map[string]any{"step": 2},
+		FunctionMetadata: map[string]any{"exit": "booking"},
+		Parent:           "verify",
+	}
+	for name, connect := range map[string]func(o *segmentObserver){
+		"before client-ready": func(o *segmentObserver) { o.sink = NewProcessor() },
+		"a 2.4.0 client":      func(o *segmentObserver) { o.connectClient([3]int{2, 4, 0}) },
+	} {
+		o := newSegmentObserver()
+		connect(o)
+		o.push(NewFlowNodeEnteredFrame(data))
+		if len(o.sent) != 1 || o.sent[0].Type != TypeFlowNodeEntered {
+			t.Fatalf("%s: sent %+v, want one flow-node-entered", name, o.sent)
+		}
+		raw, err := json.Marshal(o.sent[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := `{"label":"rtvi-ai","type":"flow-node-entered","data":{"node":"verify.check_birthday",` +
+			`"previous_node":"greet","function":"wants_to_book","metadata":{"step":2},` +
+			`"function_metadata":{"exit":"booking"},"parent":"verify"}}`
+		if string(raw) != want {
+			t.Errorf("%s: message = %s, want %s", name, raw, want)
+		}
+	}
+
+	for _, version := range [][3]int{{2, 3, 0}, {1, 4, 0}} {
+		o := newSegmentObserver()
+		o.connectClient(version)
+		o.push(NewFlowNodeEnteredFrame(data))
+		if len(o.sent) != 0 {
+			t.Errorf("%v: sent %+v, want nothing", version, o.sent)
+		}
+	}
+}
+
+// A field of a flow-node-entered with no value is left out.
+func TestFlowNodeEnteredLeavesOutWhatHasNoValue(t *testing.T) {
+	raw, err := json.Marshal(FlowNodeEntered(FlowNodeEnteredData{Node: "start"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `{"label":"rtvi-ai","type":"flow-node-entered","data":{"node":"start"}}`; string(raw) != want {
+		t.Errorf("message = %s, want %s", raw, want)
 	}
 }

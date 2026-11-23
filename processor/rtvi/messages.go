@@ -24,7 +24,7 @@ const (
 	// MessageLabel tags every RTVI message.
 	MessageLabel = "rtvi-ai"
 	// ProtocolVersion is the RTVI protocol version this implementation speaks.
-	ProtocolVersion = "2.3.0"
+	ProtocolVersion = "2.4.0"
 	// LegacySupportedMajor is the older protocol generation still served. A
 	// client of that generation is deprecated but answered rather than turned
 	// away, and is told its own version back in the bot-ready rather than this
@@ -45,6 +45,7 @@ const (
 	TypeRawAudioBatch      = "raw-audio-batch"
 	TypeBotReady           = "bot-ready"
 	TypeServerMessage      = "server-message"
+	TypeFlowNodeEntered    = "flow-node-entered"
 	TypeServerResponse     = "server-response"
 	TypeErrorResponse      = "error-response"
 	TypeError              = "error"
@@ -387,6 +388,36 @@ func ServerResponse(id, msgType string, data any) Message {
 // the bot wants to tell it that the protocol has no message for.
 func ServerMessage(data any) Message {
 	return newMessage(TypeServerMessage, "", data)
+}
+
+// FlowNodeEnteredData is the payload of a flow-node-entered: the node a
+// conversation flow entered, and how it got there. A field with no value is
+// left out.
+type FlowNodeEnteredData struct {
+	// Node is the name of the node the flow entered. A node of a subflow is
+	// named "<parent>.<node>".
+	Node string `json:"node"`
+	// PreviousNode is the name of the node the flow left. Empty for the flow's
+	// first node.
+	PreviousNode string `json:"previous_node,omitempty"`
+	// Function is the name of the function whose call moved the flow to this
+	// node. Empty when the bot set the node itself.
+	Function string `json:"function,omitempty"`
+	// Metadata is the entered node's metadata, a JSON object of the
+	// application's own. Nil when the node has none.
+	Metadata map[string]any `json:"metadata,omitzero"`
+	// FunctionMetadata is the metadata of Function, a JSON object of the
+	// application's own. Nil when the function has none.
+	FunctionMetadata map[string]any `json:"function_metadata,omitzero"`
+	// Parent is, for a node of a subflow, the name of the node that runs the
+	// subflow. Empty otherwise.
+	Parent string `json:"parent,omitempty"`
+}
+
+// FlowNodeEntered builds the message telling the client that the bot's
+// conversation flow entered a node.
+func FlowNodeEntered(data FlowNodeEnteredData) Message {
+	return newMessage(TypeFlowNodeEntered, "", data)
 }
 
 // ErrorResponseData is the payload of an error-response.

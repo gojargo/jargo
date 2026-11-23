@@ -53,14 +53,20 @@ speech it describes.
 ## The messages
 
 Every message is `{"label":"rtvi-ai","type":…,"id":…,"data":…}`. The processor
-speaks protocol version `2.3.0`.
+speaks protocol version `2.4.0`.
 
 The `client-ready` handshake settles which version the session speaks. A client
-of this generation is answered with `2.3.0`; one of the previous generation
+of this generation is answered with `2.4.0`; one of the previous generation
 (`1.x`) is answered with its own version, so it stays on the paths it
 understands. Any other version gets an `error-response` saying so, and the
 session goes ahead anyway: the client is better placed than the bot to decide
 whether to carry on. `Processor.ClientVersion` reports what the client declared.
+
+Some messages are sent only to clients of a version that knows them. Until the
+`client-ready` arrives the bot does not know the client's version, so it sends
+messages as it would to a client of its own version: a bot may speak before
+then, as when it greets on connect. `Processor.ClientReady` reports whether the
+handshake has happened.
 
 The `bot-ready` also carries `capabilities`: what the bot does in the session
 (`audio_in`, `audio_out`, `video_in`, `screen_in`, `video_out` and `metrics`), so a
@@ -103,6 +109,7 @@ bot's response, is not sent them.
 | `llm-function-call-result` | Result of a tool the client ran for the bot. |
 | `client-message` → `server-response` | Anything else the client asks, and the answer. |
 | `server-message` | Anything else the bot tells the client, unprompted. |
+| `flow-node-entered` | The bot's conversation flow (the `flows` package) entered a node: the `node`, the `previous_node` it left, the `function` whose call moved it there, their `metadata` and `function_metadata` and, for a node of a subflow, the `parent` node that runs the subflow. A field with no value is left out. Sent to clients of protocol 2.4.0 or later. In the pipeline it is a `rtvi.FlowNodeEnteredFrame`. |
 | `error-response` | A request could not be carried out. |
 | `error` | Something failed. |
 

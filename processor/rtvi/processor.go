@@ -42,6 +42,8 @@ type Processor struct {
 	// clientVersion is the protocol version the client declared in its
 	// client-ready, read by anything whose wire shape depends on it.
 	clientVersion [3]int
+	// clientReady is whether the client has sent its client-ready.
+	clientReady bool
 	// llmSkipTTS is the output configuration the LLM service is running under,
 	// so a turn that changes it for itself can put back what it found. It starts
 	// false, which is what an LLM service nothing has configured does.
@@ -201,6 +203,9 @@ func (o *Observer) messagesFor(f frames.Frame) []Message {
 	}
 	if msg, ok := serverMessageFor(f); ok {
 		return []Message{msg}
+	}
+	if fr, ok := f.(*FlowNodeEnteredFrame); ok && o.clientSupportsFlowNodes() {
+		return []Message{FlowNodeEntered(fr.Data)}
 	}
 	return nil
 }
@@ -1009,6 +1014,7 @@ func (p *Processor) handleClientReady(ctx context.Context, in Incoming) error {
 	version, complaint := p.negotiate(d.Version)
 	p.mu.Lock()
 	p.clientVersion = version
+	p.clientReady = true
 	p.mu.Unlock()
 
 	if err := p.PushFrame(ctx, frames.NewInputTransportStartAudioStreamingFrame(),
@@ -1074,6 +1080,13 @@ func (p *Processor) ClientVersion() [3]int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.clientVersion
+}
+
+// ClientReady reports whether the client has sent its client-ready message.
+func (p *Processor) ClientReady() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.clientReady
 }
 
 // handleSendText injects a text user turn. The processor sits at the top of the

@@ -85,6 +85,11 @@ const (
 	// that data as JSON, or the data itself when it is a string, so the content
 	// checks read it and a matched expectation records it.
 	EventServerMessage = "server_message"
+	// EventFlowNode is the bot's conversation flow, built with the flows
+	// package, entering a node: the flow-node-entered message's data, under
+	// "data". Its text is the node's name, so the content checks read it; a
+	// node of a subflow is named "<parent>.<node>".
+	EventFlowNode = "flow_node"
 )
 
 // The meanings a marker expectation can name, which are the emitter's own
