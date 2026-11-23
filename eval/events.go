@@ -45,8 +45,9 @@ import (
 //	                           (audio modality only)
 //	response                   the harness's own transcription of the bot's audio
 //	                           (audio modality only); llm_response in text modality
-//	function_call              llm-function-call-in-progress; a call made outside the
-//	                           bot's pipeline and reported into it counts the same
+//	function_call              llm-function-call-in-progress, which the bot also sends
+//	                           for a call made outside its pipeline and reported
+//	                           into it, such as a backend's
 //	function_call_stopped      llm-function-call-stopped; its args carry tool_call_id
 //	                           and whether it was canceled, so a scenario can tell
 //	                           work that was stopped from work that finished on its own
@@ -130,8 +131,9 @@ var forever = time.Unix(math.MaxInt32, 0)
 // EventStream is the bot's output as events: a queue the drivers read, fed by
 // the pipeline.
 //
-// The sink turns each frame from the bot into an event and appends it; the
-// drivers pop events as they wait for them. One rule runs through it: what the
+// The sink hands it the bot's RTVI messages, each mapped to its event (see
+// RTVIMessageToEvent), and the harness appends events of its own; the drivers
+// pop events as they wait for them. One rule runs through it: what the
 // bot produced before the user's latest send is not the reply to it. An LLM
 // response still streaming at the send, or cut by an interruption, is dropped
 // until the bot's next llm-started, and a spoken turn that began before the send
@@ -673,119 +675,33 @@ func (s *EventStream) InputSentAt() time.Time {
 	return s.inputSentAt
 }
 
-// FrameToEvent translates one frame from the bot into the event it maps to, or
-// nil; most frames map to none.
+// RTVIMessageToEvent translates one of the bot's RTVI messages, as the client
+// received it, into the event it maps to, or nil; many map to none.
 //
 // The LLM text is buffered and emitted as one llm_response when the response
 // ends; a marker is its own llm_marker as soon as it arrives; tts_response is
-// emitted only in audio mode; the bot's reports about the harness (its VAD,
-// speaking and transcription messages) become their events. The audio-mode
-// response is not made here: the turn aggregator appends it when the bot's
-// spoken turn ends.
-//
-//nolint:cyclop // one case per frame the bot sends
-func (s *EventStream) FrameToEvent(f frames.Frame) map[string]any {
+// emitted only in audio mode; the bot's reports, about its own speaking and
+// interruptions and about the harness (its VAD and transcription messages),
+// become their events. The audio-mode response is not made here: the turn
+// aggregator appends it when the bot's spoken turn ends.
+func (s *EventStream) RTVIMessageToEvent(message []byte) map[string]any {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.lastActivity = time.Now()
-	switch fr := f.(type) {
-	case *frames.InputTransportMessageFrame:
-		var message map[string]any
-		if err := json.Unmarshal(fr.Message, &message); err != nil {
-			return nil
-		}
-		event := s.messageToEventLocked(message, fr.Message)
-		if event != nil && slices.ContainsFunc(interruptionEvents, func(t string) bool { return event[keyType] == t }) {
-			s.interruptedLocked()
-		}
-		return event
-	case *frames.LLMFullResponseStartFrame:
-		s.awaitingReply = false
-		s.textBuffer = nil
-		s.llmTextAt = nil
-		s.expressionDelivery = nil
-		return map[string]any{keyType: EventLLMStarted}
-	case *frames.LLMTextFrame:
-		if s.awaitingReply {
-			return nil
-		}
-		if len(s.textBuffer) == 0 {
-			at := s.elapsedLocked()
-			s.llmTextAt = &at
-		}
-		s.textBuffer = append(s.textBuffer, fr.Text)
+	event := s.eventForRTVIMessageLocked(message)
+	if event == nil {
 		return nil
-	case *frames.LLMMarkerResponseFrame:
-		if s.awaitingReply {
-			return nil
-		}
-		markers := slices.Clone(fr.Markers)
-		if markers == nil {
-			markers = []string{}
-		}
-		return map[string]any{
-			keyType: EventLLMMarker, keyText: fr.Marker, "kind": fr.Kind, "raw": fr.Raw, "markers": markers,
-		}
-	case *frames.LLMFullResponseEndFrame:
-		if s.awaitingReply {
-			s.textBuffer = nil
-			return nil
-		}
-		event := segmentEvent(EventLLMResponse, strings.Join(s.textBuffer, ""))
-		if s.llmTextAt != nil {
-			event["started_at"] = *s.llmTextAt
-		}
-		return event
-	case *frames.TTSTextFrame:
-		if s.botAudio {
-			return segmentEvent(EventTTSResponse, fr.Text)
-		}
-		return nil
-	case *frames.BotStartedSpeakingFrame:
-		s.botQuiet = false
-		if s.talkedOverUntil != nil && s.talkedOverUntil.Equal(forever) {
-			now := time.Now()
-			s.talkedOverUntil = &now
-		}
-		if s.observing {
-			s.observing = false
-			s.awaitingReply = false
-		}
-		s.signalLocked()
-		return map[string]any{keyType: EventBotStartedSpeaking}
-	case *frames.BotStoppedSpeakingFrame:
+	}
+	switch eventType, _ := event[keyType].(string); {
+	case slices.Contains(interruptionEvents, eventType):
+		s.interruptedLocked()
+	case eventType == EventBotStartedSpeaking:
+		s.botStartedSpeakingLocked()
+	case eventType == EventBotStoppedSpeaking:
 		s.botQuiet = true
 		s.signalLocked()
-		return map[string]any{keyType: EventBotStoppedSpeaking}
-	case *frames.FunctionCallInProgressFrame:
-		return callEvent(fr.ToolName, fr.Args)
-	case *frames.ExternalFunctionCallInProgressFrame:
-		return callEvent(fr.ToolName, fr.Args)
-	case *frames.ExternalFunctionCallResultFrame:
-		if !fr.IsFinal {
-			return nil
-		}
-		return stoppedEvent(fr.ToolName, fr.ToolCallID, false)
-	case *frames.FunctionCallResultFrame:
-		return stoppedEvent(fr.ToolName, fr.ToolCallID, false)
-	case *FunctionCallCancelFrame:
-		return stoppedEvent(fr.ToolName, fr.ToolCallID, true)
-	case *frames.ExternalFunctionCallCancelFrame:
-		return stoppedEvent(fr.ToolName, fr.ToolCallID, true)
 	}
-	return nil
-}
-
-// callEvent is the function_call event for a call to name with args, as JSON.
-func callEvent(name string, args json.RawMessage) map[string]any {
-	decoded := map[string]any{}
-	if len(args) > 0 {
-		_ = json.Unmarshal(args, &decoded)
-		if decoded == nil {
-			decoded = map[string]any{}
-		}
-	}
-	return map[string]any{keyType: EventFunctionCall, keyName: optionalName(name), keyArgs: decoded}
+	return event
 }
 
 // The keys of an event's payload.
@@ -801,24 +717,13 @@ const (
 	keyCanceled = "cancelled" //nolint:misspell // the protocol's spelling
 )
 
-// stoppedEvent is the function_call_stopped event for a call. How the call
-// ended is the assertable part, so whether it was canceled sits in args beside
-// the id: a scenario matches both through the same calls:/args: check a
-// function_call uses.
-func stoppedEvent(name, toolCallID string, canceled bool) map[string]any {
-	return map[string]any{
-		keyType: EventFunctionCallStopped,
-		keyName: optionalName(name),
-		keyArgs: map[string]any{"tool_call_id": toolCallID, keyCanceled: canceled},
+// optionalName is a call's name as the bot reported it, or nil when it
+// reported none: the name may be absent at the bot's default report level.
+func optionalName(data map[string]any) any {
+	if name := data["function_name"]; truthy(name) {
+		return name
 	}
-}
-
-// optionalName is a call's name, or nil when the bot reported none.
-func optionalName(name string) any {
-	if name == "" {
-		return nil
-	}
-	return name
+	return nil
 }
 
 // BotTurnStopped appends the bot's finished spoken turn as a response, unless it
@@ -902,12 +807,63 @@ func (s *EventStream) interruptedLocked() {
 	s.signalLocked()
 }
 
-// messageToEventLocked maps one of the bot's messages to its event, if any. raw
-// is the message as it arrived, message the same decoded.
-func (s *EventStream) messageToEventLocked(message map[string]any, raw []byte) map[string]any {
+// botStartedSpeakingLocked handles the bot reporting it started speaking: it is
+// no longer quiet, and its speech now is the turn's.
+func (s *EventStream) botStartedSpeakingLocked() {
+	s.botQuiet = false
+	if s.talkedOverUntil != nil && s.talkedOverUntil.Equal(forever) {
+		now := time.Now()
+		s.talkedOverUntil = &now
+	}
+	if s.observing {
+		s.observing = false
+		s.awaitingReply = false
+	}
+	s.signalLocked()
+}
+
+// eventForRTVIMessageLocked maps one of the bot's reports, about its own output
+// or about the harness, to its event, if any. raw is the message as it arrived.
+//
+//nolint:cyclop // one case per message the bot sends
+func (s *EventStream) eventForRTVIMessageLocked(raw []byte) map[string]any {
+	var message map[string]any
+	if err := json.Unmarshal(raw, &message); err != nil {
+		return nil
+	}
 	msgType, _ := message[keyType].(string)
 	data, _ := message[keyData].(map[string]any)
 	switch msgType {
+	case rtvi.TypeBotStartedSpeaking:
+		return map[string]any{keyType: EventBotStartedSpeaking}
+	case rtvi.TypeBotStoppedSpeaking:
+		return map[string]any{keyType: EventBotStoppedSpeaking}
+	case rtvi.TypeBotTTSText:
+		if s.botAudio {
+			text, _ := data[keyText].(string)
+			return segmentEvent(EventTTSResponse, text)
+		}
+		return nil
+	case rtvi.TypeBotLLMStarted, rtvi.TypeBotLLMText, rtvi.TypeBotLLMMarker, rtvi.TypeBotLLMStopped:
+		return s.llmReportToEventLocked(msgType, data)
+	case rtvi.TypeLLMFunctionCall:
+		// The name and arguments may be absent at the bot's default report
+		// level.
+		args, _ := data["arguments"].(map[string]any)
+		if args == nil {
+			args = map[string]any{}
+		}
+		return map[string]any{keyType: EventFunctionCall, keyName: optionalName(data), keyArgs: args}
+	case rtvi.TypeLLMFunctionCallStop:
+		// How the call ended is the assertable part, so whether it was canceled
+		// sits in args beside the id: a scenario matches both through the same
+		// calls:/args: check a function_call uses.
+		toolCallID, _ := data["tool_call_id"].(string)
+		return map[string]any{
+			keyType: EventFunctionCallStopped,
+			keyName: optionalName(data),
+			keyArgs: map[string]any{"tool_call_id": toolCallID, keyCanceled: truthy(data[keyCanceled])},
+		}
 	case rtvi.TypeUserStartedSpeaking:
 		return map[string]any{keyType: EventUserStartedSpeaking}
 	case rtvi.TypeBotInterrupted:
@@ -941,6 +897,50 @@ func (s *EventStream) messageToEventLocked(message map[string]any, raw []byte) m
 		}
 	}
 	return nil
+}
+
+// llmReportToEventLocked is the event for one of the bot's bot-llm-* reports,
+// buffering its text until the response ends.
+func (s *EventStream) llmReportToEventLocked(msgType string, data map[string]any) map[string]any {
+	if msgType == rtvi.TypeBotLLMStarted {
+		s.awaitingReply = false
+		s.textBuffer = nil
+		s.llmTextAt = nil
+		s.expressionDelivery = nil
+		return map[string]any{keyType: EventLLMStarted}
+	}
+	if s.awaitingReply {
+		// A straggler of a response from before the turn's reply.
+		if msgType == rtvi.TypeBotLLMStopped {
+			s.textBuffer = nil
+		}
+		return nil
+	}
+	switch msgType {
+	case rtvi.TypeBotLLMText:
+		if len(s.textBuffer) == 0 {
+			at := s.elapsedLocked()
+			s.llmTextAt = &at
+		}
+		text, _ := data[keyText].(string)
+		s.textBuffer = append(s.textBuffer, text)
+		return nil
+	case rtvi.TypeBotLLMMarker:
+		text, _ := data[keyText].(string)
+		raw, _ := data["raw"].(string)
+		markers := knownMarkers(data[keyMarkers])
+		if markers == nil {
+			markers = []string{}
+		}
+		return map[string]any{
+			keyType: EventLLMMarker, keyText: text, "kind": data["kind"], "raw": raw, keyMarkers: markers,
+		}
+	}
+	event := segmentEvent(EventLLMResponse, strings.Join(s.textBuffer, ""))
+	if s.llmTextAt != nil {
+		event["started_at"] = *s.llmTextAt
+	}
+	return event
 }
 
 // serverMessageEvent is a message of the bot's own making, from a

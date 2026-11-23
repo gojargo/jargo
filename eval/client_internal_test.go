@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
@@ -200,12 +201,28 @@ func TestBotFrameSink(t *testing.T) {
 			t.Fatalf("pushed %v", got)
 		}
 	})
-	t.Run("the bot's frames stop at the sink", func(t *testing.T) {
-		s, next := sink()
+	t.Run("frames that are not the bot's messages make no events", func(t *testing.T) {
+		// The STT's transcriptions build the bot's turn in the aggregator, and
+		// the aggregator's own VAD, speaking and interruption frames, computed
+		// from the bot's audio, are internal plumbing: none of them is a
+		// scenario event.
+		s, _ := sink()
 		push(s,
-			frames.NewLLMFullResponseStartFrame(), frames.NewLLMTextFrame("Hello"), frames.NewLLMFullResponseEndFrame(),
-			frames.NewTTSTextFrame("Hello", frames.TextTypeSentence), frames.NewBotStartedSpeakingFrame(),
-			frames.NewFunctionCallInProgressFrame("c", "f", json.RawMessage(`{}`), false, ""),
+			frames.NewTranscriptionFrame("Paris", "bot", "t"),
+			frames.NewVADUserStartedSpeakingFrame(0, time.Now()), frames.NewVADUserStoppedSpeakingFrame(0, time.Now()),
+			frames.NewUserStartedSpeakingFrame(), frames.NewUserStoppedSpeakingFrame(),
+			frames.NewInterruptionFrame())
+		if got := s.stream.EventsSeen(); len(got) != 0 {
+			t.Fatalf("events = %v, want none", got)
+		}
+	})
+	t.Run("the bot's messages stop at the sink", func(t *testing.T) {
+		s, next := sink()
+		push(s, botResponse(t, "Hello")...)
+		push(s,
+			messageFrame(t, rtvi.TypeBotTTSText, map[string]any{"text": "Hello"}),
+			messageFrame(t, rtvi.TypeBotStartedSpeaking, nil),
+			messageFrame(t, rtvi.TypeLLMFunctionCall, map[string]any{"function_name": "f", "tool_call_id": "c"}),
 			messageFrame(t, "x", nil))
 		if got := next.seen(); len(got) != 0 {
 			t.Fatalf("pushed %v", got)
@@ -250,7 +267,7 @@ func TestBotFrameSink(t *testing.T) {
 		s, next := sinkWith(persona, true)
 		persona.HangUp()
 		push(s, frames.NewLLMContextFrame(persona.Context()))
-		push(s, botResponse(false, "Anything else?")...)
+		push(s, botResponse(t, "Anything else?")...)
 		if got := next.seen(); len(got) != 0 {
 			t.Fatalf("pushed %v", got)
 		}
@@ -261,7 +278,7 @@ func TestBotFrameSink(t *testing.T) {
 	t.Run("text feed hands the bot's response to the persona", func(t *testing.T) {
 		persona := stubPersona()
 		s, next := sinkWith(persona, true)
-		push(s, botResponse(false, "Hello ", "there")...)
+		push(s, botResponse(t, "Hello ", "there")...)
 		wantMessages(t, persona, "Hello there")
 		got := next.seen()
 		if len(got) != 1 {
@@ -274,13 +291,16 @@ func TestBotFrameSink(t *testing.T) {
 	t.Run("text feed waits for the bot's function call", func(t *testing.T) {
 		persona := stubPersona()
 		s, next := sinkWith(persona, true)
-		push(s, frames.NewLLMFullResponseStartFrame(), frames.NewLLMTextFrame("Let me check."),
-			frames.NewFunctionCallInProgressFrame("c", "f", json.RawMessage(`{}`), true, ""),
-			frames.NewLLMFullResponseEndFrame())
+		call := map[string]any{"function_name": "f", "tool_call_id": "c"}
+		push(s,
+			messageFrame(t, rtvi.TypeBotLLMStarted, nil),
+			messageFrame(t, rtvi.TypeBotLLMText, map[string]any{"text": "Let me check."}),
+			messageFrame(t, rtvi.TypeLLMFunctionCall, call),
+			messageFrame(t, rtvi.TypeBotLLMStopped, nil))
 		// Held: the call is still running.
 		wantMessages(t, persona)
-		push(s, frames.NewFunctionCallResultFrame("c", "f", json.RawMessage(`{}`), "1"))
-		push(s, botResponse(false, "It's sunny.")...)
+		push(s, messageFrame(t, rtvi.TypeLLMFunctionCallStop, call))
+		push(s, botResponse(t, "It's sunny.")...)
 		wantMessages(t, persona, "Let me check. It's sunny.")
 		if got := next.seen(); len(got) != 1 {
 			t.Fatalf("pushed %v", got)
@@ -289,7 +309,7 @@ func TestBotFrameSink(t *testing.T) {
 	t.Run("text feed ignores an empty response", func(t *testing.T) {
 		persona := stubPersona()
 		s, next := sinkWith(persona, true)
-		push(s, botResponse(false)...)
+		push(s, botResponse(t)...)
 		wantMessages(t, persona)
 		if got := next.seen(); len(got) != 0 {
 			t.Fatalf("pushed %v", got)
@@ -325,9 +345,20 @@ func (s *stubPersonaLLM) handler(name string) llm.FunctionCallHandler {
 
 func stubPersona() *Persona { return NewPersona("A caller.", "A goal.", newStubPersonaLLM()) }
 
-// botResponse is the frames of one LLM response, as the bot's (or the
-// persona's) LLM emits them.
-func botResponse(skipTTS bool, texts ...string) []frames.Frame {
+// botResponse is one of the bot's LLM responses, as the raw reports the
+// serializer keeps them as.
+func botResponse(t *testing.T, texts ...string) []frames.Frame {
+	t.Helper()
+	out := []frames.Frame{messageFrame(t, rtvi.TypeBotLLMStarted, nil)}
+	for _, text := range texts {
+		out = append(out, messageFrame(t, rtvi.TypeBotLLMText, map[string]any{"text": text}))
+	}
+	return append(out, messageFrame(t, rtvi.TypeBotLLMStopped, nil))
+}
+
+// personaResponse is the frames of one LLM response, as the persona's LLM
+// emits them.
+func personaResponse(skipTTS bool, texts ...string) []frames.Frame {
 	start, end := frames.NewLLMFullResponseStartFrame(), frames.NewLLMFullResponseEndFrame()
 	start.SkipTTS, end.SkipTTS = &skipTTS, &skipTTS
 	out := []frames.Frame{start}
@@ -414,7 +445,7 @@ func TestPersonaTurnRelay(t *testing.T) {
 
 	t.Run("a skip_tts response is sent as one text turn", func(t *testing.T) {
 		r, next, trace := relayOf()
-		response := botResponse(true, "Hi ", "there.")
+		response := personaResponse(true, "Hi ", "there.")
 		push(r, response...)
 		if got := sentTexts(next); !reflect.DeepEqual(got, []any{"Hi there."}) {
 			t.Fatalf("sent %v", got)

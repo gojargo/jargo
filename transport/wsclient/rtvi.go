@@ -6,7 +6,9 @@ import (
 	"sync"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline/capabilities"
+	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/processor/rtvi"
 	"github.com/gojargo/jargo/transport/wsclient/rtviclient"
 	"github.com/gojargo/jargo/transport/wsserver"
@@ -16,16 +18,51 @@ import (
 // bot-ready. It carries nothing:
 //
 //	events.OnSignal(tr.Events(), wsclient.EventBotReady, func(ctx context.Context) { … })
+//
+// The handler runs before any later message from the bot is dispatched, so it
+// acts on what the bot reported before it hears anything else from it. It runs
+// in the loop that reads from the bot, so it must return quickly and must not
+// wait for anything the bot sends next.
 const EventBotReady = "on_bot_ready"
+
+// RTVIInputTransport is an input transport that hands the bot's RTVI messages
+// to the pipeline downstream only.
+//
+// A pipeline worker puts its own RTVI processor ahead of the pipeline, and it
+// takes any InputTransportMessageFrame reaching it for a client's message to
+// it. The bot's messages must not reach it: it would answer them with errors
+// sent back to the bot.
+type RTVIInputTransport struct {
+	*InputTransport
+}
+
+// NewRTVIInputTransport builds an RTVI client input for t, over its session.
+// self is the input built on the returned one, as for NewInputTransport; nil
+// makes the input its own. Give its InputTransport to t with SetInput.
+func NewRTVIInputTransport(t *Transport, self InputDriver) *RTVIInputTransport {
+	in := &RTVIInputTransport{}
+	if self == nil {
+		self = in
+	}
+	in.InputTransport = NewInputTransport(t, self)
+	return in
+}
+
+// PushMessageFrame pushes the bot's message downstream, past nothing upstream
+// of the input.
+func (in *RTVIInputTransport) PushMessageFrame(ctx context.Context, f *frames.InputTransportMessageFrame) {
+	_ = in.Self().PushFrame(ctx, f, processor.Downstream)
+}
 
 // RTVITransport is a WebSocket client transport that speaks RTVI as a client to
 // a bot.
 //
 // It connects to a bot that runs an RTVI server transport (the eval transport,
-// say) and exchanges frames with it: the bot's RTVI server messages arrive as
-// pipeline frames, and outgoing frames (audio, RTVI client messages built by the
-// caller) are sent to the bot. It is the client-side counterpart to a bot
-// running an RTVI server transport.
+// say) and exchanges frames with it: the bot's RTVI server messages reach the
+// pipeline as raw messages, InputTransportMessageFrames pushed downstream, and
+// outgoing frames (audio, RTVI client messages built by the caller) are sent to
+// the bot. It is the client-side counterpart to a bot running an RTVI server
+// transport.
 //
 // It adds the client-ready and bot-ready handshake to Transport, and its
 // serializer defaults to rtviclient.Serializer. It raises EventConnected,
@@ -54,7 +91,11 @@ func NewRTVITransport(uri string, params Params) *RTVITransport {
 
 	r := &RTVITransport{Transport: newTransport("RTVIClientTransport", uri, params)}
 	r.self = r
-	r.events.Register(EventBotReady, false)
+	// The input hands the bot's messages downstream only.
+	r.SetInput(NewRTVIInputTransport(r.Transport, nil).InputTransport)
+	// Run inline: the bot can send its first reports right after bot-ready,
+	// and they must not reach the pipeline before the handler has run.
+	r.events.Register(EventBotReady, true)
 	return r
 }
 

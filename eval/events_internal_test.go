@@ -16,15 +16,26 @@ import (
 // newStream is a stream with a trace of its own.
 func newStream(botAudio bool) *EventStream { return NewEventStream(botAudio, NewTrace()) }
 
-// messageFrame is an RTVI server message as the client serializer keeps it: a
-// raw transport message.
-func messageFrame(t *testing.T, msgType string, data any) *frames.InputTransportMessageFrame {
+// rawMessage is one of the bot's RTVI messages, as it arrives. Nil data leaves
+// the message without any.
+func rawMessage(t *testing.T, msgType string, data any) []byte {
 	t.Helper()
-	raw, err := json.Marshal(map[string]any{"label": rtvi.MessageLabel, "type": msgType, "data": data})
+	message := map[string]any{"label": rtvi.MessageLabel, "type": msgType}
+	if data != nil {
+		message["data"] = data
+	}
+	raw, err := json.Marshal(message)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return frames.NewInputTransportMessageFrame(raw)
+	return raw
+}
+
+// messageFrame is one of the bot's RTVI messages, as the frame the client
+// receives it in: a raw transport message.
+func messageFrame(t *testing.T, msgType string, data any) *frames.InputTransportMessageFrame {
+	t.Helper()
+	return frames.NewInputTransportMessageFrame(rawMessage(t, msgType, data))
 }
 
 // bare is an event without the timing it carries for the measures.
@@ -66,63 +77,66 @@ func queued(s *EventStream) []map[string]any {
 // A reply carries the time of its first token; a response with no text none.
 func TestAReplyCarriesTheTimeOfItsFirstToken(t *testing.T) {
 	s := newStream(false)
-	s.FrameToEvent(frames.NewLLMFullResponseStartFrame())
-	s.FrameToEvent(frames.NewLLMTextFrame("Hello "))
-	s.FrameToEvent(frames.NewLLMTextFrame("world"))
-	event := s.FrameToEvent(frames.NewLLMFullResponseEndFrame())
+	s.RTVIMessageToEvent(rawMessage(t, rtvi.TypeBotLLMStarted, nil))
+	s.RTVIMessageToEvent(rawMessage(t, rtvi.TypeBotLLMText, map[string]any{"text": "Hello "}))
+	s.RTVIMessageToEvent(rawMessage(t, rtvi.TypeBotLLMText, map[string]any{"text": "world"}))
+	event := s.RTVIMessageToEvent(rawMessage(t, rtvi.TypeBotLLMStopped, nil))
 	startedAt, ok := event["started_at"].(float64)
 	if !ok || startedAt > s.Elapsed() {
 		t.Fatalf("started_at = %v, want the time of the first token", event["started_at"])
 	}
-	s.FrameToEvent(frames.NewLLMFullResponseStartFrame())
-	if event := s.FrameToEvent(frames.NewLLMFullResponseEndFrame()); event["started_at"] != nil {
+	s.RTVIMessageToEvent(rawMessage(t, rtvi.TypeBotLLMStarted, nil))
+	if event := s.RTVIMessageToEvent(rawMessage(t, rtvi.TypeBotLLMStopped, nil)); event["started_at"] != nil {
 		t.Fatalf("a response with no text carries a time: %v", event)
 	}
 }
 
 func TestLLMMarkerIsItsOwnEvent(t *testing.T) {
 	s := newStream(false)
-	s.FrameToEvent(frames.NewLLMFullResponseStartFrame())
-	s.FrameToEvent(frames.NewLLMTextFrame("Hello"))
+	s.RTVIMessageToEvent(rawMessage(t, rtvi.TypeBotLLMStarted, nil))
+	s.RTVIMessageToEvent(rawMessage(t, rtvi.TypeBotLLMText, map[string]any{"text": "Hello"}))
 	markers := []string{"●", "◐", "○"}
-	wantEvent(t, s.FrameToEvent(frames.NewLLMMarkerResponseFrame("● Hello", "●", "complete", markers)),
+	wantEvent(t, s.RTVIMessageToEvent(rawMessage(t, rtvi.TypeBotLLMMarker,
+		map[string]any{"raw": "● Hello", "text": "●", "kind": "complete", "markers": markers})),
 		map[string]any{keyType: EventLLMMarker, "text": "●", "kind": "complete", "raw": "● Hello", "markers": markers})
 	// The marker is not part of the reply's text.
-	wantEvent(t, s.FrameToEvent(frames.NewLLMFullResponseEndFrame()),
+	wantEvent(t, s.RTVIMessageToEvent(rawMessage(t, rtvi.TypeBotLLMStopped, nil)),
 		map[string]any{keyType: EventLLMResponse, "text": "Hello"})
 }
 
 func TestLLMMarkerBeforeTheReplyStartsIsDropped(t *testing.T) {
 	s := newStream(false)
 	s.InputSent()
-	wantNoEvent(t, s.FrameToEvent(frames.NewLLMMarkerResponseFrame("◐", "◐", "", nil)))
-	s.FrameToEvent(frames.NewLLMFullResponseStartFrame())
-	wantEvent(t, s.FrameToEvent(frames.NewLLMMarkerResponseFrame("◐", "◐", "short", nil)),
+	wantNoEvent(t, s.RTVIMessageToEvent(rawMessage(t, rtvi.TypeBotLLMMarker, map[string]any{"raw": "◐", "text": "◐"})))
+	s.RTVIMessageToEvent(rawMessage(t, rtvi.TypeBotLLMStarted, nil))
+	wantEvent(t, s.RTVIMessageToEvent(rawMessage(t, rtvi.TypeBotLLMMarker,
+		map[string]any{"raw": "◐", "text": "◐", "kind": "short"})),
 		map[string]any{keyType: EventLLMMarker, "text": "◐", "kind": "short", "raw": "◐", "markers": []string{}})
 }
 
 func TestLLMLifecycleAggregatesText(t *testing.T) {
 	s := newStream(false)
-	wantEvent(t, s.FrameToEvent(frames.NewLLMFullResponseStartFrame()), map[string]any{keyType: EventLLMStarted})
-	wantNoEvent(t, s.FrameToEvent(frames.NewLLMTextFrame("Hello ")))
-	wantNoEvent(t, s.FrameToEvent(frames.NewLLMTextFrame("world")))
-	wantEvent(t, s.FrameToEvent(frames.NewLLMFullResponseEndFrame()),
+	wantEvent(t, s.RTVIMessageToEvent(rawMessage(t, rtvi.TypeBotLLMStarted, nil)),
+		map[string]any{keyType: EventLLMStarted})
+	wantNoEvent(t, s.RTVIMessageToEvent(rawMessage(t, rtvi.TypeBotLLMText, map[string]any{"text": "Hello "})))
+	wantNoEvent(t, s.RTVIMessageToEvent(rawMessage(t, rtvi.TypeBotLLMText, map[string]any{"text": "world"})))
+	wantEvent(t, s.RTVIMessageToEvent(rawMessage(t, rtvi.TypeBotLLMStopped, nil)),
 		map[string]any{keyType: EventLLMResponse, "text": "Hello world"})
 }
 
 func TestInterruptionSuppressesStraggler(t *testing.T) {
 	s := newStream(false)
-	s.FrameToEvent(frames.NewLLMFullResponseStartFrame())
-	s.FrameToEvent(frames.NewLLMTextFrame("Tell me about Paris"))
-	wantEvent(t, s.FrameToEvent(messageFrame(t, rtvi.TypeBotInterrupted, nil)),
+	s.RTVIMessageToEvent(rawMessage(t, rtvi.TypeBotLLMStarted, nil))
+	s.RTVIMessageToEvent(rawMessage(t, rtvi.TypeBotLLMText, map[string]any{"text": "Tell me about Paris"}))
+	wantEvent(t, s.RTVIMessageToEvent(rawMessage(t, rtvi.TypeBotInterrupted, nil)),
 		map[string]any{keyType: EventBotInterrupted})
 	// Straggler from the interrupted response is dropped.
-	wantNoEvent(t, s.FrameToEvent(frames.NewLLMTextFrame(" what would")))
-	wantNoEvent(t, s.FrameToEvent(frames.NewLLMFullResponseEndFrame()))
+	wantNoEvent(t, s.RTVIMessageToEvent(rawMessage(t, rtvi.TypeBotLLMText, map[string]any{"text": " what would"})))
+	wantNoEvent(t, s.RTVIMessageToEvent(rawMessage(t, rtvi.TypeBotLLMStopped, nil)))
 	// The genuinely new response.
-	s.FrameToEvent(frames.NewLLMFullResponseStartFrame())
-	s.FrameToEvent(frames.NewLLMTextFrame("Tokyo"))
-	wantEvent(t, s.FrameToEvent(frames.NewLLMFullResponseEndFrame()),
+	s.RTVIMessageToEvent(rawMessage(t, rtvi.TypeBotLLMStarted, nil))
+	s.RTVIMessageToEvent(rawMessage(t, rtvi.TypeBotLLMText, map[string]any{"text": "Tokyo"}))
+	wantEvent(t, s.RTVIMessageToEvent(rawMessage(t, rtvi.TypeBotLLMStopped, nil)),
 		map[string]any{keyType: EventLLMResponse, "text": "Tokyo"})
 }
 
@@ -131,7 +145,7 @@ func TestInterruptionSuppressesStraggler(t *testing.T) {
 func TestUserTranscriptionFromMessage(t *testing.T) {
 	s := newStream(false)
 	input := func(data map[string]any) map[string]any {
-		return s.FrameToEvent(messageFrame(t, rtvi.TypeUserInput, data))
+		return s.RTVIMessageToEvent(rawMessage(t, rtvi.TypeUserInput, data))
 	}
 	wantEvent(t, input(map[string]any{"text": "hello", "input_type": "transcription", "final": true}),
 		map[string]any{keyType: EventUserTranscription, "transcript": "hello"})
@@ -145,7 +159,7 @@ func TestUserTranscriptionFromMessage(t *testing.T) {
 func TestBackchannelsFromMessages(t *testing.T) {
 	s := newStream(true)
 	output := func(outputType, status, accumulated string) map[string]any {
-		return s.FrameToEvent(messageFrame(t, rtvi.TypeBotOutput, map[string]any{
+		return s.RTVIMessageToEvent(rawMessage(t, rtvi.TypeBotOutput, map[string]any{
 			"text": "Mm-hmm.", "output_type": outputType, "spoken_status": status,
 			"spoken_progress": map[string]any{"accumulated_text": accumulated, "remaining_text": ""},
 		}))
@@ -154,10 +168,10 @@ func TestBackchannelsFromMessages(t *testing.T) {
 	wantEvent(t, output("backchannel", "completed", "Mm-hmm."),
 		map[string]any{keyType: EventBotBackchannel, "text": "Mm-hmm."})
 	wantNoEvent(t, output("sentence", "completed", "Mm-hmm."))
-	wantEvent(t, s.FrameToEvent(messageFrame(t, rtvi.TypeUserInput,
+	wantEvent(t, s.RTVIMessageToEvent(rawMessage(t, rtvi.TypeUserInput,
 		map[string]any{"text": "mhm", "input_type": "backchannel"})),
 		map[string]any{keyType: EventUserBackchannel, "text": "mhm"})
-	wantNoEvent(t, s.FrameToEvent(messageFrame(t, rtvi.TypeUserInput,
+	wantNoEvent(t, s.RTVIMessageToEvent(rawMessage(t, rtvi.TypeUserInput,
 		map[string]any{"text": "hello", "input_type": "transcription"})))
 }
 
@@ -176,7 +190,7 @@ func TestExpressionFromMessages(t *testing.T) {
 		})
 		var decoded map[string]any
 		_ = json.Unmarshal(data, &decoded)
-		event := s.FrameToEvent(messageFrame(t, rtvi.TypeBotOutput, decoded))
+		event := s.RTVIMessageToEvent(rawMessage(t, rtvi.TypeBotOutput, decoded))
 		if event == nil {
 			return nil
 		}
@@ -192,7 +206,7 @@ func TestExpressionFromMessages(t *testing.T) {
 		}
 	}
 
-	s.FrameToEvent(frames.NewLLMFullResponseStartFrame())
+	s.RTVIMessageToEvent(rawMessage(t, rtvi.TypeBotLLMStarted, nil))
 	// Spoken text counts as it is spoken, not when it is announced.
 	want(words(1, []string{"excited"}, rtvi.SpokenNew), "")
 	want(words(1, []string{"excited"}, rtvi.SpokenInProgress), "<<excited>>")
@@ -211,14 +225,27 @@ func TestExpressionFromMessages(t *testing.T) {
 	// Without expressive conversation, spoken text carries no delivery.
 	want(words(8, nil, rtvi.SpokenInProgress), "")
 	// Each response starts from the baseline.
-	s.FrameToEvent(frames.NewLLMFullResponseStartFrame())
+	s.RTVIMessageToEvent(rawMessage(t, rtvi.TypeBotLLMStarted, nil))
 	want(words(9, []string{}, rtvi.SpokenInProgress), "")
 }
 
-// The user aggregator consumes the STT's TranscriptionFrames to build the bot's
-// turn; the response is appended at the turn's end, not here.
-func TestTranscriptionFrameIsIgnoredByTheSink(t *testing.T) {
-	wantNoEvent(t, newStream(true).FrameToEvent(frames.NewTranscriptionFrame("Paris", "bot", "t")))
+// A bot that turned raw text on sends it alongside the bot-llm-text and
+// bot-tts-text the stream reads, so its text is not counted twice.
+func TestRawTextMessagesAreNoEvents(t *testing.T) {
+	s := newStream(true)
+	s.RTVIMessageToEvent(rawMessage(t, rtvi.TypeBotLLMStarted, nil))
+	wantNoEvent(t, s.RTVIMessageToEvent(rawMessage(t, rtvi.TypeLLMRawText, map[string]any{"text": "Hello"})))
+	s.RTVIMessageToEvent(rawMessage(t, rtvi.TypeBotLLMText, map[string]any{"text": "Hello"}))
+	wantEvent(t, s.RTVIMessageToEvent(rawMessage(t, rtvi.TypeBotLLMStopped, nil)),
+		map[string]any{keyType: EventLLMResponse, "text": "Hello"})
+	wantNoEvent(t, s.RTVIMessageToEvent(rawMessage(t, rtvi.TypeTTSRawText, map[string]any{"text": "Hello"})))
+}
+
+// user-input carries the same transcriptions.
+func TestTheDeprecatedUserTranscriptionIsNoEvent(t *testing.T) {
+	wantNoEvent(t, newStream(false).RTVIMessageToEvent(
+		rawMessage(t, rtvi.TypeUserTranscription, //nolint:staticcheck // sent
+			map[string]any{"text": "hello", "final": true})))
 }
 
 // The bot's reports about the harness (its raw VAD and turn-level speaking)
@@ -232,20 +259,7 @@ func TestReportedSpeakingAndVADEventsFromMessages(t *testing.T) {
 		rtvi.TypeVADUserStopped:      EventVADUserStoppedSpeaking,
 		rtvi.TypeBotInterrupted:      EventBotInterrupted,
 	} {
-		wantEvent(t, s.FrameToEvent(messageFrame(t, msgType, nil)), map[string]any{keyType: event})
-	}
-}
-
-// The harness's own VAD, speaking and interruption frames are internal plumbing,
-// not scenario events.
-func TestComputedVADAndSpeakingFramesAreIgnored(t *testing.T) {
-	s := newStream(true)
-	for _, f := range []frames.Frame{
-		frames.NewVADUserStartedSpeakingFrame(0, time.Now()), frames.NewVADUserStoppedSpeakingFrame(0, time.Now()),
-		frames.NewUserStartedSpeakingFrame(), frames.NewUserStoppedSpeakingFrame(),
-		frames.NewInterruptionFrame(),
-	} {
-		wantNoEvent(t, s.FrameToEvent(f))
+		wantEvent(t, s.RTVIMessageToEvent(rawMessage(t, msgType, nil)), map[string]any{keyType: event})
 	}
 }
 
@@ -255,13 +269,13 @@ func TestUserStartedSpeakingMessageDiscardsTheUnfinishedResponse(t *testing.T) {
 	s := newStream(true)
 	s.textBuffer = []string{"greeting"}
 	s.queue = []map[string]any{{keyType: EventUserTranscription, "transcript": "hi"}}
-	wantEvent(t, s.FrameToEvent(messageFrame(t, rtvi.TypeUserStartedSpeaking, nil)),
+	wantEvent(t, s.RTVIMessageToEvent(rawMessage(t, rtvi.TypeUserStartedSpeaking, nil)),
 		map[string]any{keyType: EventUserStartedSpeaking})
 	if len(s.textBuffer) != 0 {
 		t.Fatalf("text buffer = %v, want it dropped", s.textBuffer)
 	}
-	wantNoEvent(t, s.FrameToEvent(frames.NewLLMTextFrame(" and welcome")))
-	wantNoEvent(t, s.FrameToEvent(frames.NewLLMFullResponseEndFrame()))
+	wantNoEvent(t, s.RTVIMessageToEvent(rawMessage(t, rtvi.TypeBotLLMText, map[string]any{"text": " and welcome"})))
+	wantNoEvent(t, s.RTVIMessageToEvent(rawMessage(t, rtvi.TypeBotLLMStopped, nil)))
 	if got := queued(s); !reflect.DeepEqual(got, []map[string]any{{keyType: EventUserTranscription, "transcript": "hi"}}) {
 		t.Fatalf("queue = %v, want only the transcription", got)
 	}
@@ -286,7 +300,7 @@ func TestInterruptionKeepsTheUsersTurn(t *testing.T) {
 			waiting <- outcome{matched, err}
 		}()
 		for _, msgType := range messages {
-			if reported := s.FrameToEvent(messageFrame(t, msgType, nil)); reported != nil {
+			if reported := s.RTVIMessageToEvent(rawMessage(t, msgType, nil)); reported != nil {
 				s.Append(reported)
 			}
 		}
@@ -331,14 +345,17 @@ func TestInterruptionKeepsTheUsersTurn(t *testing.T) {
 
 func TestFunctionCallEvent(t *testing.T) {
 	s := newStream(false)
-	f := frames.NewFunctionCallInProgressFrame("c", "get_weather", json.RawMessage(`{"city":"Paris"}`), false, "")
-	wantEvent(t, s.FrameToEvent(f),
+	message := rawMessage(t, rtvi.TypeLLMFunctionCall, map[string]any{
+		"function_name": "get_weather", "tool_call_id": "c", "arguments": map[string]any{"city": "Paris"},
+	})
+	wantEvent(t, s.RTVIMessageToEvent(message),
 		map[string]any{keyType: EventFunctionCall, "name": "get_weather", "args": map[string]any{"city": "Paris"}})
 }
 
 func TestTTSTextOnlyInAudioMode(t *testing.T) {
-	wantNoEvent(t, newStream(false).FrameToEvent(frames.NewTTSTextFrame("x", frames.TextTypeSentence)))
-	wantEvent(t, newStream(true).FrameToEvent(frames.NewTTSTextFrame("spoken", frames.TextTypeSentence)),
+	tts := func(text string) []byte { return rawMessage(t, rtvi.TypeBotTTSText, map[string]any{"text": text}) }
+	wantNoEvent(t, newStream(false).RTVIMessageToEvent(tts("x")))
+	wantEvent(t, newStream(true).RTVIMessageToEvent(tts("spoken")),
 		map[string]any{keyType: EventTTSResponse, "text": "spoken"})
 }
 
@@ -346,13 +363,14 @@ func TestTTSTextOnlyInAudioMode(t *testing.T) {
 // matcher's aggregation decides whether that passes.
 func TestEmptyResponseStillEmitted(t *testing.T) {
 	s := newStream(false)
-	wantEvent(t, s.FrameToEvent(frames.NewLLMFullResponseStartFrame()), map[string]any{keyType: EventLLMStarted})
-	wantEvent(t, s.FrameToEvent(frames.NewLLMFullResponseEndFrame()),
+	wantEvent(t, s.RTVIMessageToEvent(rawMessage(t, rtvi.TypeBotLLMStarted, nil)),
+		map[string]any{keyType: EventLLMStarted})
+	wantEvent(t, s.RTVIMessageToEvent(rawMessage(t, rtvi.TypeBotLLMStopped, nil)),
 		map[string]any{keyType: EventLLMResponse, "text": ""})
 }
 
 func TestUnmappedMessageIgnored(t *testing.T) {
-	wantNoEvent(t, newStream(false).FrameToEvent(messageFrame(t, rtvi.TypeBotReady, map[string]any{})))
+	wantNoEvent(t, newStream(false).RTVIMessageToEvent(rawMessage(t, rtvi.TypeBotReady, map[string]any{})))
 }
 
 // metricsEvent is a metrics event reporting kinds.
@@ -370,7 +388,7 @@ func measurement(processor string, value float64) []any {
 func TestMetricsEvent(t *testing.T) {
 	t.Run("a metrics message becomes an event with its data", func(t *testing.T) {
 		data := map[string]any{"ttfb": measurement("DeepgramSTTService#0", 0.31)}
-		event := newStream(false).FrameToEvent(messageFrame(t, rtvi.TypeMetrics, data))
+		event := newStream(false).RTVIMessageToEvent(rawMessage(t, rtvi.TypeMetrics, data))
 		wantEvent(t, event, metricsEvent(data))
 	})
 	t.Run("metrics are recorded apart from the events seen", func(t *testing.T) {
@@ -407,13 +425,13 @@ func TestMetricsEvent(t *testing.T) {
 func TestFlowNodeEvent(t *testing.T) {
 	t.Run("a node entered becomes an event with its data and the node as text", func(t *testing.T) {
 		data := map[string]any{"node": "verify.ask", "previous_node": "start", "parent": "verify"}
-		event := newStream(false).FrameToEvent(messageFrame(t, rtvi.TypeFlowNodeEntered, data))
+		event := newStream(false).RTVIMessageToEvent(rawMessage(t, rtvi.TypeFlowNodeEntered, data))
 		wantEvent(t, event, map[string]any{keyType: EventFlowNode, keyData: data, keyText: "verify.ask"})
 	})
 	t.Run("an expectation matches the node", func(t *testing.T) {
 		m := newMatcher(nil, false)
-		m.stream.Append(m.stream.FrameToEvent(
-			messageFrame(t, rtvi.TypeFlowNodeEntered, map[string]any{"node": "verify.ask"})))
+		m.stream.Append(m.stream.RTVIMessageToEvent(
+			rawMessage(t, rtvi.TypeFlowNodeEntered, map[string]any{"node": "verify.ask"})))
 		exp := Expectation{Event: EventFlowNode, TextMatches: []string{"^verify[.]"}}
 		if f := mustMatch(t, m, exp, 1000); f != nil {
 			t.Fatalf("failure = %v", f)
@@ -428,20 +446,20 @@ func TestFlowNodeEvent(t *testing.T) {
 func TestServerMessageEvent(t *testing.T) {
 	t.Run("it becomes an event with its data and its text", func(t *testing.T) {
 		data := map[string]any{"done": true, "transcript": "héllo"}
-		event := newStream(false).FrameToEvent(messageFrame(t, rtvi.TypeServerMessage, data))
+		event := newStream(false).RTVIMessageToEvent(rawMessage(t, rtvi.TypeServerMessage, data))
 		wantEvent(t, event, map[string]any{
 			keyType: EventServerMessage, keyData: data, keyText: `{"done": true, "transcript": "héllo"}`,
 		})
 	})
 	t.Run("its text keeps the keys in the order the bot sent them", func(t *testing.T) {
 		raw := []byte(`{"label":"rtvi-ai","type":"server-message","data":{"z":[1,2.5,null],"a":{"b":"x\"y"}}}`)
-		event := newStream(false).FrameToEvent(frames.NewInputTransportMessageFrame(raw))
+		event := newStream(false).RTVIMessageToEvent(raw)
 		if got, want := event[keyText], `{"z": [1, 2.5, null], "a": {"b": "x\"y"}}`; got != want {
 			t.Fatalf("text = %v, want %v", got, want)
 		}
 	})
 	t.Run("string data is its own text", func(t *testing.T) {
-		event := newStream(false).FrameToEvent(messageFrame(t, rtvi.TypeServerMessage, "finished"))
+		event := newStream(false).RTVIMessageToEvent(rawMessage(t, rtvi.TypeServerMessage, "finished"))
 		if event[keyData] != "finished" || event[keyText] != "finished" {
 			t.Fatalf("event = %v, want the string as data and text", event)
 		}
@@ -450,47 +468,46 @@ func TestServerMessageEvent(t *testing.T) {
 
 // An image the bot reports becomes an image event.
 func TestBotImageBecomesImage(t *testing.T) {
-	event := newStream(false).FrameToEvent(messageFrame(t, evalws.BotImageType,
+	event := newStream(false).RTVIMessageToEvent(rawMessage(t, evalws.BotImageType,
 		map[string]any{"width": 64, "height": 32, "format": "RGB"}))
 	wantEvent(t, event, map[string]any{keyType: EventImage, "width": 64.0, "height": 32.0, "format": "RGB"})
 }
 
-// A call made outside the pipeline and reported into it is an event like the
-// pipeline's own.
-func TestAnExternalCallStartsAndStopsLikeThePipelinesOwn(t *testing.T) {
+// A call's end carries its id and whether it was canceled in its args, and its
+// name only when the bot reported one.
+func TestFunctionCallStoppedEvent(t *testing.T) {
 	s := newStream(false)
-	started := s.FrameToEvent(frames.NewExternalFunctionCallInProgressFrame("toolu_1", "run_tests",
-		json.RawMessage(`{"path":"x"}`)))
-	interim := frames.NewExternalFunctionCallResultFrame("toolu_1", "run_tests", json.RawMessage(`{}`), "1 of 3")
-	interim.IsFinal = false
-	progress := s.FrameToEvent(interim)
-	canceled := s.FrameToEvent(frames.NewExternalFunctionCallCancelFrame("toolu_1", "run_tests"))
-	done := s.FrameToEvent(frames.NewExternalFunctionCallResultFrame("toolu_2", "run_tests", json.RawMessage(`{}`), "ok"))
-
-	wantEvent(t, started,
-		map[string]any{keyType: EventFunctionCall, "name": "run_tests", "args": map[string]any{"path": "x"}})
-	wantNoEvent(t, progress)
+	canceled := s.RTVIMessageToEvent(rawMessage(t, rtvi.TypeLLMFunctionCallStop, map[string]any{
+		"function_name": "run_tests", "tool_call_id": "toolu_1", keyCanceled: true,
+	}))
 	wantEvent(t, canceled, map[string]any{
 		keyType: EventFunctionCallStopped, "name": "run_tests",
 		"args": map[string]any{"tool_call_id": "toolu_1", keyCanceled: true},
 	})
-	if want := map[string]any{"tool_call_id": "toolu_2", keyCanceled: false}; !reflect.DeepEqual(done["args"], want) {
-		t.Fatalf("args = %v, want %v", done["args"], want)
-	}
+	// At the bot's default report level only the id is reported.
+	done := s.RTVIMessageToEvent(rawMessage(t, rtvi.TypeLLMFunctionCallStop, map[string]any{"tool_call_id": "toolu_2"}))
+	wantEvent(t, done, map[string]any{
+		keyType: EventFunctionCallStopped, "name": nil,
+		"args": map[string]any{"tool_call_id": "toolu_2", keyCanceled: false},
+	})
+	started := s.RTVIMessageToEvent(rawMessage(t, rtvi.TypeLLMFunctionCall, map[string]any{"tool_call_id": "toolu_3"}))
+	wantEvent(t, started, map[string]any{keyType: EventFunctionCall, "name": nil, "args": map[string]any{}})
 }
 
-// The bot's speaking frames become events, and a wait for it to go quiet.
-func TestTheBotsSpeakingFramesBecomeEventsAndAWait(t *testing.T) {
+// The bot's speaking reports become events, and a wait for it to go quiet.
+func TestTheBotsSpeakingReportsBecomeEventsAndAWait(t *testing.T) {
 	ctx := t.Context()
 	s := newStream(false)
 	if s.BotSpeaking() || !s.WaitBotQuiet(ctx, 10*time.Millisecond) {
 		t.Fatal("a fresh stream's bot is not quiet")
 	}
-	wantEvent(t, s.FrameToEvent(frames.NewBotStartedSpeakingFrame()), map[string]any{keyType: EventBotStartedSpeaking})
+	wantEvent(t, s.RTVIMessageToEvent(rawMessage(t, rtvi.TypeBotStartedSpeaking, nil)),
+		map[string]any{keyType: EventBotStartedSpeaking})
 	if !s.BotSpeaking() || s.WaitBotQuiet(ctx, 50*time.Millisecond) {
 		t.Fatal("the bot is not speaking after it started")
 	}
-	wantEvent(t, s.FrameToEvent(frames.NewBotStoppedSpeakingFrame()), map[string]any{keyType: EventBotStoppedSpeaking})
+	wantEvent(t, s.RTVIMessageToEvent(rawMessage(t, rtvi.TypeBotStoppedSpeaking, nil)),
+		map[string]any{keyType: EventBotStoppedSpeaking})
 	if s.BotSpeaking() || !s.WaitBotQuiet(ctx, 10*time.Millisecond) {
 		t.Fatal("the bot is speaking after it stopped")
 	}
@@ -498,7 +515,7 @@ func TestTheBotsSpeakingFramesBecomeEventsAndAWait(t *testing.T) {
 
 func TestAnInterruptionCountsAsTheBotGoingQuiet(t *testing.T) {
 	s := newStream(false)
-	s.FrameToEvent(frames.NewBotStartedSpeakingFrame())
+	s.RTVIMessageToEvent(rawMessage(t, rtvi.TypeBotStartedSpeaking, nil))
 	s.mu.Lock()
 	s.interruptedLocked()
 	s.mu.Unlock()
@@ -523,7 +540,7 @@ func TestBotTurn(t *testing.T) {
 	t.Run("a turn after the input and the LLM restarting is the reply", func(t *testing.T) {
 		s := newStream(true)
 		s.InputSent()
-		s.FrameToEvent(frames.NewLLMFullResponseStartFrame()) // the bot's new response
+		s.RTVIMessageToEvent(rawMessage(t, rtvi.TypeBotLLMStarted, nil)) // the bot's new response
 		s.BotTurnStopped("Tokyo.")
 		if got := texts(s); !reflect.DeepEqual(got, []string{"Tokyo."}) {
 			t.Fatalf("responses = %v", got)
@@ -588,7 +605,7 @@ func TestBotEndedStream(t *testing.T) {
 	ctx := t.Context()
 	t.Run("a wait fails at once once the bot ended the call", func(t *testing.T) {
 		s := newStream(false)
-		s.FrameToEvent(frames.NewBotStartedSpeakingFrame())
+		s.RTVIMessageToEvent(rawMessage(t, rtvi.TypeBotStartedSpeaking, nil))
 		s.BotEnded()
 		s.Append(map[string]any{keyType: EventBotEnded})
 		if s.BotSpeaking() {

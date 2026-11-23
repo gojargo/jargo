@@ -260,7 +260,7 @@ func TestInterruptingSendDropsOpenBotTurn(t *testing.T) {
 		captureInjected(c)
 		turns := &countingTurns{}
 		c.botTurns = turns
-		c.stream.FrameToEvent(frames.NewBotStartedSpeakingFrame())
+		c.stream.RTVIMessageToEvent(rawMessage(t, rtvi.TypeBotStartedSpeaking, nil))
 		if err := c.Say(t.Context(), "Actually, tell me a joke instead."); err != nil {
 			t.Fatal(err)
 		}
@@ -329,10 +329,10 @@ func TestBotSpeechGate(t *testing.T) {
 		stream := newStream(true)
 		gate := newBotSpeechGate(stream, NewTrace(), &segmentStarts{})
 		before := time.Now()
-		stream.FrameToEvent(frames.NewBotStartedSpeakingFrame()) // the send talks over the bot
+		stream.RTVIMessageToEvent(rawMessage(t, rtvi.TypeBotStartedSpeaking, nil)) // the send talks over the bot
 		stream.InputSent()
-		stream.FrameToEvent(frames.NewBotStoppedSpeakingFrame())
-		stream.FrameToEvent(frames.NewBotStartedSpeakingFrame()) // the reply
+		stream.RTVIMessageToEvent(rawMessage(t, rtvi.TypeBotStoppedSpeaking, nil))
+		stream.RTVIMessageToEvent(rawMessage(t, rtvi.TypeBotStartedSpeaking, nil)) // the reply
 		after := time.Now()
 		down := runGate(t, gate, processor.Downstream,
 			segmentTranscript("He had seen sunken,", before),
@@ -345,11 +345,11 @@ func TestBotSpeechGate(t *testing.T) {
 		// The bot goes on speaking until it notices the user talking over it.
 		stream := newStream(true)
 		gate := newBotSpeechGate(stream, NewTrace(), &segmentStarts{})
-		stream.FrameToEvent(frames.NewBotStartedSpeakingFrame())
+		stream.RTVIMessageToEvent(rawMessage(t, rtvi.TypeBotStartedSpeaking, nil))
 		stream.InputSent()
 		stillSpeaking := time.Now()
-		stream.FrameToEvent(frames.NewBotStoppedSpeakingFrame())
-		stream.FrameToEvent(frames.NewBotStartedSpeakingFrame()) // the reply
+		stream.RTVIMessageToEvent(rawMessage(t, rtvi.TypeBotStoppedSpeaking, nil))
+		stream.RTVIMessageToEvent(rawMessage(t, rtvi.TypeBotStartedSpeaking, nil)) // the reply
 		reply := time.Now()
 		down := runGate(t, gate, processor.Downstream,
 			segmentTranscript("She swam past", stillSpeaking),
@@ -365,7 +365,7 @@ func TestBotSpeechGate(t *testing.T) {
 		gate := newBotSpeechGate(stream, NewTrace(), &segmentStarts{})
 		before := time.Now()
 		stream.ObservingBoundary()
-		stream.FrameToEvent(frames.NewBotStartedSpeakingFrame()) // a presence check
+		stream.RTVIMessageToEvent(rawMessage(t, rtvi.TypeBotStartedSpeaking, nil)) // a presence check
 		after := time.Now()
 		down := runGate(t, gate, processor.Downstream,
 			segmentTranscript("Do you have cities in mind?", before),
@@ -388,7 +388,7 @@ func TestBotSpeechGate(t *testing.T) {
 	})
 	t.Run("a plain transcript passes", func(t *testing.T) {
 		stream := newStream(true)
-		stream.FrameToEvent(frames.NewBotStartedSpeakingFrame())
+		stream.RTVIMessageToEvent(rawMessage(t, rtvi.TypeBotStartedSpeaking, nil))
 		stream.InputSent()
 		gate := newBotSpeechGate(stream, NewTrace(), &segmentStarts{})
 		down := runGate(t, gate, processor.Downstream, frames.NewTranscriptionFrame("untagged", "", ""))

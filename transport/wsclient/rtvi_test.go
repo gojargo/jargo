@@ -1,7 +1,8 @@
 package wsclient_test
 
 // Runs the RTVI client transport in a pipeline against a tiny RTVI WebSocket
-// server and checks the bot's server messages arrive as the right frames.
+// server and checks the bot's server messages arrive as raw messages, in order
+// and downstream only.
 
 import (
 	"context"
@@ -20,6 +21,8 @@ import (
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/processor/rtvi"
 	"github.com/gojargo/jargo/transport/wsclient"
+	"github.com/gojargo/jargo/transport/wsclient/rtviclient"
+	"github.com/gojargo/jargo/utils/events"
 )
 
 func rtviMessage(t *testing.T, msgType string, data map[string]any) []byte {
@@ -86,47 +89,82 @@ func (b *botServer) sawClientReady() bool {
 	return false
 }
 
-// sink records every frame that reaches the end of the pipeline.
-type sink struct {
+// recorder records the bot's messages that reach it, in the direction it
+// watches, and passes every frame on.
+type recorder struct {
 	*processor.Base
+	dir processor.Direction
 
-	mu   sync.Mutex
-	seen []frames.Frame
+	mu       sync.Mutex
+	messages []*frames.InputTransportMessageFrame
 }
 
-func newSink() *sink {
-	s := &sink{}
-	s.Base = processor.New("Sink", s)
-	return s
+func newRecorder(name string, dir processor.Direction) *recorder {
+	r := &recorder{dir: dir}
+	r.Base = processor.New(name, r)
+	return r
 }
 
-func (s *sink) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
-	if err := s.Base.ProcessFrame(ctx, f, dir); err != nil {
+func (r *recorder) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
+	if err := r.Base.ProcessFrame(ctx, f, dir); err != nil {
 		return err
 	}
-	s.mu.Lock()
-	s.seen = append(s.seen, f)
-	s.mu.Unlock()
-	return s.PushFrame(ctx, f, dir)
+	if mf, ok := f.(*frames.InputTransportMessageFrame); ok && dir == r.dir {
+		r.mu.Lock()
+		r.messages = append(r.messages, mf)
+		r.mu.Unlock()
+	}
+	return r.PushFrame(ctx, f, dir)
 }
 
-// conversation is the frames a scripted turn maps to, in the order they
+// reports are the bot's messages recorded so far, decoded, in the order they
 // arrived.
-func (s *sink) conversation() []frames.Frame {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	var out []frames.Frame
-	for _, f := range s.seen {
-		switch f.(type) {
-		case *frames.LLMFullResponseStartFrame, *frames.LLMTextFrame,
-			*frames.LLMFullResponseEndFrame, *frames.TranscriptionFrame:
-			out = append(out, f)
+func (r *recorder) reports(t *testing.T) []map[string]any {
+	t.Helper()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]map[string]any, 0, len(r.messages))
+	for _, mf := range r.messages {
+		var m map[string]any
+		if err := json.Unmarshal(mf.Message, &m); err != nil {
+			t.Fatalf("%s: %v", mf.Message, err)
 		}
+		out = append(out, m)
 	}
 	return out
 }
 
-func TestBotMessagesBecomeFrames(t *testing.T) {
+// runTransport runs tr's input between a recorder of what travels upstream of
+// it and one of what travels downstream, until done reports true or five
+// seconds pass, and returns the two recorders.
+func runTransport(t *testing.T, tr *wsclient.RTVITransport, done func(down *recorder) bool) (down, up *recorder) {
+	t.Helper()
+	up = newRecorder("Upstream", processor.Upstream)
+	down = newRecorder("Downstream", processor.Downstream)
+
+	noRTVI := false
+	worker := pipeline.NewWorker(pipeline.New(up, tr.Input(), down), pipeline.WorkerConfig{EnableRTVI: &noRTVI})
+	finished := make(chan error, 1)
+	go func() { finished <- worker.Run(t.Context()) }()
+
+	// Let connect, the handshake and the replies flow.
+	deadline := time.Now().Add(5 * time.Second)
+	for !done(down) && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	worker.StopWhenDone()
+	select {
+	case err := <-finished:
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the pipeline did not finish")
+	}
+	return down, up
+}
+
+func TestBotMessagesArriveAsRawMessages(t *testing.T) {
 	replies := [][]byte{
 		rtviMessage(t, "bot-llm-started", nil),
 		rtviMessage(t, "bot-llm-text", map[string]any{"text": "Paris"}),
@@ -137,45 +175,26 @@ func TestBotMessagesBecomeFrames(t *testing.T) {
 	}
 	server := newBotServer(t, replies)
 	tr := wsclient.NewRTVITransport(server.url, wsclient.Params{})
-	out := newSink()
+	// bot-ready, then the replies.
+	down, up := runTransport(t, tr, func(down *recorder) bool { return len(down.reports(t)) > len(replies) })
 
-	noRTVI := false
-	worker := pipeline.NewWorker(pipeline.New(tr.Input(), out), pipeline.WorkerConfig{EnableRTVI: &noRTVI})
-	done := make(chan error, 1)
-	go func() { done <- worker.Run(t.Context()) }()
-
-	// Let connect, the handshake and the replies flow.
-	deadline := time.Now().Add(5 * time.Second)
-	for len(out.conversation()) < len(replies) && time.Now().Before(deadline) {
-		time.Sleep(5 * time.Millisecond)
+	// The bot's reports arrived as raw messages, in the order it sent them.
+	reports := down.reports(t)
+	types := make([]any, 0, len(reports))
+	for _, m := range reports {
+		types = append(types, m["type"])
 	}
-	worker.StopWhenDone()
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("Run: %v", err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("the pipeline did not finish")
+	want := []any{"bot-ready", "bot-llm-started", "bot-llm-text", "bot-llm-stopped", "user-transcription"}
+	if !reflect.DeepEqual(types, want) {
+		t.Fatalf("messages = %v, want %v", types, want)
 	}
-
-	// The bot's server messages arrived as the expected pipeline frames, in
-	// order.
-	var kinds []reflect.Type
-	for _, f := range out.conversation() {
-		kinds = append(kinds, reflect.TypeOf(f))
+	if data, _ := reports[2]["data"].(map[string]any); data["text"] != "Paris" {
+		t.Errorf("text = %v, want Paris", data["text"])
 	}
-	want := []reflect.Type{
-		reflect.TypeFor[*frames.LLMFullResponseStartFrame](),
-		reflect.TypeFor[*frames.LLMTextFrame](),
-		reflect.TypeFor[*frames.LLMFullResponseEndFrame](),
-		reflect.TypeFor[*frames.TranscriptionFrame](),
-	}
-	if !reflect.DeepEqual(kinds, want) {
-		t.Fatalf("frames = %v, want %v", kinds, want)
-	}
-	if text, _ := out.conversation()[1].(*frames.LLMTextFrame); text.Text != "Paris" {
-		t.Errorf("text = %q, want Paris", text.Text)
+	// Downstream only: the worker's RTVI processor, ahead of the pipeline,
+	// would take them for a client's messages to it.
+	if got := up.reports(t); len(got) != 0 {
+		t.Errorf("messages pushed upstream: %v", got)
 	}
 
 	// The transport completed the handshake: the server saw client-ready.
@@ -184,5 +203,54 @@ func TestBotMessagesBecomeFrames(t *testing.T) {
 	}
 	if !tr.BotReady() {
 		t.Error("the transport is not bot-ready")
+	}
+}
+
+// recordingSerializer notes the type of every message it is handed, before it
+// deserializes it.
+type recordingSerializer struct {
+	*rtviclient.Serializer
+	record func(string)
+}
+
+func (s *recordingSerializer) Deserialize(data []byte) (frames.Frame, error) {
+	var message struct {
+		Type string `json:"type"`
+	}
+	_ = json.Unmarshal(data, &message)
+	s.record(message.Type)
+	return s.Serializer.Deserialize(data)
+}
+
+// The bot reports right after bot-ready; the handler, checking what the bot
+// reported, runs before any of that reaches the pipeline.
+func TestBotReadyIsHandledBeforeTheBotsNextMessage(t *testing.T) {
+	var (
+		mu    sync.Mutex
+		order []string
+	)
+	record := func(what string) {
+		mu.Lock()
+		order = append(order, what)
+		mu.Unlock()
+	}
+	recorded := func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]string(nil), order...)
+	}
+
+	server := newBotServer(t, [][]byte{rtviMessage(t, "bot-llm-started", nil)})
+	tr := wsclient.NewRTVITransport(server.url, wsclient.Params{
+		Serializer: &recordingSerializer{Serializer: rtviclient.New(), record: record},
+	})
+	events.OnSignal(tr.Events(), wsclient.EventBotReady, func(context.Context) {
+		time.Sleep(100 * time.Millisecond)
+		record("on_bot_ready")
+	})
+	runTransport(t, tr, func(*recorder) bool { return len(recorded()) >= 3 })
+
+	if want := []string{"on_bot_ready", "bot-ready", "bot-llm-started"}; !reflect.DeepEqual(recorded(), want) {
+		t.Fatalf("order = %v, want %v", recorded(), want)
 	}
 }

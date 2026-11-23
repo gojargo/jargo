@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/processor/rtvi"
 )
 
 // newSessionFor is a text-mode session of scenario against a bot that is never
@@ -33,10 +33,10 @@ func TestSendWaitsForTheBot(t *testing.T) {
 	ctx := t.Context()
 	t.Run("the send waits until the bot stops speaking", func(t *testing.T) {
 		s := bareSession(t, false)
-		s.stream.FrameToEvent(frames.NewBotStartedSpeakingFrame())
+		s.stream.RTVIMessageToEvent(rawMessage(t, rtvi.TypeBotStartedSpeaking, nil))
 		go func() {
 			time.Sleep(150 * time.Millisecond)
-			s.stream.FrameToEvent(frames.NewBotStoppedSpeakingFrame())
+			s.stream.RTVIMessageToEvent(rawMessage(t, rtvi.TypeBotStoppedSpeaking, nil))
 		}()
 		started := time.Now()
 		s.script.awaitBotQuiet(ctx)
@@ -64,11 +64,11 @@ func TestSendWaitsForTheBot(t *testing.T) {
 		// listens for the bot's next move, begins: the rest of that reply,
 		// however late its transcription lands, is not turn 2's response.
 		s := bareSession(t, true)
-		s.stream.FrameToEvent(frames.NewBotStartedSpeakingFrame())
+		s.stream.RTVIMessageToEvent(rawMessage(t, rtvi.TypeBotStartedSpeaking, nil))
 		s.stream.Append(map[string]any{keyType: EventResponse, "text": "Spring in Japan is gorgeous."})
 		go func() {
 			time.Sleep(100 * time.Millisecond)
-			s.stream.FrameToEvent(frames.NewBotStoppedSpeakingFrame())
+			s.stream.RTVIMessageToEvent(rawMessage(t, rtvi.TypeBotStoppedSpeaking, nil))
 		}()
 		s.script.awaitPreviousReply(ctx)
 		// The queued tail is gone, and one transcribed after the wait is stale.
@@ -82,13 +82,13 @@ func TestSendWaitsForTheBot(t *testing.T) {
 	})
 	t.Run("an observing turn takes the bot's next speech without its LLM", func(t *testing.T) {
 		s := bareSession(t, true)
-		s.stream.FrameToEvent(frames.NewBotStartedSpeakingFrame())
+		s.stream.RTVIMessageToEvent(rawMessage(t, rtvi.TypeBotStartedSpeaking, nil))
 		go func() {
 			time.Sleep(100 * time.Millisecond)
-			s.stream.FrameToEvent(frames.NewBotStoppedSpeakingFrame())
+			s.stream.RTVIMessageToEvent(rawMessage(t, rtvi.TypeBotStoppedSpeaking, nil))
 		}()
 		s.script.awaitPreviousReply(ctx)
-		s.stream.FrameToEvent(frames.NewBotStartedSpeakingFrame())
+		s.stream.RTVIMessageToEvent(rawMessage(t, rtvi.TypeBotStartedSpeaking, nil))
 		s.stream.BotTurnStopped("Are you still there?")
 		event, err := s.stream.NextEvent(ctx, EventResponse, time.Now().Add(50*time.Millisecond), FromNow, nil)
 		if err != nil || event["text"] != "Are you still there?" {

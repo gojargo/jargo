@@ -287,6 +287,9 @@ type InputDriver interface {
 	transport.InputDriver
 	// PushAudioFrame pushes a chunk of the audio received on the connection.
 	PushAudioFrame(ctx context.Context, f frames.InputAudioFrame)
+	// PushMessageFrame hands a message received on the connection to the
+	// pipeline, as the serializer deserialized it.
+	PushMessageFrame(ctx context.Context, f *frames.InputTransportMessageFrame)
 }
 
 // InputTransport receives frames over a WebSocket client connection: it
@@ -370,10 +373,16 @@ func (in *InputTransport) onMessage(ctx context.Context, _ *websocket.Conn, mess
 		return
 	}
 	if mf, ok := f.(*frames.InputTransportMessageFrame); ok {
-		in.PushTransportMessage(ctx, mf.Message)
+		in.self.PushMessageFrame(ctx, mf)
 		return
 	}
 	_ = in.PushFrame(ctx, f, processor.Downstream)
+}
+
+// PushMessageFrame hands a message from the server to the pipeline, in both
+// directions.
+func (in *InputTransport) PushMessageFrame(ctx context.Context, f *frames.InputTransportMessageFrame) {
+	in.PushTransportMessage(ctx, f.Message)
 }
 
 // OutputTransport sends frames over a WebSocket client connection: it

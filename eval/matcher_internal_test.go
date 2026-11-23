@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor/rtvi"
 )
 
@@ -122,7 +121,7 @@ func TestJudgeNoIsProvisional(t *testing.T) {
 	t.Run("a no while the bot speaks waits for the rest", func(t *testing.T) {
 		judge := newFakeJudge(VerdictNo, VerdictYes)
 		m := newMatcher(judge, true)
-		m.stream.FrameToEvent(frames.NewBotStartedSpeakingFrame())
+		m.stream.RTVIMessageToEvent(rawMessage(t, rtvi.TypeBotStartedSpeaking, nil))
 		m.stream.Append(map[string]any{keyType: EventResponse, "text": "Sure. Why don't skeletons fight?"})
 		go func() {
 			time.Sleep(100 * time.Millisecond)
@@ -774,7 +773,7 @@ func TestMetricsExpectation(t *testing.T) {
 func TestServerMessageExpectation(t *testing.T) {
 	serverMessage := func(t *testing.T, m *ExpectationMatcher, data any) {
 		t.Helper()
-		m.stream.Append(m.stream.FrameToEvent(messageFrame(t, rtvi.TypeServerMessage, data)))
+		m.stream.Append(m.stream.RTVIMessageToEvent(rawMessage(t, rtvi.TypeServerMessage, data)))
 	}
 	t.Run("it reads the data and records it", func(t *testing.T) {
 		m := newMatcher(nil, false)

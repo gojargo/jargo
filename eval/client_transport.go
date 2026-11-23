@@ -410,7 +410,7 @@ func (o *ClientOutputTransport) sendToBot(ctx context.Context, f *frames.OutputA
 // so the audio is buffered and re-emitted one 40 ms frame per tick, silence
 // filling the gaps.
 type ClientInputTransport struct {
-	*wsclient.InputTransport
+	*wsclient.RTVIInputTransport
 
 	recorder *ClientRecorder
 
@@ -423,7 +423,7 @@ type ClientInputTransport struct {
 
 func newClientInputTransport(t *wsclient.Transport, recorder *ClientRecorder) *ClientInputTransport {
 	in := &ClientInputTransport{recorder: recorder}
-	in.InputTransport = wsclient.NewInputTransport(t, in)
+	in.RTVIInputTransport = wsclient.NewRTVIInputTransport(t, in)
 	return in
 }
 

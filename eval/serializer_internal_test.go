@@ -9,7 +9,6 @@ import (
 
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor/rtvi"
-	"github.com/gojargo/jargo/transport/wsclient/rtviclient"
 	"github.com/gojargo/jargo/transport/wsserver/evalws"
 )
 
@@ -32,9 +31,8 @@ func deserialize(t *testing.T, s *ClientSerializer, data []byte) frames.Frame {
 	return f
 }
 
-// The bot's metrics and its server-message stay raw messages: the base
-// serializer drops both, and the harness reports the metrics as sent, and the
-// server-message's data as the bot's own.
+// The bot's metrics and its server-message stay raw messages: the harness
+// reports the metrics as sent, and the server-message's data as the bot's own.
 func TestClientSerializerKeepsMetricsAndServerMessagesRaw(t *testing.T) {
 	for msgType, data := range map[string]map[string]any{
 		rtvi.TypeMetrics:       {"ttfb": []any{map[string]any{"processor": "DeepgramSTTService#0", "value": 0.31}}},
@@ -74,14 +72,13 @@ func TestClientSerializer(t *testing.T) {
 			t.Fatalf("frame = %+v, want it at the STT rate", f)
 		}
 	})
-	t.Run("user-transcription is dropped", func(t *testing.T) {
-		// user-input carries the same transcriptions; the base serializer would
-		// make this a TranscriptionFrame, the STT's transcription of the bot's
-		// audio.
+	t.Run("user-transcription stays a raw message", func(t *testing.T) {
+		// Not a TranscriptionFrame, which in the harness is its STT's
+		// transcription of the bot's audio.
 		f := deserialize(t, NewClientSerializer(), serverMessage(t, rtvi.TypeUserTranscription, //nolint:staticcheck // sent
 			map[string]any{"text": "hello", "user_id": "u", "final": true}))
-		if f != nil {
-			t.Fatalf("frame = %T, want none", f)
+		if _, ok := f.(*frames.InputTransportMessageFrame); !ok {
+			t.Fatalf("frame = %T, want the raw message", f)
 		}
 	})
 	t.Run("bot-output and user-input stay raw messages", func(t *testing.T) {
@@ -97,51 +94,40 @@ func TestClientSerializer(t *testing.T) {
 			}
 		}
 	})
-	t.Run("a canceled function call is not a system frame", func(t *testing.T) {
-		// Queued like the in-progress and result frames, so it cannot overtake
-		// the bot's earlier function-call reports.
-		f := deserialize(t, NewClientSerializer(), serverMessage(t, rtvi.TypeLLMFunctionCallStop, map[string]any{
-			"function_name": "write_report", "tool_call_id": "call_1", keyCanceled: true,
-		}))
-		cancel, ok := f.(*FunctionCallCancelFrame)
-		if !ok {
-			t.Fatalf("frame = %T, want a FunctionCallCancelFrame", f)
-		}
-		if _, system := f.(frames.SystemFrame); system || frames.Interruptible(f) {
-			t.Fatal("the cancel is a system frame or interruptible")
-		}
-		if cancel.ToolName != "write_report" || cancel.ToolCallID != "call_1" {
-			t.Fatalf("frame = %+v", cancel)
-		}
-	})
-	t.Run("a finished function call is a result", func(t *testing.T) {
-		f := deserialize(t, NewClientSerializer(), serverMessage(t, rtvi.TypeLLMFunctionCallStop, map[string]any{
-			"function_name": "write_report", "tool_call_id": "call_1", keyCanceled: false,
-		}))
-		if _, ok := f.(*frames.FunctionCallResultFrame); !ok {
-			t.Fatalf("frame = %T, want a FunctionCallResultFrame", f)
+	t.Run("function calls are kept like the bot's other reports", func(t *testing.T) {
+		// The same kind of frame as the bot's other reports, so none can
+		// overtake another: they reach the harness in the order the bot sent
+		// them.
+		for _, canceled := range []bool{true, false} {
+			f, ok := deserialize(t, NewClientSerializer(), serverMessage(t, rtvi.TypeLLMFunctionCallStop, map[string]any{
+				"function_name": "write_report", "tool_call_id": "call_1", keyCanceled: canceled,
+			})).(*frames.InputTransportMessageFrame)
+			var message struct {
+				Data map[string]any `json:"data"`
+			}
+			if ok {
+				_ = json.Unmarshal(f.Message, &message)
+			}
+			if !ok || message.Data[keyCanceled] != canceled {
+				t.Fatalf("canceled %v: frame = %+v, want the raw message", canceled, f)
+			}
 		}
 	})
 	t.Run("generic messages delegate to the base", func(t *testing.T) {
 		s := NewClientSerializer()
-		started := deserialize(t, s, serverMessage(t, rtvi.TypeBotLLMStarted, nil))
-		if _, ok := started.(*frames.LLMFullResponseStartFrame); !ok {
-			t.Fatal("bot-llm-started is not an LLMFullResponseStartFrame")
+		started, ok := deserialize(t, s, serverMessage(t, rtvi.TypeBotLLMStarted, nil)).(*frames.InputTransportMessageFrame)
+		var message map[string]any
+		if ok {
+			_ = json.Unmarshal(started.Message, &message)
 		}
-		if f := deserialize(t, s, serverMessage(t, rtvi.TypeBotReady, nil)); f != nil {
-			t.Fatalf("bot-ready = %T, want none", f)
+		if !ok || message["type"] != rtvi.TypeBotLLMStarted {
+			t.Fatalf("bot-llm-started = %+v, want the raw message", started)
+		}
+		if _, ok := deserialize(t, s, serverMessage(t, rtvi.TypeBotReady, nil)).(*frames.InputTransportMessageFrame); !ok {
+			t.Fatal("bot-ready is not a raw message")
 		}
 		if f := deserialize(t, s, []byte("not json")); f != nil {
 			t.Fatalf("not json = %T, want none", f)
-		}
-	})
-	t.Run("the base still maps user-transcription to a transcription", func(t *testing.T) {
-		// Only the harness's serializer diverts it; the generic one still
-		// produces a TranscriptionFrame for other clients.
-		f, err := rtviclient.New().Deserialize(serverMessage(t, rtvi.TypeUserTranscription, //nolint:staticcheck // sent
-			map[string]any{"text": "hi", "final": true}))
-		if _, ok := f.(*frames.TranscriptionFrame); err != nil || !ok {
-			t.Fatalf("frame = %T, %v", f, err)
 		}
 	})
 	t.Run("a bot image stays a raw message", func(t *testing.T) {

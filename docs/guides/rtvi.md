@@ -134,8 +134,10 @@ ignored.
 
 A receiver ignores the fields and message types it does not know, so a later
 protocol version can add them: the server ignores an unknown field in a client
-message's data, and the client side (`transport/wsclient/rtviclient`) skips a
-server message it has no mapping for.
+message's data, and the client side (`transport/wsclient/rtviclient`) hands
+every server message to its pipeline as the raw message it is, an
+`InputTransportMessageFrame` pushed downstream, so whatever reads them there
+passes over the ones it does not know.
 
 ### Messages of your own
 

@@ -1047,7 +1047,7 @@ func TestSimulationEarlyEndingsActivityKeepsALullFromEndingTheRun(t *testing.T) 
 		r.say(map[string]any{"type": "llm_started"})
 		for range 3 {
 			time.Sleep(100 * time.Millisecond)
-			r.stream.FrameToEvent(frames.NewLLMTextFrame("token "))
+			r.stream.RTVIMessageToEvent(rawMessage(t, rtvi.TypeBotLLMText, map[string]any{"text": "token "}))
 		}
 		r.endCall(t, true, "done")
 	})

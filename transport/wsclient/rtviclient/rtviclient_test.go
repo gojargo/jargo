@@ -31,116 +31,114 @@ func deserialize(t *testing.T, data []byte) frames.Frame {
 	return f
 }
 
-// as asserts f is a T and returns it.
-func as[T frames.Frame](t *testing.T, f frames.Frame) T {
+// raw asserts the bot's message of msgType with data stayed a raw message, and
+// returns the message the frame carries, decoded.
+func raw(t *testing.T, msgType string, data map[string]any) map[string]any {
 	t.Helper()
-	got, ok := f.(T)
+	f, ok := deserialize(t, server(t, msgType, data)).(*frames.InputTransportMessageFrame)
 	if !ok {
-		var want T
-		t.Fatalf("got %T, want %T", f, want)
+		t.Fatalf("%s: got %T, want a raw message", msgType, f)
 	}
-	return got
+	var message map[string]any
+	if err := json.Unmarshal(f.Message, &message); err != nil {
+		t.Fatalf("%s: %v", f.Message, err)
+	}
+	if message["type"] != msgType {
+		t.Fatalf("type = %v, want %s", message["type"], msgType)
+	}
+	// A message built without data carries a null one.
+	var want any
+	if data != nil {
+		want = jsonRoundTrip(t, data)
+	}
+	if !reflect.DeepEqual(message["data"], want) {
+		t.Fatalf("%s: data = %v, want %v", msgType, message["data"], want)
+	}
+	return message
 }
 
-func TestLLMLifecycle(t *testing.T) {
-	as[*frames.LLMFullResponseStartFrame](t, deserialize(t, server(t, "bot-llm-started", nil)))
-	text := as[*frames.LLMTextFrame](t, deserialize(t, server(t, "bot-llm-text", map[string]any{"text": "Paris"})))
-	if text.Text != "Paris" {
-		t.Errorf("text = %q, want Paris", text.Text)
+// jsonRoundTrip is v as JSON decodes it.
+func jsonRoundTrip(t *testing.T, v any) any {
+	t.Helper()
+	encoded, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
 	}
-	as[*frames.LLMFullResponseEndFrame](t, deserialize(t, server(t, "bot-llm-stopped", nil)))
+	var out any
+	if err := json.Unmarshal(encoded, &out); err != nil {
+		t.Fatal(err)
+	}
+	return out
 }
 
-func TestLLMMarker(t *testing.T) {
-	f := as[*frames.LLMMarkerResponseFrame](t, deserialize(t, server(t, "bot-llm-marker", map[string]any{
-		"text": "◐", "kind": "short", "raw": "◐ wait", "markers": []string{"●", "◐", "○"},
-	})))
-	if f.Marker != "◐" || f.Kind != "short" || f.Raw != "◐ wait" {
-		t.Errorf("(marker, kind, raw) = (%q, %q, %q), want (◐, short, ◐ wait)", f.Marker, f.Kind, f.Raw)
-	}
-	if want := []string{"●", "◐", "○"}; !reflect.DeepEqual(f.Markers, want) {
-		t.Errorf("markers = %q, want %q", f.Markers, want)
-	}
-
-	// A response that carried no marker reports an empty text.
-	f = as[*frames.LLMMarkerResponseFrame](t, deserialize(t, server(t, "bot-llm-marker", map[string]any{
-		"text": "", "raw": "Hi",
-	})))
-	if f.Marker != "" || f.Kind != "" || f.Raw != "Hi" {
-		t.Errorf("(marker, kind, raw) = (%q, %q, %q), want (none, none, Hi)", f.Marker, f.Kind, f.Raw)
-	}
+// Reports about the bot's own LLM: this pipeline's LLM frames would be about
+// its own.
+func TestLLMReportsStayRawMessages(t *testing.T) {
+	raw(t, "bot-llm-started", nil)
+	raw(t, "bot-llm-text", map[string]any{"text": "Paris"})
+	raw(t, "bot-llm-marker", map[string]any{"text": "◐", "kind": "short", "raw": "◐ wait"})
+	raw(t, "bot-llm-stopped", nil)
 }
 
-func TestTTSText(t *testing.T) {
-	f := as[*frames.TTSTextFrame](t, deserialize(t, server(t, "bot-tts-text", map[string]any{"text": "Hello there!"})))
-	if f.Text != "Hello there!" {
-		t.Errorf("text = %q, want Hello there!", f.Text)
-	}
+func TestTTSTextStaysARawMessage(t *testing.T) {
+	raw(t, "bot-tts-text", map[string]any{"text": "Hello there!"})
 }
 
-func TestSpeakingAndInterruption(t *testing.T) {
-	as[*frames.BotStartedSpeakingFrame](t, deserialize(t, server(t, "bot-started-speaking", nil)))
-	as[*frames.BotStoppedSpeakingFrame](t, deserialize(t, server(t, "bot-stopped-speaking", nil)))
-	as[*frames.InterruptionFrame](t, deserialize(t, server(t, "bot-interrupted", nil)))
-}
-
-func TestUserTranscriptionFinalVsInterim(t *testing.T) {
-	final := as[*frames.TranscriptionFrame](t, deserialize(t, server(t, "user-transcription", map[string]any{
-		"text": "hello", "user_id": "u", "timestamp": "t", "final": true,
-	})))
-	if final.Text != "hello" || final.UserID != "u" {
-		t.Errorf("final = (%q, %q), want (hello, u)", final.Text, final.UserID)
-	}
-
-	interim := as[*frames.InterimTranscriptionFrame](t, deserialize(t, server(t, "user-transcription", map[string]any{
-		"text": "hel", "final": false,
-	})))
-	if interim.Text != "hel" {
-		t.Errorf("interim text = %q, want hel", interim.Text)
+// Reports about the bot's own output: this pipeline's speaking frames and
+// interruptions would be about its own.
+func TestSpeakingAndInterruptionStayRawMessages(t *testing.T) {
+	for _, msgType := range []string{"bot-started-speaking", "bot-stopped-speaking", "bot-interrupted"} {
+		raw(t, msgType, nil)
 	}
 }
 
-func TestFunctionCall(t *testing.T) {
-	f := as[*frames.FunctionCallInProgressFrame](t, deserialize(t, server(t, "llm-function-call-in-progress",
-		map[string]any{
-			"function_name": "get_weather",
-			"tool_call_id":  "c1",
-			"arguments":     map[string]any{"city": "Paris"},
-		})))
-	if f.ToolName != "get_weather" {
-		t.Errorf("function name = %q, want get_weather", f.ToolName)
-	}
-	var args map[string]any
-	if err := json.Unmarshal(f.Args, &args); err != nil {
-		t.Fatalf("arguments %s: %v", f.Args, err)
-	}
-	if want := map[string]any{"city": "Paris"}; !reflect.DeepEqual(args, want) {
-		t.Errorf("arguments = %v, want %v", args, want)
+// The bot's transcription of this pipeline's speech: a TranscriptionFrame would
+// pass it off as this pipeline's own.
+func TestUserTranscriptionStaysARawMessage(t *testing.T) {
+	raw(t, "user-transcription", map[string]any{"text": "hello", "user_id": "u", "timestamp": "t", "final": true})
+	raw(t, "user-transcription", map[string]any{"text": "hel", "final": false})
+}
+
+// Reports about the bot's own function calls: this pipeline's function call
+// frames would be about its own.
+func TestFunctionCallsStayRawMessages(t *testing.T) {
+	raw(t, "llm-function-call-in-progress", map[string]any{
+		"function_name": "get_weather",
+		"tool_call_id":  "c1",
+		"arguments":     map[string]any{"city": "Paris"},
+	})
+	raw(t, "llm-function-call-stopped", map[string]any{
+		"function_name": "get_weather", "tool_call_id": "c1", "cancelled": true, //nolint:misspell // the protocol's spelling
+	})
+}
+
+func TestEveryRTVIMessageStaysRaw(t *testing.T) {
+	// The last is a message type a later protocol version adds.
+	for _, msgType := range []string{"bot-ready", "metrics", "server-message", "bot-something-new"} {
+		raw(t, msgType, map[string]any{})
 	}
 }
 
-func TestUnknownAndNonRTVIDropped(t *testing.T) {
+// The frame carries the message as the bot sent it, a field the client does not
+// know included.
+func TestTheMessageIsCarriedAsSent(t *testing.T) {
+	data := server(t, "bot-llm-text", map[string]any{"text": "Paris", "x_unknown": 1})
+	f, ok := deserialize(t, data).(*frames.InputTransportMessageFrame)
+	if !ok || string(f.Message) != string(data) {
+		t.Fatalf("frame = %v, want the message as sent", f)
+	}
+}
+
+func TestNonRTVIDropped(t *testing.T) {
 	cases := map[string][]byte{
-		"bot-ready": server(t, "bot-ready", map[string]any{"version": "2.0.0"}),
-		"metrics":   server(t, "metrics", map[string]any{}),
-		// A message type a later protocol version adds.
-		"unknown":  server(t, "bot-something-new", map[string]any{"text": "hi"}),
-		"no label": []byte(`{"type": "bot-llm-text"}`),
-		"not json": []byte("not json"),
+		"no label":      []byte(`{"type": "bot-llm-text"}`),
+		"not json":      []byte("not json"),
+		"not an object": []byte(`["rtvi-ai"]`),
 	}
 	for name, data := range cases {
 		if f := deserialize(t, data); f != nil {
 			t.Errorf("%s: got %T, want no frame", name, f)
 		}
-	}
-}
-
-// TestUnknownFieldsIgnored checks a field the client does not know, which a
-// later protocol version may add to a message, leaves the message as it was.
-func TestUnknownFieldsIgnored(t *testing.T) {
-	data := server(t, "bot-llm-text", map[string]any{"text": "Paris", "x_unknown": 1})
-	if text := as[*frames.LLMTextFrame](t, deserialize(t, data)); text.Text != "Paris" {
-		t.Errorf("text = %q, want Paris", text.Text)
 	}
 }
 

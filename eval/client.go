@@ -63,21 +63,6 @@ var errNotStarted = errors.New("eval: the client's pipeline is not started")
 // errNoUserTTS is a turn with pauses and no voice to speak it.
 var errNoUserTTS = errors.New("eval: speaking a turn with pauses needs a user voice")
 
-// botFrame reports whether f is a frame the bot produced. The sink turns these
-// into events and stops them there: everything downstream of the sink speaks
-// for the user, and must never see the bot's text or reports as its own input.
-// The lifecycle frames pass.
-func botFrame(f frames.Frame) bool {
-	switch f.(type) {
-	case *frames.LLMFullResponseStartFrame, *frames.LLMTextFrame, *frames.LLMMarkerResponseFrame,
-		*frames.LLMFullResponseEndFrame, *frames.TTSTextFrame, *frames.BotStartedSpeakingFrame,
-		*frames.BotStoppedSpeakingFrame, *frames.FunctionCallInProgressFrame, *frames.FunctionCallResultFrame,
-		*FunctionCallCancelFrame, *frames.InputTransportMessageFrame:
-		return true
-	}
-	return false
-}
-
 // closeDescription is how the bot closed the connection, with its close code
 // and reason when it sent them.
 func closeDescription(err error) string {
@@ -265,8 +250,8 @@ type botTurnResetter interface {
 
 // botFrameSink is where the bot's output stops and the user's turns start.
 //
-// The bot's frames become events on the stream and go no further. The user's
-// turns are injected here, past the bot's side of the pipeline, so an
+// The bot's RTVI messages become events on the stream and go no further. The
+// user's turns are injected here, past the bot's side of the pipeline, so an
 // interruption there cannot drop them.
 //
 // Two rules apply. The aggregator's interruption, raised when the bot speaks,
@@ -297,30 +282,27 @@ func (s *botFrameSink) inject(ctx context.Context, f frames.Frame) error {
 	return s.PushFrame(ctx, f, processor.Downstream)
 }
 
-// ProcessFrame turns the bot's frames into events.
+// ProcessFrame turns the bot's RTVI messages into events.
 func (s *botFrameSink) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
 	if err := s.Base.ProcessFrame(ctx, f, dir); err != nil {
 		return err
 	}
-	// The bot's frames arrive downstream, from the input transport. What
+	// The bot's side arrives downstream, from the input transport. What
 	// travels upstream is the user side's own (a persona's function call, a
 	// TTS's lifecycle), not bot output, and passes through as is.
 	if dir != processor.Downstream {
 		return s.PushFrame(ctx, f, dir)
 	}
-	if event := s.stream.FrameToEvent(f); event != nil {
-		s.stream.Append(event)
-		if s.personaHears {
-			if err := s.answer(ctx, s.persona.Hear(event)); err != nil {
-				return err
-			}
-		}
+	if message, ok := f.(*frames.InputTransportMessageFrame); ok {
+		// The bot's RTVI messages become events and stop here. Everything
+		// downstream of the sink speaks for the user (a persona LLM, the user
+		// TTS, the output) and must never take them as its own input.
+		return s.botMessage(ctx, message)
 	}
+	// Not one of the bot's RTVI messages, but activity on its side all the same.
+	s.stream.Touch()
 	if _, ok := f.(*botSegmentTranscribedFrame); ok {
 		s.stream.BotSegmentTranscribed()
-		return nil
-	}
-	if botFrame(f) {
 		return nil
 	}
 	switch fr := f.(type) {
@@ -333,6 +315,20 @@ func (s *botFrameSink) ProcessFrame(ctx context.Context, f frames.Frame, dir pro
 		return s.answer(ctx, fr)
 	}
 	return s.PushFrame(ctx, f, dir)
+}
+
+// botMessage appends the event one of the bot's RTVI messages maps to, if any,
+// and has a persona that hears through the sink hear it.
+func (s *botFrameSink) botMessage(ctx context.Context, message *frames.InputTransportMessageFrame) error {
+	event := s.stream.RTVIMessageToEvent(message.Message)
+	if event == nil {
+		return nil
+	}
+	s.stream.Append(event)
+	if s.personaHears {
+		return s.answer(ctx, s.persona.Hear(event))
+	}
+	return nil
 }
 
 // answer pushes the frame that has the persona answer, unless there is none or
