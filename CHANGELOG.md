@@ -152,6 +152,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   that call start.
 - A turn-completion configuration sent while filtering is off now applies when
   filtering is turned on later.
+- **`ExpandPhoneNumbers` no longer spaces out the digits of long decimals and
+  of currency amounts** such as `$2500000000`, which the voice formatter then
+  read as "two dollars 5 0 0 0 0 0 0 0 0".
 
 ## [0.7.0] - 2026-11-20
 

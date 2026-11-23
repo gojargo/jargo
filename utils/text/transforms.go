@@ -338,13 +338,15 @@ var phoneSteps = []phoneStep{
 // ExpandPhoneNumbers spaces out phone-number digits so a synthesizer reads them
 // one by one, e.g. "123-456-7890" → "1 2 3 4 5 6 7 8 9 0". A number must not
 // start or end next to another digit, so digits inside a longer number are not
-// split; a number that does is looked for again from the next character.
+// split; a number that does is looked for again from the next character. The
+// fraction of a decimal ("3.1415926535") and a currency amount ("$2500000000")
+// are not phone numbers either.
 func ExpandPhoneNumbers(text string) string {
 	var b strings.Builder
 	last := 0
 	for i := 0; i < len(text); {
 		end, ok := 0, false
-		if i == 0 || !isDigit(text[i-1]) {
+		if phoneCanStartAt(text, i) {
 			end, ok = matchPhone(text, i)
 		}
 		if !ok {
@@ -367,6 +369,23 @@ func ExpandPhoneNumbers(text string) string {
 	}
 	b.WriteString(text[last:])
 	return b.String()
+}
+
+// phoneCanStartAt reports whether a phone number may start at byte offset i:
+// not after a digit (inside a longer number), not after a digit and a dot (the
+// fraction of a decimal) and not after a currency symbol (an amount).
+func phoneCanStartAt(text string, i int) bool {
+	if i == 0 {
+		return true
+	}
+	if isDigit(text[i-1]) {
+		return false
+	}
+	if text[i-1] == '.' && i >= 2 && isDigit(text[i-2]) {
+		return false
+	}
+	prev, _ := utf8.DecodeLastRuneInString(text[:i])
+	return !strings.ContainsRune("$€£¥₹", prev)
 }
 
 // matchPhone matches a phone number starting at byte offset p and returns

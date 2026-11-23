@@ -228,6 +228,40 @@ func TestExpandPhoneNumbersLooksAgainFromTheNextCharacter(t *testing.T) {
 	})
 }
 
+// The digits after a decimal point are not a phone number.
+func TestExpandPhoneNumbersLeavesADecimalFractionAlone(t *testing.T) {
+	assertTransform(t, "ExpandPhoneNumbers", ExpandPhoneNumbers, map[string]string{
+		"Pi is approximately 3.1415926535.": "Pi is approximately 3.1415926535.",
+		"Latitude 40.7127753000":            "Latitude 40.7127753000",
+	})
+}
+
+func TestExpandPhoneNumbersLeavesACurrencyAmountAlone(t *testing.T) {
+	assertTransform(t, "ExpandPhoneNumbers", ExpandPhoneNumbers, map[string]string{
+		"The budget is $2500000000.":   "The budget is $2500000000.",
+		"It cost ₹2500000000 to build": "It cost ₹2500000000 to build",
+	})
+}
+
+func TestExpandPhoneNumbersReadsADottedNumberWithACountryCode(t *testing.T) {
+	assertTransform(t, "ExpandPhoneNumbers", ExpandPhoneNumbers, map[string]string{
+		"Call 1.800.555.1234 or 800.555.1234": "Call 1 8 0 0 5 5 5 1 2 3 4 or 8 0 0 5 5 5 1 2 3 4",
+	})
+}
+
+// The phone transform runs before the currency one, so it must leave the
+// amount whole.
+func TestVoiceFormatterDoesNotReadATenDigitAmountAsAPhoneNumber(t *testing.T) {
+	f, err := NewVoiceFormatter(DefaultFormatterOptions())
+	if err != nil {
+		t.Fatalf("NewVoiceFormatter: %v", err)
+	}
+	got := format(t, f, "The budget is $2500000000.")
+	if want := "The budget is two billion, five hundred million dollars."; got != want {
+		t.Errorf("VoiceFormatter = %q, want %q", got, want)
+	}
+}
+
 func TestNormalizeAcronyms(t *testing.T) {
 	got := NormalizeAcronyms("Use the API or HTTP endpoint")
 	want := "Use the A P I or H T T P endpoint"
