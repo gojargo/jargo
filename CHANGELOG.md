@@ -112,6 +112,28 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - **Eval scenarios can expect a `flow_node` event**, sent each time a flows bot
   enters a node. Its text is the node's name, so `text_matches:` and the other
   content checks read it, and its data is the `flow-node-entered` message's.
+- **Flows nodes and functions take optional metadata.**
+  `flows.NodeConfig.Metadata` and `flows.NodeFunction.Metadata` carry
+  JSON-serializable data of the application's own. The flow never acts on it
+  and never sends it to the LLM.
+- **`flows.EventNodeEntered`**, raised on `FlowManager.Events()` with a
+  `flows.NodeEntered` each time the flow enters a node: the node, the node it
+  left, the function whose call moved it there, their metadata and, for a node
+  of a subflow (`NodeConfig.Parent`), the node that runs it. Handlers run
+  before the node's LLM response starts.
+- **`FlowManager` tells an RTVI client each time the flow enters a node**, by
+  queueing an `rtvi.FlowNodeEnteredFrame` after the `EventNodeEntered` handlers
+  and before the LLM runs. Metadata that cannot be written as a JSON object is
+  left out of the message, with a warning.
+- **Flow prompts can refer to the flow's state.** A `{{ key }}` placeholder in
+  a node's `RoleMessage`, the text of its `TaskMessages` and the text of a
+  `tts_say` action is filled from `FlowManager.State()` each time the node is
+  entered. `{{ order.size }}` walks into a stored map, a key that is not in
+  state fails the entry with `ErrFlow`, and `\{{ key }}` is left as the literal
+  `{{ key }}`.
+- **`flows.TransitionInYAML`**, the sentinel a tool named by a flow config
+  returns in its next-node slot to let the config decide the transition. A node
+  built in code rejects it.
 
 ### Changed
 

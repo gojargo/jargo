@@ -33,6 +33,16 @@ type Handler func(ctx context.Context, args json.RawMessage, fm *FlowManager) (s
 //nolint:gochecknoglobals // sentinel node, compared by identity
 var NoResponse = &NodeConfig{Name: "no-response"}
 
+// TransitionInYAML is the sentinel a Handler returns in its next-node slot to
+// defer the transition to a flow config.
+//
+// Return it from a tool that a FlowConfig names: the config's transition_to for
+// that entry decides the next node. Only a flow built from a config accepts it;
+// a node built in code rejects it, since nothing there can decide.
+//
+//nolint:gochecknoglobals // sentinel node, compared by identity
+var TransitionInYAML = &NodeConfig{Name: "transition-in-yaml"}
+
 // ActionHandler runs one action. It is given the action that named it and the
 // manager driving the flow, so an action can read the flow's state or move it.
 type ActionHandler func(ctx context.Context, action ActionConfig, fm *FlowManager) error
@@ -128,6 +138,11 @@ type NodeFunction struct {
 	// TimeoutSecs bounds how long a call to this tool may take, overriding the
 	// service-wide bound. Nil leaves the service-wide one.
 	TimeoutSecs *float64
+	// Metadata is JSON-serializable data the application attaches to the
+	// function. The flow never acts on it and never sends it to the LLM. An
+	// RTVI client receives it when the function's call enters a node, so keep
+	// anything the end user should not see out of it.
+	Metadata map[string]any
 }
 
 // parameters renders the function's arguments as the JSON Schema object a tool
@@ -198,6 +213,34 @@ type NodeConfig struct {
 	// node that should wait for the user to speak first, such as the opening node
 	// of a call the user initiates.
 	RespondImmediately *bool
+	// Metadata is JSON-serializable data the application attaches to the node.
+	// The flow never acts on it and never sends it to the LLM. An RTVI client
+	// receives it when the node is entered, so keep anything the end user
+	// should not see out of it.
+	Metadata map[string]any
+	// Parent is, for a node of a subflow, the name of the node that runs the
+	// subflow. A Flow sets it.
+	Parent string
+}
+
+// NodeEntered is where a flow has just arrived, as passed to the handlers of
+// EventNodeEntered.
+type NodeEntered struct {
+	// Node is the node entered, by name.
+	Node string
+	// PreviousNode is the node the flow left, or "" when this is the first
+	// node.
+	PreviousNode string
+	// Function is the function whose call caused the move, or "" when the node
+	// was set directly (Initialize, SetNode).
+	Function string
+	// Metadata is the entered node's Metadata, or nil.
+	Metadata map[string]any
+	// FunctionMetadata is the Metadata of Function, or nil.
+	FunctionMetadata map[string]any
+	// Parent is, when the entered node is a node of a subflow, the name of the
+	// node that runs the subflow; "" otherwise.
+	Parent string
 }
 
 // respondsImmediately reports whether the node should generate a response on

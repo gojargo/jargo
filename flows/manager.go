@@ -2,18 +2,39 @@ package flows
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
+	"reflect"
+	"regexp"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/processor/aggregators"
+	"github.com/gojargo/jargo/processor/rtvi"
 	"github.com/gojargo/jargo/service/llm"
 	"github.com/gojargo/jargo/service/settings"
+	"github.com/gojargo/jargo/utils/events"
 	"github.com/google/uuid"
 )
+
+// EventNodeEntered fires each time the flow enters a node, including the first
+// node and a node it re-enters, with a NodeEntered. Handlers run in order
+// before the node's LLM response starts, so they must be fast; start a
+// goroutine for slow work.
+//
+//	events.On(fm.Events(), flows.EventNodeEntered,
+//	    func(ctx context.Context, entered flows.NodeEntered) { … })
+const EventNodeEntered = "on_node_entered"
+
+// placeholder is a {{ key }} or {{ key.sub.key }} placeholder in a node's
+// prompt text. Only identifiers and dots are accepted, so prose braces are left
+// alone. A leading backslash escapes it: \{{ key }} renders as {{ key }}.
+var placeholder = regexp.MustCompile(
+	`(\\?)\{\{\s*([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)\s*\}\}`)
 
 // acknowledged is the placeholder tool result used for a function that
 // transitioned without a result of its own. The model called it and is owed an
@@ -62,7 +83,26 @@ type Config struct {
 // steers the conversation by queueing frames as nodes are entered: the persona,
 // the node's objective and its toolset. The LLM service's tool loop then carries
 // out each transition. Build one with New and enter the graph with Initialize.
+//
+// A node's prompts may refer to the flow's state with {{ key }} placeholders,
+// in RoleMessage, the text of TaskMessages, and "tts_say" text. They are
+// filled in each time the node is entered, so a value a handler stored earlier
+// in the conversation can appear in a later prompt, including after a context
+// reset. {{ order.size }} walks into a stored map, a key that is missing fails
+// the entry with ErrFlow, and \{{ key }} is left as the literal {{ key }}.
+//
+// An RTVI client is told about each node too, so it can follow the
+// conversation through the flow. On entering a node the manager queues an
+// rtvi.FlowNodeEnteredFrame, which reaches the client as a flow-node-entered
+// message carrying the fields of NodeEntered; a field with no value is left
+// out. The message is sent to RTVI clients of protocol 2.4.0 or later, and to
+// any client before it sends client-ready, so keep anything the end user
+// should not see out of node names, function names and metadata. Metadata that
+// cannot be written as a JSON object is left out of the message, with a
+// warning; the handlers of EventNodeEntered still receive it.
 type FlowManager struct {
+	events events.Registry
+
 	enq      Enqueuer
 	aggs     *aggregators.Pair
 	llm      Inferencer
@@ -75,6 +115,9 @@ type FlowManager struct {
 	initialized bool
 	current     string
 	currentFns  map[string]bool
+	// currentFnMetadata is the metadata of the current node's functions that
+	// have any, by function name.
+	currentFnMetadata map[string]map[string]any
 	// pending holds a transition waiting for the turn's tool calls to finish. It
 	// is set by an edge function and taken by the context-updated callback.
 	pending *pendingTransition
@@ -121,8 +164,13 @@ func New(cfg Config) (*FlowManager, error) {
 		state:      make(map[string]any),
 	}
 	fm.actions = newActionManager(cfg.Enqueuer, cfg.Watcher, fm)
+	fm.events.Register(EventNodeEntered, true)
 	return fm, nil
 }
+
+// Events is the registry the manager raises its events on: see
+// EventNodeEntered.
+func (fm *FlowManager) Events() *events.Registry { return &fm.events }
 
 // State is the data a flow keeps across nodes: what the assistant has gathered
 // so far, and anything else the handlers need to share. It is safe for
@@ -198,7 +246,7 @@ func (fm *FlowManager) Initialize(ctx context.Context, node *NodeConfig) error {
 	if node == nil {
 		return nil
 	}
-	if err := fm.setNode(ctx, nodeName(node), node); err != nil {
+	if err := fm.setNode(ctx, nodeName(node), node, ""); err != nil {
 		fm.mu.Lock()
 		fm.initialized = false
 		fm.mu.Unlock()
@@ -217,21 +265,23 @@ func (fm *FlowManager) SetNode(ctx context.Context, node *NodeConfig) error {
 	if node == nil {
 		return errf(ErrFlowTransition, "node is nil")
 	}
-	return fm.setNode(ctx, nodeName(node), node)
+	return fm.setNode(ctx, nodeName(node), node, "")
 }
 
 // setNode enters a node, reporting any failure against the node that failed.
-func (fm *FlowManager) setNode(ctx context.Context, id string, node *NodeConfig) error {
-	if err := fm.enterNode(ctx, id, node); err != nil {
+// via names the function whose call caused the move, if any.
+func (fm *FlowManager) setNode(ctx context.Context, id string, node *NodeConfig, via string) error {
+	if err := fm.enterNode(ctx, id, node, via); err != nil {
 		return &flowError{kind: ErrFlow, msg: fmt.Sprintf("failed to set node %q", id), cause: err}
 	}
 	return nil
 }
 
 // enterNode does the work of entering a node: it runs the pre-actions, applies
-// the persona, the objective and the toolset, asks for a response where the node
-// speaks on entry, and runs the post-actions.
-func (fm *FlowManager) enterNode(ctx context.Context, id string, node *NodeConfig) error {
+// the persona, the objective and the toolset, calls the EventNodeEntered
+// handlers and tells an RTVI client, asks for a response where the node speaks
+// on entry, and runs the post-actions.
+func (fm *FlowManager) enterNode(ctx context.Context, id string, node *NodeConfig, via string) error {
 	fm.mu.Lock()
 	initialized := fm.initialized
 	// Whatever transition was pending belongs to the node being left. Clearing it
@@ -247,27 +297,24 @@ func (fm *FlowManager) enterNode(ctx context.Context, id string, node *NodeConfi
 	if err := validateNode(id, node); err != nil {
 		return err
 	}
+	node, err := fm.renderNode(id, node)
+	if err != nil {
+		return err
+	}
 	slog.DebugContext(ctx, "flows: setting node", "node", id)
 
 	// The post-actions still waiting belong to the node being left.
 	fm.actions.clearDeferredPostActions()
 
-	for _, a := range node.PreActions {
-		if err := fm.actions.registerFromConfig(a); err != nil {
-			return err
-		}
-	}
-	for _, a := range node.PostActions {
-		if err := fm.actions.registerFromConfig(a); err != nil {
-			return err
-		}
-	}
-
-	if err := fm.actions.executeActions(ctx, node.PreActions); err != nil {
+	if err = fm.registerActions(node); err != nil {
 		return err
 	}
 
-	tools, names, err := fm.nodeTools(node)
+	if err = fm.actions.executeActions(ctx, node.PreActions); err != nil {
+		return err
+	}
+
+	tools, names, metadata, err := fm.nodeTools(node)
 	if err != nil {
 		return err
 	}
@@ -276,10 +323,26 @@ func (fm *FlowManager) enterNode(ctx context.Context, id string, node *NodeConfi
 		return err
 	}
 
+	// via is a function of the node being left, so its metadata is read before
+	// that node's functions are replaced.
 	fm.mu.Lock()
+	entered := NodeEntered{
+		Node:         id,
+		PreviousNode: fm.current,
+		Function:     via,
+		Metadata:     node.Metadata,
+		Parent:       node.Parent,
+	}
+	if via != "" {
+		entered.FunctionMetadata = fm.currentFnMetadata[via]
+	}
 	fm.current = id
 	fm.currentFns = names
+	fm.currentFnMetadata = metadata
 	fm.mu.Unlock()
+
+	fm.events.Call(ctx, EventNodeEntered, fm, entered)
+	fm.enq.QueueFrame(rtvi.NewFlowNodeEnteredFrame(nodeEnteredData(ctx, entered)))
 
 	respond := node.respondsImmediately()
 	if respond {
@@ -302,22 +365,148 @@ func (fm *FlowManager) enterNode(ctx context.Context, id string, node *NodeConfi
 	return nil
 }
 
+// registerActions registers the handlers a node's actions bring with them.
+func (fm *FlowManager) registerActions(node *NodeConfig) error {
+	for _, actions := range [][]ActionConfig{node.PreActions, node.PostActions} {
+		for _, a := range actions {
+			if err := fm.actions.registerFromConfig(a); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// nodeEnteredData is the flow-node-entered message data that announces a node.
+// Metadata that cannot be written as a JSON object is left out.
+func nodeEnteredData(ctx context.Context, entered NodeEntered) rtvi.FlowNodeEnteredData {
+	return rtvi.FlowNodeEnteredData{
+		Node:             entered.Node,
+		PreviousNode:     entered.PreviousNode,
+		Function:         entered.Function,
+		Metadata:         asJSONObject(ctx, entered.Metadata, "metadata", entered.Node),
+		FunctionMetadata: asJSONObject(ctx, entered.FunctionMetadata, "function_metadata", entered.Node),
+		Parent:           entered.Parent,
+	}
+}
+
+// asJSONObject is value as a client receives it, or nil when it cannot be
+// written as a JSON object.
+func asJSONObject(ctx context.Context, value map[string]any, field, node string) map[string]any {
+	if value == nil {
+		return nil
+	}
+	var sent map[string]any
+	raw, err := json.Marshal(value)
+	if err == nil {
+		err = json.Unmarshal(raw, &sent)
+	}
+	if err != nil || sent == nil {
+		slog.WarnContext(ctx, "flows: not a JSON object, so it is left out of the RTVI message",
+			"node", node, "field", field)
+		return nil
+	}
+	return sent
+}
+
+// renderNode fills the {{ key }} placeholders in the node's prompts from the
+// flow's state: in RoleMessage, the text of each of TaskMessages, and "tts_say"
+// action text. {{ order.size }} walks into a stored map, and \{{ key }} is left
+// as the literal {{ key }}. Rendering happens on every entry and on a copy, so a
+// prompt sees whatever handlers have stored by then and the node given is left
+// as it was. A placeholder naming a key that is not in state is an ErrFlow.
+func (fm *FlowManager) renderNode(id string, node *NodeConfig) (*NodeConfig, error) {
+	var failure error
+	render := func(text string) string {
+		return placeholder.ReplaceAllStringFunc(text, func(match string) string {
+			groups := placeholder.FindStringSubmatch(match)
+			if groups[1] != "" {
+				return match[1:]
+			}
+			value, ok := fm.stateValue(groups[2])
+			if !ok {
+				if failure == nil {
+					failure = errf(ErrFlow, fmt.Sprintf(
+						"node '%s' uses '{{ %s }}', which is not in state", id, groups[2]))
+				}
+				return match
+			}
+			return value
+		})
+	}
+
+	rendered := *node
+	if node.RoleMessage != "" {
+		rendered.RoleMessage = render(node.RoleMessage)
+	}
+	rendered.TaskMessages = make([]frames.Message, len(node.TaskMessages))
+	for i, message := range node.TaskMessages {
+		if message.Content == nil {
+			message.Text = render(message.Text)
+		}
+		rendered.TaskMessages[i] = message
+	}
+	renderActions := func(actions []ActionConfig) []ActionConfig {
+		if len(actions) == 0 {
+			return actions
+		}
+		out := make([]ActionConfig, len(actions))
+		for i, action := range actions {
+			if action.Type == actionTTSSay {
+				action.Text = render(action.Text)
+			}
+			out[i] = action
+		}
+		return out
+	}
+	rendered.PreActions = renderActions(node.PreActions)
+	rendered.PostActions = renderActions(node.PostActions)
+	if failure != nil {
+		return nil, failure
+	}
+	return &rendered, nil
+}
+
+// stateValue reads the value at a dotted path in the flow's state, written out
+// as text. Each part but the last must name a map with string keys.
+func (fm *FlowManager) stateValue(path string) (string, bool) {
+	fm.stateMu.Lock()
+	defer fm.stateMu.Unlock()
+	var current any = fm.state
+	for part := range strings.SplitSeq(path, ".") {
+		v := reflect.ValueOf(current)
+		if v.Kind() != reflect.Map || v.Type().Key().Kind() != reflect.String {
+			return "", false
+		}
+		item := v.MapIndex(reflect.ValueOf(part).Convert(v.Type().Key()))
+		if !item.IsValid() {
+			return "", false
+		}
+		current = item.Interface()
+	}
+	return fmt.Sprint(current), true
+}
+
 // nodeTools builds the toolset a node advertises: the global functions followed
-// by the node's own, each carrying the handler that runs it.
-func (fm *FlowManager) nodeTools(node *NodeConfig) ([]frames.Tool, map[string]bool, error) {
+// by the node's own, each carrying the handler that runs it. It also returns
+// their names, and the metadata of those that have any.
+func (fm *FlowManager) nodeTools(
+	node *NodeConfig,
+) ([]frames.Tool, map[string]bool, map[string]map[string]any, error) {
 	all := make([]NodeFunction, 0, len(fm.globals)+len(node.Functions))
 	all = append(all, fm.globals...)
 	all = append(all, node.Functions...)
 
 	tools := make([]frames.Tool, 0, len(all))
 	names := make(map[string]bool, len(all))
+	metadata := make(map[string]map[string]any)
 	for _, fn := range all {
 		if err := validateFunction(fn); err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		params, err := fn.parameters()
 		if err != nil {
-			return nil, nil, errf(ErrInvalidFunction,
+			return nil, nil, nil, errf(ErrInvalidFunction,
 				fmt.Sprintf("function %q has parameters that cannot be described: %v", fn.Name, err))
 		}
 		tools = append(tools, frames.Tool{
@@ -329,8 +518,11 @@ func (fm *FlowManager) nodeTools(node *NodeConfig) ([]frames.Tool, map[string]bo
 			TimeoutSecs:          fn.TimeoutSecs,
 		})
 		names[fn.Name] = true
+		if fn.Metadata != nil {
+			metadata[fn.Name] = fn.Metadata
+		}
 	}
-	return tools, names, nil
+	return tools, names, metadata, nil
 }
 
 // updateContext queues the frames that make the node current: the persona, the
@@ -420,6 +612,13 @@ func (fm *FlowManager) transitionFunc(fn NodeFunction) llm.FunctionCallHandler {
 		}
 
 		switch next {
+		case TransitionInYAML:
+			err := errf(ErrInvalidFunction, fmt.Sprintf(
+				"function %s returned TransitionInYAML, but this node was not built from a flow config, "+
+					"so nothing can decide the transition; return a NodeConfig or nil", fn.Name))
+			slog.ErrorContext(ctx, "flows: function failed", "function", fn.Name, "err", err)
+			return params.Result(ctx, fmt.Sprintf(`{"status": "error", "error": %q}`, err.Error()), nil)
+
 		case NoResponse:
 			// The function has already said its piece. The result still reaches the
 			// conversation, so the model knows what happened when the user speaks
@@ -479,7 +678,7 @@ func (fm *FlowManager) checkAndExecuteTransition(ctx context.Context) error {
 
 	slog.DebugContext(ctx, "flows: transitioning",
 		"function", pending.function, "node", nodeName(pending.next))
-	return fm.setNode(ctx, nodeName(pending.next), pending.next)
+	return fm.setNode(ctx, nodeName(pending.next), pending.next, pending.function)
 }
 
 // validateNode checks that a node can be entered.
