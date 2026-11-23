@@ -152,6 +152,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   request. Text longer than one request accepts is split at whitespace, an
   error names the request's `x-zm-trackingid`, and an interruption closes the
   request, which stops synthesis on the server.
+- **A classifier backed by Zoom's Decisions API.** `decisions.New` in
+  `classifier/zoom/decisions` answers every question of a call in one request
+  to the Zoom Decisions API (`zoom-decisions` or `zoom-decisions-pro`), and can
+  see images: up to four per call, ten questions per request, 255 options per
+  choice and ten levels per score. Build one with an API key to get a client of
+  its own, or share a `decisions.Client` between several classifiers. A busy
+  API is retried with backoff, honouring `Retry-After` within the client's
+  timeout, and an error names the request's `x-zm-trackingid`.
+  `eval.ZoomClassifier`, registered as `evals.judges.zoom_classifier`, judges
+  evals with it.
 
 ### Changed
 

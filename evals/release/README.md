@@ -30,6 +30,9 @@ The judge, user and simulator blocks the scenarios include sit in `scenarios/`.
   (`factory: evals.judges.typesafe_classifier`), which needs `TYPESAFE_API_KEY`.
   To judge with Google's Decisions API instead, set
   `factory: evals.judges.google_classifier`, which needs `GOOGLE_API_KEY`.
+  To judge with Zoom's Decisions API, set
+  `factory: evals.judges.zoom_classifier` (add `model: zoom-decisions-pro` for
+  the larger model), which needs `ZOOM_AI_API_KEY`.
 - **A local LLM.** The explainer, and the caller in simulations, run
   `gemma4:12b` on [Ollama](https://ollama.com):
 
