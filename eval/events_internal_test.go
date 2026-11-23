@@ -249,23 +249,84 @@ func TestComputedVADAndSpeakingFramesAreIgnored(t *testing.T) {
 	}
 }
 
-// A new user turn drops the bot's leftover output, but keeps a queued
-// user_transcription, which is the turn's input.
-func TestUserStartedSpeakingMessageDiscardsInterruptedOutput(t *testing.T) {
+// A new user turn drops the bot's response in progress, and what the bot still
+// says of it is not its reply. The queue is left as it is.
+func TestUserStartedSpeakingMessageDiscardsTheUnfinishedResponse(t *testing.T) {
 	s := newStream(true)
 	s.textBuffer = []string{"greeting"}
-	s.queue = []map[string]any{
-		{keyType: EventResponse, "text": "greeting"},
-		{keyType: EventUserTranscription, "transcript": "hi"},
-	}
+	s.queue = []map[string]any{{keyType: EventUserTranscription, "transcript": "hi"}}
 	wantEvent(t, s.FrameToEvent(messageFrame(t, rtvi.TypeUserStartedSpeaking, nil)),
 		map[string]any{keyType: EventUserStartedSpeaking})
 	if len(s.textBuffer) != 0 {
 		t.Fatalf("text buffer = %v, want it dropped", s.textBuffer)
 	}
+	wantNoEvent(t, s.FrameToEvent(frames.NewLLMTextFrame(" and welcome")))
+	wantNoEvent(t, s.FrameToEvent(frames.NewLLMFullResponseEndFrame()))
 	if got := queued(s); !reflect.DeepEqual(got, []map[string]any{{keyType: EventUserTranscription, "transcript": "hi"}}) {
 		t.Fatalf("queue = %v, want only the transcription", got)
 	}
+}
+
+// The bot's reports of the user's turn starting survive the interruption sent
+// right behind them.
+func TestInterruptionKeepsTheUsersTurn(t *testing.T) {
+	// expect feeds the bot's messages as the sink does, back to back, to a turn
+	// waiting for event.
+	expect := func(t *testing.T, messages []string, event string) map[string]any {
+		t.Helper()
+		s := newStream(true)
+		s.InputSent()
+		type outcome struct {
+			event map[string]any
+			err   error
+		}
+		waiting := make(chan outcome, 1)
+		go func() {
+			matched, err := s.NextEvent(t.Context(), event, time.Now().Add(time.Second), FromNow, nil)
+			waiting <- outcome{matched, err}
+		}()
+		for _, msgType := range messages {
+			if reported := s.FrameToEvent(messageFrame(t, msgType, nil)); reported != nil {
+				s.Append(reported)
+			}
+		}
+		got := <-waiting
+		if got.err != nil {
+			t.Fatalf("waiting for %s: %v", event, got.err)
+		}
+		return got.event
+	}
+	t.Run("user_started_speaking survives the interruption behind it", func(t *testing.T) {
+		matched := expect(t, []string{rtvi.TypeUserStartedSpeaking, rtvi.TypeBotInterrupted}, EventUserStartedSpeaking)
+		if matched[keyType] != EventUserStartedSpeaking {
+			t.Fatalf("matched %v", matched)
+		}
+	})
+	t.Run("vad_user_started_speaking survives both reports behind it", func(t *testing.T) {
+		matched := expect(t,
+			[]string{rtvi.TypeVADUserStarted, rtvi.TypeUserStartedSpeaking, rtvi.TypeBotInterrupted},
+			EventVADUserStartedSpeaking)
+		if matched[keyType] != EventVADUserStartedSpeaking {
+			t.Fatalf("matched %v", matched)
+		}
+	})
+	t.Run("bot_interrupted still matches", func(t *testing.T) {
+		matched := expect(t, []string{rtvi.TypeUserStartedSpeaking, rtvi.TypeBotInterrupted}, EventBotInterrupted)
+		if matched[keyType] != EventBotInterrupted {
+			t.Fatalf("matched %v", matched)
+		}
+	})
+	// Left queued, they would match the next turn's expectation.
+	t.Run("a send still drops the reports of the turn before", func(t *testing.T) {
+		s := newStream(true)
+		for _, kind := range []string{EventVADUserStartedSpeaking, EventUserStartedSpeaking, EventBotInterrupted} {
+			s.queue = append(s.queue, map[string]any{keyType: kind})
+		}
+		s.DropPendingBotOutput("before send")
+		if got := queued(s); len(got) != 0 {
+			t.Fatalf("queue = %v, want it empty", got)
+		}
+	})
 }
 
 func TestFunctionCallEvent(t *testing.T) {

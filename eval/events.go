@@ -887,10 +887,16 @@ func (s *EventStream) ObservingBoundary() {
 	s.observing = true
 }
 
-// interruptedLocked handles the bot reporting an interruption: its pending
-// output is dropped and the stream waits for a fresh reply.
+// interruptedLocked handles the bot reporting an interruption: its unfinished
+// response is dropped and the stream waits for a fresh reply.
+//
+// The queue is left as it is. The bot reports the user's turn starting just
+// ahead of the interruption, and a driver may not have read those reports yet.
+// The interrupted response's text and spoken turn that still arrive are held
+// back until the bot's next response starts (see awaitingReply), and a send
+// drops whatever is left before it.
 func (s *EventStream) interruptedLocked() {
-	s.dropPendingBotOutputLocked("on interruption")
+	s.textBuffer = nil
 	s.awaitingReply = true
 	s.botQuiet = true
 	s.signalLocked()
