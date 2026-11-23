@@ -573,3 +573,22 @@ func TestUserAnnouncesTheTurnToThePipeline(t *testing.T) {
 		t.Error("no user turn frame went upstream")
 	}
 }
+
+// Ported from upstream (test_a_silent_reply_records_nothing). The service's
+// silent report discards the turn marker it pushed before reading the mark.
+func TestASilentReplyRecordsNothing(t *testing.T) {
+	complete := frames.NewLLMMarkerFrame(frames.UserTurnCompleteMarker)
+	complete.AppendToContextImmediately = false
+	_, convo := assistantTurnsFor(t,
+		frames.NewLLMFullResponseStartFrame(),
+		complete,
+		frames.NewLLMMarkerResponseFrame(frames.UserTurnCompleteMarker+" ∅", "∅",
+			frames.LLMMarkerKindSilent, []string{"∅"}),
+		frames.NewLLMFullResponseEndFrame(),
+	)
+	for _, m := range convo.Messages() {
+		if m.Role == frames.RoleAssistant {
+			t.Fatalf("context messages = %+v, want no assistant message", convo.Messages())
+		}
+	}
+}

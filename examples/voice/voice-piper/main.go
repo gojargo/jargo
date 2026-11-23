@@ -1,10 +1,11 @@
 // Command voice-piper is a voice agent: Deepgram speech-to-text, an OpenAI LLM
 // and Piper text-to-speech.
 //
-// Piper runs locally: start a Piper HTTP server first, with the en_US-ryan-
-// high voice.
+// Piper runs locally, in process, in libpiper (`make deps-piper` builds it;
+// JARGO_PIPER_LIB points at it). The en_US-ryan-high voice is downloaded into
+// the user cache on first use.
 //
-//	DEEPGRAM_API_KEY=… OPENAI_API_KEY=…  \
+//	JARGO_PIPER_LIB=… DEEPGRAM_API_KEY=… OPENAI_API_KEY=…  \
 //	  go run ./examples/voice/voice-piper
 //
 // Then open http://localhost:7860 and connect.
@@ -50,7 +51,13 @@ func runBot(ctx context.Context, t transport.Transport, args runner.Arguments) e
 
 	stt := deepgram.NewSTT(deepgram.Config{APIKey: os.Getenv("DEEPGRAM_API_KEY")})
 
-	tts := piper.NewTTS(piper.Config{})
+	tts, err := piper.NewTTS(piper.Config{
+		Voice:       "en_US-ryan-high",
+		LibraryPath: os.Getenv(piper.LibPathEnv),
+	})
+	if err != nil {
+		return err
+	}
 
 	llm := chat.NewLLM(chat.LLMConfig{APIKey: os.Getenv("OPENAI_API_KEY")})
 	llm.SetSystemInstruction(systemInstruction)

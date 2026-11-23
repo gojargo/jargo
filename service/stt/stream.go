@@ -14,8 +14,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -418,6 +416,9 @@ type Describer interface {
 // utterance.
 type StreamService struct {
 	*service.Base
+	// diarization numbers the speakers the provider's diarization told apart
+	// and formats what they said.
+	diarization
 	conn    Connector
 	cfgRate int
 	model   string
@@ -526,9 +527,6 @@ type StreamService struct {
 	// userID is the user the audio last sent was attributed to, "" when it
 	// named nobody. The transcripts the service emits carry it.
 	userID string
-	// speakers are the speakers the provider's diarization told apart, by its
-	// label, numbered in the order they first appeared.
-	speakers map[string]*frames.TranscriptionSpeaker
 
 	// settingsMu serializes reading the provider's settings against changing
 	// them. A session is opened from the read loop when one drops, and an update
@@ -592,6 +590,7 @@ func NewStream(name string, conn Connector, sampleRate int) *StreamService {
 	s.canReopen = true
 	s.Base = service.New(name, s)
 	s.set = &providerSettings{provider: conn, name: s.Name, onModel: s.setModel, onChanged: s.SettingsUpdated}
+	s.diarization = diarization{set: s.set, name: s.Name}
 	// The connection's reconnection settings come from the provider's
 	// configuration, where it has any.
 	var wsCfg wsservice.Config
@@ -1113,49 +1112,6 @@ func (s *StreamService) resampleAudio(audio []byte, rate int) []byte {
 	return s.sendResampler.Process(audio)
 }
 
-// speaker is the speaker for a provider's diarization label, or nil for no
-// label. A label seen for the first time is numbered after the speakers before
-// it, so the numbers follow the order speakers first appeared.
-func (s *StreamService) speaker(label string) *frames.TranscriptionSpeaker {
-	if label == "" {
-		return nil
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if sp, ok := s.speakers[label]; ok {
-		return sp
-	}
-	if s.speakers == nil {
-		s.speakers = map[string]*frames.TranscriptionSpeaker{}
-	}
-	sp := &frames.TranscriptionSpeaker{Label: label, Number: len(s.speakers) + 1}
-	s.speakers[label] = sp
-	return sp
-}
-
-// applySpeakerFormat applies the provider's speaker_format setting to a
-// diarized transcript. The format uses {speaker} for the provider's speaker
-// label, {speaker_number} for the speaker's number, which stays the same
-// whatever labels the provider uses, and {text} for the transcript text (e.g.
-// "Speaker {speaker_number}: {text}"). The text is returned unchanged when there
-// is no speaker, no format, or a provider whose settings have no such setting.
-func (s *StreamService) applySpeakerFormat(text string, speaker *frames.TranscriptionSpeaker) string {
-	if speaker == nil {
-		return text
-	}
-	format := s.set.speakerFormat()
-	if format == "" {
-		return text
-	}
-	return strings.NewReplacer(
-		"{{", "{",
-		"}}", "}",
-		"{speaker}", speaker.Label,
-		"{speaker_number}", strconv.Itoa(speaker.Number),
-		"{text}", text,
-	).Replace(format)
-}
-
 // Connector is the provider's Connector the service was built with, for a
 // provider package that offers calls of its own on the service it built.
 func (s *StreamService) Connector() Connector { return s.conn }
@@ -1647,8 +1603,8 @@ func (s *StreamService) emitEagerEndOfTurn(ctx context.Context, r Result) {
 	case r.EagerEndOfTurn:
 		s.eagerPending = true
 		slog.DebugContext(ctx, "eager end of turn", "service", s.Name(), "text", r.Text)
-		speaker := s.speaker(r.Speaker)
-		text := s.applySpeakerFormat(r.Text, speaker)
+		speaker := s.Speaker(r.Speaker)
+		text := s.ApplySpeakerFormat(r.Text, speaker)
 		f := frames.NewEagerTranscriptionFrame(text, s.transcriptUserID(), frames.NowTimestamp())
 		f.Language = r.Language
 		f.Speaker = speaker
@@ -1706,8 +1662,8 @@ func (s *StreamService) emitTranscript(ctx context.Context, r Result) {
 		return
 	}
 	ts := frames.NowTimestamp()
-	speaker := s.speaker(r.Speaker)
-	text := s.applySpeakerFormat(r.Text, speaker)
+	speaker := s.Speaker(r.Speaker)
+	text := s.ApplySpeakerFormat(r.Text, speaker)
 	if !r.Final {
 		f := frames.NewInterimTranscriptionFrame(text, s.transcriptUserID(), ts)
 		f.Language = r.Language

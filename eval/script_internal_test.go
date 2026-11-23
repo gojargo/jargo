@@ -258,6 +258,36 @@ func TestScriptTextMatchesRejectsBadPatterns(t *testing.T) {
 	}
 }
 
+func TestScriptAllowContinueFalseParsed(t *testing.T) {
+	s := script(t, `
+name: final
+turns:
+  - user: "x"
+    expect:
+      - event: llm_response
+        eval: "says it is still working"
+        allow_continue: false
+      - event: llm_response
+        eval: "gives the result"
+`)
+	if got := s.Turns[0].Expect[0].AllowContinue; got == nil || *got {
+		t.Fatalf("allow_continue = %v, want false", got)
+	}
+	if got := s.Turns[0].Expect[1].AllowContinue; got != nil {
+		t.Fatalf("allow_continue = %v, want unset", *got)
+	}
+}
+
+func TestScriptAllowContinueNeedsEvalAndABoolean(t *testing.T) {
+	for _, extra := range []string{
+		"allow_continue: false",
+		"eval: \"x\"\n        allow_continue: no way",
+	} {
+		_ = scriptErr(t, "name: bad_allow_continue\nturns:\n  - user: \"x\"\n    expect:\n"+
+			"      - event: llm_response\n        "+extra+"\n")
+	}
+}
+
 func TestScriptAbsentExpectationParsed(t *testing.T) {
 	s := script(t, `
 name: absent
@@ -410,6 +440,13 @@ turns:
 	} {
 		err := scriptErr(t, "name: bad\nturns:\n  - user: \"x\"\n    "+tc.bad+"\n")
 		wantErrContains(t, err, tc.message)
+	}
+}
+
+func TestScriptLLMMarkerSilentKindParsed(t *testing.T) {
+	s := script(t, "name: silent_marker\nturns:\n  - user: \"x\"\n    expect: [{event: llm_marker, marker: silent}]\n")
+	if got := s.Turns[0].Expect[0].Marker; got != MarkerSilent {
+		t.Fatalf("marker = %q, want silent", got)
 	}
 }
 

@@ -41,9 +41,22 @@ func runScripted(
 	t *testing.T, onlyInitialTTFB bool, scripts ...func(ctx context.Context, g *scriptGen, emit llm.Emit) error,
 ) []stamped {
 	t.Helper()
+	return runScriptedWith(t, nil, onlyInitialTTFB, scripts...)
+}
+
+// runScriptedWith is runScripted with the service configured by configure
+// first, when it is not nil.
+func runScriptedWith(
+	t *testing.T, configure func(*llm.Base), onlyInitialTTFB bool,
+	scripts ...func(ctx context.Context, g *scriptGen, emit llm.Emit) error,
+) []stamped {
+	t.Helper()
 	gen := &scriptGen{scripts: scripts}
 	svc := llm.New("FakeLLM", gen)
 	gen.Base = svc
+	if configure != nil {
+		configure(svc)
+	}
 
 	noInitial := false
 	var mu sync.Mutex
@@ -239,5 +252,34 @@ func TestInterruptedResponseDoesNotLeakTTFATWhenReportingOnlyInitialTTFB(t *test
 	)
 	if ttfat, _ := ttfatsOf(t, got); len(ttfat) != 0 {
 		t.Errorf("got %+v, want no TTFAT", ttfat)
+	}
+}
+
+// Ported from upstream (test_recorded_even_when_turn_completion_withholds_the_text).
+// The TTFAT is measured where the model produces the token, before the
+// extensions filter it: the turn-completion extension holds unmarked text back
+// until the response ends, and timing downstream of it would time the filter
+// instead.
+func TestTTFATIsRecordedBeforeTheTurnCompletionExtensionHoldsTheTextBack(t *testing.T) {
+	withTurnCompletion := func(svc *llm.Base) {
+		if err := svc.AddExtension(llm.NewLLMTurnCompletionLLMExtension(llm.UserTurnCompletionConfig{})); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := runScriptedWith(t, withTurnCompletion, false, func(ctx context.Context, g *scriptGen, emit llm.Emit) error {
+		g.StartTTFBMetrics()
+		g.StopTTFBMetrics(ctx)
+		if err := emit("Hello"); err != nil {
+			return err
+		}
+		time.Sleep(streamGap)
+		return nil
+	})
+	ttfat, _ := ttfatsOf(t, got)
+	if len(ttfat) != 1 {
+		t.Fatalf("got %d TTFAT, want one though the text was held back", len(ttfat))
+	}
+	if ttfat[0].TTFAT >= streamGap {
+		t.Errorf("TTFAT = %s, want it taken as the token was produced, not when the held text went out", ttfat[0].TTFAT)
 	}
 }

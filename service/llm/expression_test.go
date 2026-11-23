@@ -16,6 +16,7 @@ import (
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/service/llm"
+	"github.com/gojargo/jargo/service/settings"
 	"github.com/gojargo/jargo/utils/events"
 )
 
@@ -387,17 +388,26 @@ func TestEveryLLMInASwitcherLearnsOfTheTagger(t *testing.T) {
 	checkInstruction(t, second, "APP")
 }
 
+// turnCompletionUpdate installs the turn-completion extension over a settings
+// update, as the stop strategy does.
+func turnCompletionUpdate() frames.Frame {
+	var delta settings.LLM
+	delta.Extensions = settings.Set(settings.Extensions{
+		func() llm.LLMExtension { return llm.NewLLMTurnCompletionLLMExtension(llm.UserTurnCompletionConfig{}) },
+	})
+	return frames.NewLLMUpdateSettingsFrame(&delta)
+}
+
 // TestTurnCompletionWithPerceptionSaysAReadingDoesNotDecideTheMarker checks
 // that, with perception taught and incomplete turns filtered, the turn
 // completion instructions are followed by the note that a reading of how the
 // user sounded does not decide the marker.
 func TestTurnCompletionWithPerceptionSaysAReadingDoesNotDecideTheMarker(t *testing.T) {
 	svc := appLLM("llm")
-	svc.SetFilterIncompleteUserTurns(true)
-	runWith(t, svc, expressiveParams(nil), []frames.Frame{perceptionMetadata()}, nil)
+	runWith(t, svc, expressiveParams(nil), []frames.Frame{turnCompletionUpdate(), perceptionMetadata()}, nil)
 
 	perception := tone()
-	config := svc.UserTurnCompletionConfig()
+	var config llm.UserTurnCompletionConfig
 	checkInstruction(t, svc, "APP\n\n"+expressive.ExpressionInstructions(nil, nil, &perception)+
 		"\n\n"+config.CompletionInstructions()+
 		"\n\n"+expressive.PerceptionTurnCompletionInstructions(config.Markers()))
@@ -407,8 +417,25 @@ func TestTurnCompletionWithPerceptionSaysAReadingDoesNotDecideTheMarker(t *testi
 // out when nothing teaches perception.
 func TestTurnCompletionWithoutPerceptionHasNoReadingNote(t *testing.T) {
 	svc := appLLM("llm")
-	svc.SetFilterIncompleteUserTurns(true)
+	runWith(t, svc, expressiveParams(nil), []frames.Frame{turnCompletionUpdate()}, nil)
+	if !strings.Contains(svc.SystemInstruction(), llm.UserTurnCompletionInstructions) {
+		t.Fatal("the turn-completion instructions were not composed in")
+	}
 	if strings.Contains(svc.SystemInstruction(), "from the user's words alone") {
 		t.Error("the reading note was composed in with no perception taught")
+	}
+}
+
+// TestAPerceptionReadingBeforeTheExtensionIsHandedToIt checks that a reading
+// the service processed before the turn-completion extension was attached
+// reaches the extension once it is: a system frame can pass before the settings
+// update that attaches the extension that reads it.
+func TestAPerceptionReadingBeforeTheExtensionIsHandedToIt(t *testing.T) {
+	svc := appLLM("llm")
+	runWith(t, svc, expressiveParams(nil), []frames.Frame{perceptionMetadata(), turnCompletionUpdate()}, nil)
+
+	var config llm.UserTurnCompletionConfig
+	if !strings.HasSuffix(svc.SystemInstruction(), expressive.PerceptionTurnCompletionInstructions(config.Markers())) {
+		t.Error("the extension attached after the reading was not handed it")
 	}
 }

@@ -553,7 +553,7 @@ func (m *ExpectationMatcher) evaluateAggregate(
 		}
 		// The reply segments were added to the judge's conversation in the
 		// aggregation loop; the judge evaluates that context, not aggregate.
-		verdict := m.judge.Evaluate(withEvalPipeline(ctx, PipelineJudge), exp.Eval)
+		verdict := m.judge.Evaluate(withEvalPipeline(ctx, PipelineJudge), exp.Eval, exp.AllowContinue)
 		switch verdict.Verdict {
 		case VerdictNone:
 			return aggregateNoVerdict, "judge said none: " + verdict.Reason
@@ -701,7 +701,7 @@ func (m *ExpectationMatcher) checkJudge(
 			fmt.Sprintf("event has no text/transcript to judge: %v", event), FailureNoContent)
 	}
 	m.judge.AddAssistantMessage(content)
-	verdict := m.judge.Evaluate(withEvalPipeline(ctx, PipelineJudge), exp.Eval)
+	verdict := m.judge.Evaluate(withEvalPipeline(ctx, PipelineJudge), exp.Eval, exp.AllowContinue)
 	if verdict.Passed() {
 		return nil
 	}

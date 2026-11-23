@@ -461,9 +461,10 @@ func TestDelegateFailsWhenTheBackendNeverAttaches(t *testing.T) {
 // recordingFrontend records what the connector queues into it and pushes from
 // it.
 type recordingFrontend struct {
-	mu     sync.Mutex
-	queued []frames.Frame
-	pushed []frames.Frame
+	mu        sync.Mutex
+	queued    []frames.Frame
+	pushed    []frames.Frame
+	broadcast []frames.Frame
 }
 
 func (r *recordingFrontend) QueueFrame(_ context.Context, f frames.Frame, _ processor.Direction) error {
@@ -478,6 +479,31 @@ func (r *recordingFrontend) PushFrame(_ context.Context, f frames.Frame, _ proce
 	defer r.mu.Unlock()
 	r.pushed = append(r.pushed, f)
 	return nil
+}
+
+// Broadcast records one instance of the frame, standing for both directions.
+func (r *recordingFrontend) Broadcast(_ context.Context, build func() frames.Frame) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.broadcast = append(r.broadcast, build())
+	return nil
+}
+
+// workFrames are the background-work frames broadcast, as "started:<id>" and
+// "finished:<id>".
+func (r *recordingFrontend) workFrames() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []string
+	for _, f := range r.broadcast {
+		switch fr := f.(type) {
+		case *frames.BackgroundWorkStartedFrame:
+			out = append(out, "started:"+fr.WorkID)
+		case *frames.BackgroundWorkFinishedFrame:
+			out = append(out, "finished:"+fr.WorkID)
+		}
+	}
+	return out
 }
 
 // appended is the messages queued, each with whether it runs the model.
@@ -628,6 +654,9 @@ func TestTheToolsAreBuiltInBesideTheFrontendsOwn(t *testing.T) {
 	}
 	convo := frames.NewLLMContext("")
 	convo.SetTools([]frames.Tool{{Name: "get_current_time", Parameters: json.RawMessage(`{"type":"object"}`)}})
+	// The pairing's tools are built in as the frontend syncs its tools, which it
+	// does at setup and before every inference.
+	frontend.SyncToolHandlers(t.Context(), convo.ToolsSchema())
 
 	// Never in the context's tool set, so no diff sees it.
 	if got := toolNames(convo.Tools()); !slices.Equal(got, []string{"get_current_time"}) {
@@ -848,6 +877,65 @@ func TestClientTracingSendsEachExchangeAsAServerMessage(t *testing.T) {
 	}
 	if backendEvents[3]["text"] != "It's 62 and raining." || backendEvents[3]["spoken"] != true {
 		t.Errorf("output traced as %v", backendEvents[3])
+	}
+}
+
+// TestADelegateCallIsAnnouncedWhenItStarts checks a delegation is announced as
+// a call of the application's own tools is, to the app and to the pipeline,
+// though delegate is a built-in tool of the pairing extension.
+func TestADelegateCallIsAnnouncedWhenItStarts(t *testing.T) {
+	frontend := newDelegatingFrontend("")
+	service, err := New(Config{Frontend: frontend, Backend: weatherBackend(t, scriptedRun{text: ">> Done."})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	var announced []string
+	frontend.OnFunctionCallsStarted(func(_ context.Context, calls []frames.ToolCall) {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, c := range calls {
+			announced = append(announced, c.Name)
+		}
+	})
+
+	down := runService(t, service, conversation(user("weather in seattle?")))
+
+	var started []string
+	for _, f := range down {
+		if fr, ok := f.(*frames.FunctionCallsStartedFrame); ok {
+			for _, c := range fr.Calls {
+				started = append(started, c.Name)
+			}
+		}
+	}
+	if !slices.Equal(started, []string{"delegate"}) {
+		t.Errorf("FunctionCallsStartedFrame announced %v, want [delegate]", started)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !slices.Equal(announced, []string{"delegate"}) {
+		t.Errorf("OnFunctionCallsStarted was told of %v, want [delegate]", announced)
+	}
+}
+
+// TestThePairingIsInstalledAsAnExtension checks the frontend holds the pairing
+// as an LLM extension, whose instruction composes into its system instruction.
+func TestThePairingIsInstalledAsAnExtension(t *testing.T) {
+	frontend := newTextFrontend()
+	service, err := New(Config{Frontend: frontend, BackendName: "backend"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pairing, ok := llm.GetExtension[*BackendPairingLLMExtension](frontend)
+	if !ok {
+		t.Fatal("the frontend holds no pairing extension")
+	}
+	if got := pairing.SystemInstruction(); got != service.Connector().FrontendInstruction() {
+		t.Errorf("the pairing contributes %q, want the connector's frontend instruction", got)
+	}
+	if !strings.HasSuffix(frontend.SystemInstruction(), service.Connector().FrontendInstruction()) {
+		t.Error("the pairing instruction is not composed into the frontend's system instruction")
 	}
 }
 

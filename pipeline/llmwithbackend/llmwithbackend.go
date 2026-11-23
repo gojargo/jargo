@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"sync"
 
-	"github.com/gojargo/jargo/adapter"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/pipeline/jobcontext"
@@ -24,13 +23,15 @@ type Frontend interface {
 	processor.Processor
 	llm.AdapterHolder
 	llm.LLMWithBackendRoleObjector
-	// RegisterFunction registers a tool's handler.
-	RegisterFunction(name string, h llm.FunctionCallHandler, opts ...llm.RegisterOption)
-	// AppendSystemInstruction adds text to the model's system instruction.
-	AppendSystemInstruction(instruction string)
+	llm.ExtensionHolder
+	// AddExtension attaches an LLM extension, before the service is set up.
+	AddExtension(extension llm.LLMExtension) error
 	// ServiceMetadataFrame describes the service, saying whether it is
 	// speech-to-speech.
 	ServiceMetadataFrame() frames.ServiceMetadata
+	// Broadcast sends a frame both downstream and upstream, which is how the
+	// backend's background work is announced to the pipeline.
+	Broadcast(ctx context.Context, build func() frames.Frame) error
 }
 
 // ErrNoBuiltinTools is reported when the frontend cannot carry a tool of its
@@ -81,10 +82,11 @@ type workerHost interface {
 //
 // Put it where the LLM goes in a pipeline. It is a pipeline, not an LLM service:
 // functions, settings updates and event handlers go on Frontend. It wraps the
-// frontend service, installs the connector's tools on it as built-in tools,
-// appends the connector's guidance to the frontend's system instruction, adds a
-// local backend worker to the pipeline worker so the app never wires it up, and
-// holds the session with the backend for the pipeline's life. A built-in tool is
+// frontend service and installs a BackendPairingLLMExtension on it, which adds
+// the connector's tools as built-in tools and the connector's guidance to the
+// frontend's system instruction. It adds a local backend worker to the
+// pipeline worker so the app never wires it up, and holds the session with the
+// backend for the pipeline's life. A built-in tool is
 // sent on every inference beside whatever tools the frontend has, and never
 // enters the context's tool set, so a tool change announced to the model never
 // mentions it. The tools are the backend's; the frontend has delegate and no
@@ -127,8 +129,7 @@ func New(cfg Config) (*LLMWithBackend, error) {
 	if objection := frontend.LLMWithBackendRoleObjection(llm.RoleFrontend); objection != "" {
 		return nil, fmt.Errorf("%w: %s", ErrFrontendDeclined, objection)
 	}
-	holder := frontend.LLMAdapter()
-	if holder == nil {
+	if frontend.LLMAdapter() == nil {
 		return nil, ErrNoBuiltinTools
 	}
 	name := cfg.BackendName
@@ -161,18 +162,15 @@ func New(cfg Config) (*LLMWithBackend, error) {
 				ErrPredictiveDelegationNeedsTextFrontend, frontend)
 		}
 	}
-	if instruction := connector.FrontendInstruction(); instruction != "" {
-		frontend.AppendSystemInstruction(instruction)
-	}
-	for _, tool := range connector.Tools() {
-		h, ok := tool.Handler.(llm.FunctionCallHandler)
-		if !ok {
+	tools := connector.Tools()
+	for _, tool := range tools {
+		if _, ok := tool.Handler.(llm.FunctionCallHandler); !ok {
 			return nil, fmt.Errorf("%w: %s", ErrToolWithoutHandler, tool.Name)
 		}
-		frontend.RegisterFunction(tool.Name, h, llm.WithCancelOnInterruption(false))
-		builtin := tool
-		builtin.Handler = nil
-		holder.SetBuiltin(adapter.Builtin{Tool: builtin})
+	}
+	pairing := NewBackendPairingLLMExtension(connector.FrontendInstruction(), tools)
+	if err := frontend.AddExtension(pairing); err != nil {
+		return nil, err
 	}
 	procs := []processor.Processor{frontend}
 	if predictive := cfg.PredictiveDelegation; predictive != nil {

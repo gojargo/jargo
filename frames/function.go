@@ -323,6 +323,55 @@ func (f *ExternalFunctionCallCancelFrame) String() string {
 	return fmt.Sprintf("%s(%s)", f.Name(), f.ToolName)
 }
 
+// BackgroundWorkStartedFrame reports that background work has started: work the
+// bot runs without blocking the conversation. It is a system frame.
+//
+// The component that starts the work broadcasts it, the LLM service for an
+// asynchronous function call (WithCancelOnInterruption(false)) and the
+// BackendConnector for a task delegated to an LLMWithBackend backend, with a
+// BackgroundWorkFinishedFrame carrying the same WorkID once the work is over.
+// Anything else that dispatches such work, like a job sent to another worker,
+// should broadcast the same pair.
+type BackgroundWorkStartedFrame struct {
+	BaseSystemFrame
+	// WorkID identifies the work; the finished frame carries the same one.
+	WorkID string
+}
+
+// NewBackgroundWorkStartedFrame builds a BackgroundWorkStartedFrame.
+func NewBackgroundWorkStartedFrame(workID string) *BackgroundWorkStartedFrame {
+	return &BackgroundWorkStartedFrame{
+		BaseSystemFrame: NewBaseSystemFrame("BackgroundWorkStartedFrame"),
+		WorkID:          workID,
+	}
+}
+
+// String implements fmt.Stringer.
+func (f *BackgroundWorkStartedFrame) String() string {
+	return fmt.Sprintf("%s(work_id: %s)", f.Name(), f.WorkID)
+}
+
+// BackgroundWorkFinishedFrame reports that background work is over, whether by
+// result, error or cancellation. It is a system frame.
+type BackgroundWorkFinishedFrame struct {
+	BaseSystemFrame
+	// WorkID is the work that finished, as its started frame named it.
+	WorkID string
+}
+
+// NewBackgroundWorkFinishedFrame builds a BackgroundWorkFinishedFrame.
+func NewBackgroundWorkFinishedFrame(workID string) *BackgroundWorkFinishedFrame {
+	return &BackgroundWorkFinishedFrame{
+		BaseSystemFrame: NewBaseSystemFrame("BackgroundWorkFinishedFrame"),
+		WorkID:          workID,
+	}
+}
+
+// String implements fmt.Stringer.
+func (f *BackgroundWorkFinishedFrame) String() string {
+	return fmt.Sprintf("%s(work_id: %s)", f.Name(), f.WorkID)
+}
+
 // Compile-time interface checks.
 var (
 	_ SystemFrame     = (*FunctionCallsStartedFrame)(nil)
@@ -335,4 +384,6 @@ var (
 	_ SystemFrame     = (*ExternalFunctionCallInProgressFrame)(nil)
 	_ SystemFrame     = (*ExternalFunctionCallResultFrame)(nil)
 	_ SystemFrame     = (*ExternalFunctionCallCancelFrame)(nil)
+	_ SystemFrame     = (*BackgroundWorkStartedFrame)(nil)
+	_ SystemFrame     = (*BackgroundWorkFinishedFrame)(nil)
 )

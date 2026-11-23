@@ -527,7 +527,7 @@ type scriptedJudge struct {
 func (j *scriptedJudge) AddUserMessage(string)      {}
 func (j *scriptedJudge) AddAssistantMessage(string) {}
 
-func (j *scriptedJudge) Evaluate(context.Context, string) eval.JudgeVerdict {
+func (j *scriptedJudge) Evaluate(context.Context, string, *bool) eval.JudgeVerdict {
 	j.calls++
 	v := eval.VerdictNo
 	if len(j.verdicts) > 0 {
@@ -542,7 +542,7 @@ func (j *scriptedJudge) EvaluateCall(
 	ctx context.Context, name string, args map[string]any, criterion string,
 ) eval.JudgeVerdict {
 	j.judged = append(j.judged, judgedCall{Name: name, Args: args, Criterion: criterion})
-	return j.Evaluate(ctx, criterion)
+	return j.Evaluate(ctx, criterion, nil)
 }
 
 // judgedCall is one call put to the judge.

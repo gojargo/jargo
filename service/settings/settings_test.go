@@ -519,3 +519,46 @@ func TestCopyLeavesTheOriginalAlone(t *testing.T) {
 		t.Errorf("copied voice = %q, want alice", v)
 	}
 }
+
+// extensionStub stands in for an LLM extension, whose type this package cannot
+// name.
+type extensionStub struct{ name string }
+
+// A delta's extensions add to the ones held rather than replacing them: a
+// function entry builds the extension it adds, an entry held already is left
+// as it is, and the field is reported changed with what was held.
+func TestADeltasExtensionsAddToTheOnesHeld(t *testing.T) {
+	held := &extensionStub{"held"}
+	var store settings.LLM
+	store.Extensions = settings.Set(settings.Extensions{held})
+
+	var delta settings.LLM
+	delta.Extensions = settings.Set(settings.Extensions{
+		held,
+		func() *extensionStub { return &extensionStub{"built"} },
+	})
+	changed, err := settings.Apply(&store, &delta)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	before, _ := changed["extensions"].(settings.Extensions)
+	if len(before) != 1 || before[0] != any(held) {
+		t.Errorf("changed reports %v, want what was held before", changed["extensions"])
+	}
+	after, _ := store.Extensions.Value()
+	if len(after) != 2 || after[0] != any(held) {
+		t.Fatalf("the store holds %v, want the one held and the one built", after)
+	}
+	if built, ok := after[1].(*extensionStub); !ok || built.name != "built" {
+		t.Errorf("the second entry is %v, want the extension the function built", after[1])
+	}
+
+	// Merged again, the delta builds a new extension, and holds the first once.
+	if _, err := settings.Apply(&store, &delta); err != nil {
+		t.Fatal(err)
+	}
+	if again, _ := store.Extensions.Value(); len(again) != 3 || again[1] == again[2] {
+		t.Errorf("the store holds %v after a second merge, want one new extension built", again)
+	}
+}

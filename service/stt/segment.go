@@ -39,6 +39,23 @@ type SegmentRater interface {
 	SegmentSampleRate(sampleRate int) int
 }
 
+// SegmentRunner transcribes a segment into the frames of its transcript itself,
+// for a provider whose result carries more than text: one frame per speaker run
+// of a diarized transcript, say, or the provider's raw result on the frame. A
+// service built with NewSegmentRunner hands each segment, 16-bit mono PCM at
+// sampleRate, to RunSTT and pushes what it yields as it does its own
+// transcripts: a TranscriptionFrame per transcript (one per speaker run for a
+// diarized one, of which only the last is finalized) and an ErrorFrame for a
+// failure, which the service reports, classified, as its own error.
+//
+// The run builds its frames with the service's help: UserID is who the
+// transcripts are attributed to, StartProcessingMetrics and
+// StopProcessingMetrics time the provider's request, and DiarizedRuns splits a
+// diarized result by speaker. Yielding nothing transcribes nothing.
+type SegmentRunner interface {
+	RunSTT(ctx context.Context, audio []byte, sampleRate int) iter.Seq[frames.Frame]
+}
+
 // DefaultTrailingSilence is how much silence is appended to each segment before
 // it is transcribed. A segment ends right where the detector stopped, and models
 // tend to drop or garble the final word when the audio ends that abruptly.
@@ -64,7 +81,18 @@ const DefaultTrailingSilence = 500 * time.Millisecond
 // goes on; a CancelFrame drops it.
 type SegmentService struct {
 	*service.Base
-	tr      Transcriber
+	// diarization numbers the speakers a provider's diarization told apart and
+	// formats what they said.
+	diarization
+	// provider is the Transcriber or SegmentRunner the service was built
+	// with. The optional interfaces are asked of it.
+	provider any
+	// tr transcribes a segment to text, nil for a service built with a
+	// SegmentRunner.
+	tr Transcriber
+	// runner transcribes a segment into frames, nil for a service built with
+	// a Transcriber.
+	runner  SegmentRunner
 	cfgRate int
 	model   string
 
@@ -116,6 +144,9 @@ type SegmentService struct {
 	// userID is the user the audio last buffered was attributed to, "" when it
 	// named nobody. The transcripts the service emits carry it.
 	userID string
+	// processingStart is when the provider's request for the segment being
+	// transcribed started, zero when no measurement is running.
+	processingStart time.Time
 }
 
 // CurrentSettings is the service's current settings, for code outside the
@@ -131,16 +162,31 @@ func (s *SegmentService) StopAllMetrics(ctx context.Context) { s.ttfb.reportNow(
 // NewSegment builds a segmented STT service named name driven by tr. A non-zero
 // sampleRate overrides the transport's input rate.
 func NewSegment(name string, tr Transcriber, sampleRate int) *SegmentService {
+	return newSegment(name, tr, tr, nil, sampleRate)
+}
+
+// NewSegmentRunner builds a segmented STT service named name whose segments are
+// transcribed by r's RunSTT. A non-zero sampleRate overrides the transport's
+// input rate.
+func NewSegmentRunner(name string, r SegmentRunner, sampleRate int) *SegmentService {
+	return newSegment(name, r, nil, r, sampleRate)
+}
+
+// newSegment builds a segmented STT service for provider, which is tr or
+// runner.
+func newSegment(name string, provider any, tr Transcriber, runner SegmentRunner, sampleRate int) *SegmentService {
 	s := &SegmentService{
-		tr: tr, cfgRate: sampleRate, trailingSilence: DefaultTrailingSilence,
+		provider: provider, tr: tr, runner: runner,
+		cfgRate: sampleRate, trailingSilence: DefaultTrailingSilence,
 		queued: make(chan struct{}, 1),
 		speech: audio.NewSpeechSegmentBuffer(audio.DefaultPreSpeech, 0),
 	}
-	if d, ok := tr.(Describer); ok {
+	if d, ok := provider.(Describer); ok {
 		s.model = d.Metadata().Model
 	}
 	s.Base = service.New(name, s)
-	s.set = &providerSettings{provider: tr, name: s.Name, onModel: s.setModel, onChanged: s.SettingsUpdated}
+	s.set = &providerSettings{provider: provider, name: s.Name, onModel: s.setModel, onChanged: s.SettingsUpdated}
+	s.diarization = diarization{set: s.set, name: s.Name}
 	s.ttfb = newTTFBTracker(s.Base.Base, s.modelName)
 	s.work = newProcessingMeter(s.Base.Base, s.modelName)
 	s.tracer = newSegmentTracer(s.Base.Base, func() tracing.STTAttributes {
@@ -243,7 +289,7 @@ func (s *SegmentService) Setup(ctx context.Context, st processor.Setup) error {
 		s.sampleRate = st.AudioInSampleRate
 	}
 	s.segmentRate = s.sampleRate
-	if r, ok := s.tr.(SegmentRater); ok {
+	if r, ok := s.provider.(SegmentRater); ok {
 		s.segmentRate = r.SegmentSampleRate(s.sampleRate)
 	}
 	s.mu.Lock()
@@ -472,7 +518,7 @@ func (s *SegmentService) ServiceMetadataFrame() frames.ServiceMetadata {
 	mf := frames.NewSTTMetadataFrame(0)
 	mf.ServiceName = s.Name()
 	var m Metadata
-	if d, ok := s.tr.(Describer); ok {
+	if d, ok := s.provider.(Describer); ok {
 		m = d.Metadata()
 		mf.UserTurnStrategies = m.UserTurnStrategies
 	}
@@ -493,15 +539,48 @@ func (s *SegmentService) Cleanup(ctx context.Context) error {
 // (one per speaker run for a diarized one), and an ErrorFrame for a failure.
 type RunSTTFunc func(ctx context.Context, audio []byte, sampleRate int) iter.Seq[frames.Frame]
 
-// RunSTT is how the service transcribes a segment: through its Transcriber,
-// unless SetRunSTT replaced it.
+// RunSTT is how the service transcribes a segment: through its SegmentRunner
+// or its Transcriber, unless SetRunSTT replaced it.
 func (s *SegmentService) RunSTT() RunSTTFunc {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.runSTT != nil {
 		return s.runSTT
 	}
+	if s.runner != nil {
+		return s.runner.RunSTT
+	}
 	return s.transcriberRun
+}
+
+// UserID is the user the audio last buffered was attributed to, "" when it
+// named nobody. A SegmentRunner attributes the transcripts it yields to it.
+func (s *SegmentService) UserID() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.userID
+}
+
+// StartProcessingMetrics starts timing the provider's work on a segment. A
+// SegmentRunner calls it as it sends the segment.
+func (s *SegmentService) StartProcessingMetrics() {
+	s.mu.Lock()
+	s.processingStart = time.Now()
+	s.mu.Unlock()
+}
+
+// StopProcessingMetrics stops timing the provider's work on a segment and
+// reports the measurement. A SegmentRunner calls it once the provider has
+// answered. It does nothing when no measurement is running.
+func (s *SegmentService) StopProcessingMetrics(ctx context.Context) {
+	s.mu.Lock()
+	start := s.processingStart
+	s.processingStart = time.Time{}
+	s.mu.Unlock()
+	if start.IsZero() {
+		return
+	}
+	s.work.reportElapsed(ctx, time.Since(start))
 }
 
 // SetRunSTT replaces how the service transcribes a segment. A caller that tags
@@ -553,6 +632,10 @@ func (s *SegmentService) pushSegmentFrames(ctx context.Context, run iter.Seq[fra
 			}
 			_ = s.PushFrame(ctx, fr, processor.Downstream)
 		case *frames.ErrorFrame:
+			if fr.Err != nil {
+				// The segment produced no words, and its span says why.
+				s.tracer.recordError(fr.Err)
+			}
 			s.PushErrorFrame(ctx, fr, false)
 		default:
 			_ = s.PushFrame(ctx, f, processor.Downstream)
@@ -576,7 +659,7 @@ func (s *SegmentService) setHasMoreTranscripts(more bool) {
 // here, with the segment's span.
 func (s *SegmentService) transcriberRun(ctx context.Context, audio []byte, rate int) iter.Seq[frames.Frame] {
 	return func(yield func(frames.Frame) bool) {
-		start := time.Now()
+		s.StartProcessingMetrics()
 		text, lang, err := s.transcribeSegment(ctx, audio, rate)
 		if err != nil {
 			if ctx.Err() == nil {
@@ -585,14 +668,11 @@ func (s *SegmentService) transcriberRun(ctx context.Context, audio []byte, rate 
 			}
 			return
 		}
-		s.work.reportElapsed(ctx, time.Since(start))
+		s.StopProcessingMetrics(ctx)
 		if text == "" {
 			return
 		}
-		s.mu.Lock()
-		userID := s.userID
-		s.mu.Unlock()
-		tf := frames.NewTranscriptionFrame(text, userID, frames.NowTimestamp())
+		tf := frames.NewTranscriptionFrame(text, s.UserID(), frames.NowTimestamp())
 		tf.Language = lang
 		yield(tf)
 	}

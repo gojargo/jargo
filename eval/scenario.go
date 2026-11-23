@@ -65,9 +65,11 @@
 //	                         (response, llm_response, tts_response, and the
 //	                         expression its TTS performed), or, on function_call,
 //	                         the call itself by name and args
+//	allow_continue: false    with eval: judge the reply yes or no, never
+//	                         continue (see below)
 //	marker: <str>            for llm_marker: what the marker meant, one of
-//	                         complete, short, long, or incomplete for either of
-//	                         the last two
+//	                         complete, short, long, incomplete for either of
+//	                         those two, or silent
 //	marker_first: <bool>     for llm_marker: the marker came before any text
 //	markers: <int>           for llm_marker: how many markers the response holds
 //	text_after: <bool>       for llm_marker: text follows the first marker
@@ -178,6 +180,18 @@
 // reply so far is only filler and the criterion should be judged again once
 // more arrives.
 //
+// allow_continue: false, with eval:, judges the reply yes or no, never
+// continue. The judge answers continue for a reply on the way to its answer, a
+// "let me check" before the result, and the harness then waits for more of the
+// reply. Setting allow_continue: false forces the judge to consider the reply as
+// final, the thing to be judged, rather than skipping it: a wait reassurance
+// ("still working on it...") is judged that way:
+//
+//	expect:
+//	  - event: response
+//	    eval: "says it is still working on the task, reporting no result"
+//	    allow_continue: false
+//
 // # Asserting on the markers the model emits
 //
 // A model reading the turn-completion protocol begins each response with a
@@ -200,6 +214,9 @@
 // given: marker_first that nothing came before the marker, markers how many the
 // response holds, and text_after whether anything follows the first one, which a
 // complete turn should have and an incomplete one should not.
+//
+// marker: silent is a reply the LLM answered with its silent mark, which the bot
+// dropped unspoken.
 //
 // # Asserting on the bot's metrics and its own messages
 //

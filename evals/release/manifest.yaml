@@ -209,7 +209,7 @@ suite:
   - bot: function-calling/function-calling-anthropic-async
     scenarios: [scripted/weather_function_call, scripted/async_tool, scripted/async_tool_cancellation, scripted/function_call_timeout]
   - bot: function-calling/function-calling-openai-async
-    scenarios: [scripted/weather_function_call, scripted/async_tool, scripted/function_call_timeout]
+    scenarios: [scripted/weather_function_call, scripted/async_tool, scripted/async_tool_wait_reassurance, scripted/function_call_timeout]
   - bot: function-calling/function-calling-openai-responses-async
     scenarios: [scripted/weather_function_call, scripted/async_tool, scripted/async_tool_cancellation, scripted/function_call_timeout]
   - bot: mcp/mcp-stdio

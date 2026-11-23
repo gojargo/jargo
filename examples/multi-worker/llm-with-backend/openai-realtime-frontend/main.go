@@ -81,11 +81,12 @@ func runBot(ctx context.Context, t transport.Transport, args runner.Arguments) e
 			},
 		}),
 		Backend: be,
-		// To watch every exchange with the backend in a client's event log,
-		// such as the prebuilt UI's Events panel, pass a connector with client
-		// tracing on: each request, output, tool-call phase, error and idle is
-		// then sent to the client as an RTVI server message.
-		// Connector: llmwithbackend.NewBackendConnector(llmwithbackend.ConnectorConfig{ClientTrace: true}),
+		// Every exchange with the backend (each request, output, tool-call phase,
+		// error and idle) is sent to the client as an RTVI "server-message" whose
+		// data has "type": "llm-with-backend", so the prebuilt UI's Events panel
+		// shows the backend at work. Tracing is off by default; comment out the
+		// connector to leave it off.
+		Connector: llmwithbackend.NewBackendConnector(llmwithbackend.ConnectorConfig{ClientTrace: true}),
 	})
 	if err != nil {
 		return err

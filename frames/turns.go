@@ -118,8 +118,62 @@ func NewUserMuteStoppedFrame() *UserMuteStoppedFrame {
 	return &UserMuteStoppedFrame{BaseSystemFrame: NewBaseSystemFrame("UserMuteStoppedFrame")}
 }
 
-// UserIdleTimeoutUpdateFrame updates the user-idle timeout at runtime. A value
-// <= 0 disables idle detection. It is a system frame.
+// UserTurnIdleFrame reports that the user has been idle for the idle timeout:
+// it is their turn, no background work is in progress, and they have said
+// nothing. It is a system frame.
+//
+// The user aggregator (or a UserTurnProcessor) broadcasts it when its
+// UserIdleController reports the user idle, together with its on_user_turn_idle
+// event, so a processor can act on the silence too.
+type UserTurnIdleFrame struct {
+	BaseSystemFrame
+	// QuietSecs is how long nothing has been said, in seconds.
+	QuietSecs float64
+}
+
+// NewUserTurnIdleFrame builds a UserTurnIdleFrame.
+func NewUserTurnIdleFrame(quietSecs float64) *UserTurnIdleFrame {
+	return &UserTurnIdleFrame{
+		BaseSystemFrame: NewBaseSystemFrame("UserTurnIdleFrame"),
+		QuietSecs:       quietSecs,
+	}
+}
+
+// String implements fmt.Stringer.
+func (f *UserTurnIdleFrame) String() string {
+	return fmt.Sprintf("%s(quiet_secs: %.3f)", f.Name(), f.QuietSecs)
+}
+
+// UserWaitingFrame reports that the user has waited quietly on background work
+// for the waiting timeout. It is a system frame.
+//
+// The user aggregator (or a UserTurnProcessor) broadcasts it when its
+// UserIdleController reports the user waiting, together with its
+// on_user_waiting event. Background work is what a BackgroundWorkStartedFrame
+// announced and no BackgroundWorkFinishedFrame has ended.
+type UserWaitingFrame struct {
+	BaseSystemFrame
+	// QuietSecs is how long nothing has been said, in seconds.
+	QuietSecs float64
+}
+
+// NewUserWaitingFrame builds a UserWaitingFrame.
+func NewUserWaitingFrame(quietSecs float64) *UserWaitingFrame {
+	return &UserWaitingFrame{
+		BaseSystemFrame: NewBaseSystemFrame("UserWaitingFrame"),
+		QuietSecs:       quietSecs,
+	}
+}
+
+// String implements fmt.Stringer.
+func (f *UserWaitingFrame) String() string {
+	return fmt.Sprintf("%s(quiet_secs: %.3f)", f.Name(), f.QuietSecs)
+}
+
+// UserIdleTimeoutUpdateFrame updates the user-idle timeout at runtime: how long
+// the conversation stays quiet, with no background work in progress, before the
+// user counts as idle. A value <= 0 disables idle detection. It is a system
+// frame.
 type UserIdleTimeoutUpdateFrame struct {
 	BaseSystemFrame
 	// Timeout is the new idle timeout.
@@ -136,6 +190,30 @@ func NewUserIdleTimeoutUpdateFrame(timeout time.Duration) *UserIdleTimeoutUpdate
 
 // String implements fmt.Stringer.
 func (f *UserIdleTimeoutUpdateFrame) String() string {
+	return fmt.Sprintf("%s(timeout: %s)", f.Name(), f.Timeout)
+}
+
+// UserWaitingTimeoutUpdateFrame updates the user-waiting timeout at runtime. A
+// value <= 0 disables waiting detection, a positive one enables it. The update
+// applies at once: a running waiting timer restarts with the new duration, and
+// if the user is waiting on background work the timer is armed right away. It is
+// a system frame.
+type UserWaitingTimeoutUpdateFrame struct {
+	BaseSystemFrame
+	// Timeout is the new waiting timeout.
+	Timeout time.Duration
+}
+
+// NewUserWaitingTimeoutUpdateFrame builds a UserWaitingTimeoutUpdateFrame.
+func NewUserWaitingTimeoutUpdateFrame(timeout time.Duration) *UserWaitingTimeoutUpdateFrame {
+	return &UserWaitingTimeoutUpdateFrame{
+		BaseSystemFrame: NewBaseSystemFrame("UserWaitingTimeoutUpdateFrame"),
+		Timeout:         timeout,
+	}
+}
+
+// String implements fmt.Stringer.
+func (f *UserWaitingTimeoutUpdateFrame) String() string {
 	return fmt.Sprintf("%s(timeout: %s)", f.Name(), f.Timeout)
 }
 
@@ -157,7 +235,7 @@ func NewUserTurnInferenceCompletedFrame() *UserTurnInferenceCompletedFrame {
 // UserTurnCompletionFrame is the LLM's judgment of whether the user's turn is
 // complete.
 //
-// An LLM service that uses turn-completion markers pushes it upstream, once per
+// The LLM service's turn-completion extension pushes it upstream, once per
 // inference and as soon as the judgment is known: when the response's marker is
 // read, when the response calls a tool before writing a marker (Kind
 // "complete"), or when the response ends without one (Kind ""). The marker
@@ -267,8 +345,9 @@ func NewEagerEndOfTurnCancelFrame() *UserTurnResponseCancelFrame {
 }
 
 // LLMMarkerFrame carries a turn-completion marker the LLM emitted (for example
-// "●"). It is informational, since the TTS downstream ignores it, and lets
-// observers see the model's completeness verdict. It is a data frame.
+// "●"), pushed by the LLM service's turn-completion extension. It is
+// informational, since the TTS downstream ignores it, and lets observers see
+// the model's completeness verdict. It is a data frame.
 type LLMMarkerFrame struct {
 	BaseDataFrame
 	// Marker is the marker text.
@@ -291,27 +370,38 @@ func NewLLMMarkerFrame(marker string) *LLMMarkerFrame {
 	}
 }
 
-// LLMMarkerResponseFrame is what a marker-reading LLM service made of one whole
-// response: the marker it found, what that meant, and the text the model
+// LLMMarkerResponseFrame is what a marker-reading LLM service (its
+// turn-completion extension) made of one whole response: the marker it found, what that meant, and the text the model
 // produced before anything was held back.
 //
 // It is pushed when the response ends, behind the LLMMarkerFrame and the spoken
-// text. It is a diagnostic, for a consumer checking how well the model follows
-// the marker protocol, and plays no part in the conversation. It is a data frame.
+// text. A reply dropped as a silent mark is reported as soon as the mark is
+// read, broadcast both ways: the user aggregator starts its idle or waiting
+// timer over on it, and the assistant aggregator records nothing for the reply.
+// It is a diagnostic otherwise, for a consumer checking how well the model
+// follows the marker protocol, and plays no part in the conversation. It is a
+// data frame.
 type LLMMarkerResponseFrame struct {
 	BaseDataFrame
-	// Raw is the response as the model produced it, markers included.
+	// Raw is the response as the model produced it, markers included; for a
+	// silent reply, its opening up to the mark.
 	Raw string
 	// Marker is the marker found, or empty when the response carried none.
 	Marker string
 	// Kind is what the marker meant, in the emitter's own vocabulary, for a
 	// consumer that should not depend on the marker text, which is configurable.
-	// The turn-completion protocol uses "complete", "short" and "long".
+	// The turn-completion protocol uses "complete", "short" and "long"; the
+	// wait-reassurance extension uses LLMMarkerKindSilent for a reply it dropped
+	// as its silent mark.
 	Kind string
 	// Markers are every marker the emitter recognizes, so a consumer can find
 	// them in Raw without knowing how the emitter was configured.
 	Markers []string
 }
+
+// LLMMarkerKindSilent is the LLMMarkerResponseFrame kind of a reply the LLM
+// chose to leave unspoken, answering with the wait-reassurance silent mark.
+const LLMMarkerKindSilent = "silent"
 
 // NewLLMMarkerResponseFrame builds an LLMMarkerResponseFrame.
 func NewLLMMarkerResponseFrame(raw, marker, kind string, markers []string) *LLMMarkerResponseFrame {
@@ -373,6 +463,9 @@ var (
 	_ SystemFrame  = (*UserMuteStartedFrame)(nil)
 	_ SystemFrame  = (*UserMuteStoppedFrame)(nil)
 	_ SystemFrame  = (*UserIdleTimeoutUpdateFrame)(nil)
+	_ SystemFrame  = (*UserWaitingTimeoutUpdateFrame)(nil)
+	_ SystemFrame  = (*UserTurnIdleFrame)(nil)
+	_ SystemFrame  = (*UserWaitingFrame)(nil)
 	_ SystemFrame  = (*SpeechControlParamsFrame)(nil)
 	_ SystemFrame  = (*UserTurnResponseCancelFrame)(nil)
 	_ SystemFrame  = (*UserTurnCompletionFrame)(nil)

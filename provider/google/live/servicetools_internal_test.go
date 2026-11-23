@@ -217,14 +217,40 @@ func TestAConfiguredInstructionKeepsTheSession(t *testing.T) {
 	}
 }
 
-// The session is set up before the pipeline starts, which is when the
-// instruction is composed, so the first conversation reopens it with what was
-// composed onto the base prompt, here the guidance for asynchronous tools.
-func TestTheFirstConversationReopensWithTheComposedInstruction(t *testing.T) {
+// The instruction is composed as the service is set up, before it connects, so
+// the first session is set up with what was composed onto the base prompt,
+// here the guidance for asynchronous tools, and the first conversation leaves
+// it as it is.
+func TestTheFirstConnectSendsTheComposedInstruction(t *testing.T) {
 	srv := newRecordingSession(t)
 	s := startedServiceBuilt(t, New(Config{APIKey: "k", BaseURL: wsURL(srv), Instructions: "base prompt"}))
 	waitSetups(t, srv, 1)
 
+	convo := frames.NewLLMContext("")
+	convo.AddUserMessage("Hello")
+	s.handleContext(t.Context(), convo, 0)
+	settle()
+
+	setups := srv.setups()
+	if len(setups) != 1 {
+		t.Fatalf("received %d setups, want the first session kept", len(setups))
+	}
+	first, _ := setups[0]["systemInstruction"].(map[string]any)
+	got := systemText(first)
+	if !strings.HasPrefix(got, "base prompt") || !strings.Contains(got, frames.AsyncToolInstructions) {
+		t.Errorf("first instruction = %q, want the base prompt and the async tool guidance", got)
+	}
+}
+
+// An instruction appended after setup changes the instruction the session was
+// set up with, so the first conversation reopens it with the new one.
+func TestTheFirstConversationReopensWithAnInstructionComposedAfterSetup(t *testing.T) {
+	srv := newRecordingSession(t)
+	s := New(Config{APIKey: "k", BaseURL: wsURL(srv), Instructions: "base prompt"})
+	runningLive(t, s)
+	waitSetups(t, srv, 1)
+
+	s.AppendSystemInstruction("more guidance")
 	convo := frames.NewLLMContext("")
 	convo.AddUserMessage("Hello")
 	s.handleContext(t.Context(), convo, 0)
@@ -235,9 +261,8 @@ func TestTheFirstConversationReopensWithTheComposedInstruction(t *testing.T) {
 		t.Errorf("first instruction = %q, want the base prompt", got)
 	}
 	second, _ := setups[1]["systemInstruction"].(map[string]any)
-	got := systemText(second)
-	if !strings.HasPrefix(got, "base prompt") || !strings.Contains(got, frames.AsyncToolInstructions) {
-		t.Errorf("reopened instruction = %q, want the base prompt and the async tool guidance", got)
+	if got := systemText(second); !strings.HasPrefix(got, "base prompt") || !strings.Contains(got, "more guidance") {
+		t.Errorf("reopened instruction = %q, want the base prompt and the appended guidance", got)
 	}
 }
 
@@ -270,6 +295,8 @@ func TestAReconnectSendsTheCurrentInstruction(t *testing.T) {
 func TestAReopenedSessionIsSeededOnlyOnceItIsReady(t *testing.T) {
 	srv := newRecordingSession(t)
 	s := startedServiceBuilt(t, New(Config{APIKey: "k", BaseURL: wsURL(srv)}))
+	// Appended after setup, so the first conversation reopens the session.
+	s.AppendSystemInstruction("more guidance")
 	s.handleContext(t.Context(), greeting(), 0)
 	waitFor(t, "the seed", func() bool { return len(srv.clientContents()) > 0 })
 

@@ -13,6 +13,146 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- **Piper voices run in process.** `piper.NewTTS` synthesizes with libpiper,
+  bound at run time without cgo. It takes a `piper.Config` naming the voice
+  (required, such as `en_US-ryan-high`), downloads the voice once from the
+  rhasspy/piper-voices repository into the user cache, and applies the speaker,
+  length scale and noise scales to every utterance, so `piper.TTSSettings`
+  updates take effect on the next one; other runtime changes are logged as not
+  supported. `make deps-piper` builds libpiper from a pinned release under
+  `.native/`, linked against the ONNX Runtime from `make deps-onnx`, and
+  `JARGO_PIPER_LIB` points at it. The `voice-piper` example runs Piper in
+  process.
+- **Deepgram segmented speech-to-text on the pre-recorded API.**
+  `deepgram.NewSegmentedSTT` transcribes each VAD-delimited speech segment with
+  one `POST /v1/listen` request carrying the audio as WAV. Its settings
+  (`deepgram.SegmentedSTTSettings`: the shared Deepgram settings plus
+  `detect_language`, `diarize_model` and `filler_words`) are read for every
+  request, so an update applies from the next segment; other pre-recorded
+  parameters pass through `Extra`, and an `Extra` key naming a setting sets it.
+  Diarization is requested through `diarize_model` alone and splits each result
+  into one transcript per speaker run, formatted by `speaker_format`. A request
+  on a dropped connection is retried once, a rejected key or setting leaves the
+  service unusable until its settings change, and error messages never quote
+  the request's query. The `voice-deepgram-http` example now uses it.
+- **Providers can own a segment's transcription.** A provider implementing
+  `stt.SegmentRunner`, built with `stt.NewSegmentRunner`, yields a segment's
+  frames itself (one transcript per speaker run, the raw result, its own
+  errors) while the service attributes, finalizes, times and reports them.
+  `SegmentService` gains `UserID`, `StartProcessingMetrics` and
+  `StopProcessingMetrics` for such a run.
+- **Shared speaker diarization helpers.** `stt.SpeakerRuns` splits a transcript
+  into contiguous speaker runs, and both `StreamService` and `SegmentService`
+  expose `Speaker`, `ApplySpeakerFormat` and `DiarizedRuns`, numbering speakers
+  in order of first appearance and applying the `speaker_format` setting.
+- **`stt.DeepgramSegmentedTTFSP99`** latency constant.
+- **More examples run under the eval transport:** `voice-deepgram`,
+  `voice-neuphonic-http`, `voice-speechmatics`, `voice-speechmatics-vad`,
+  `mcp-multiple-mcp` and `mcp-streamable-http`.
+- **LLM extensions.** An extension (`llm.LLMExtension`, embedding
+  `llm.BaseLLMExtension`) is a pluggable feature of an LLM service: it
+  contributes to the system instruction, adds built-in tools, watches the
+  frames the service processes and filters the frames it pushes, layered
+  around the service by `Order()`. Attach one with `Base.AddExtension` before
+  the pipeline runs, or with an `LLMUpdateSettingsFrame` whose `settings.LLM`
+  delta lists it in `Extensions` (a `func() llm.LLMExtension` entry builds one
+  per service the update reaches). `llm.GetExtension[*T]` finds an attached
+  extension. `llm.LLMExtensionTool.AnnounceCallStart` makes an extension tool's
+  calls announced like the application's own, and `Base.RunningFunctionCalls`
+  and `Base.CancelFunctionCall` let a tool handler act on the calls in flight.
+- **Wait reassurance.** `turns.WaitReassuranceLLMExtension` keeps the
+  conversation from going silent while the user waits on background work. On a
+  text LLM it adds its instruction to the system instruction and sets the user
+  aggregator's waiting timeout to its interval; each time the user has waited
+  that long, it asks the LLM, which says one short sentence that the work is
+  still going on, or answers with the silent mark (`turns.WaitReassuranceSilentMark`)
+  to say nothing. A reply opening with the mark is dropped before the TTS or the
+  context sees it, and is broadcast as an `LLMMarkerResponseFrame` of kind
+  `frames.LLMMarkerKindSilent`, on which the user aggregator starts the interval
+  over and the assistant aggregator records nothing. The instruction, prompt,
+  mark and interval are set through `turns.WaitReassuranceConfig`. The
+  `function-calling-openai-async` example and the `llm-with-backend` frontends
+  attach it.
+- **User waiting beside user idle.** The silence after the bot's turn is told
+  apart by whether background work is in progress.
+  `BackgroundWorkStartedFrame` and `BackgroundWorkFinishedFrame`, keyed by
+  `WorkID`, are broadcast by the LLM service around an asynchronous function
+  call and by `llmwithbackend.BackendConnector` around the work a backend has
+  in flight. `turns.Config.WaitingTimeout` and `OnWaiting`, with the
+  `on_user_waiting` event (`aggregators.EventUserWaiting`,
+  `turns.EventUserWaiting`), set how long the conversation stays quiet with
+  work in progress before the user counts as waiting; it is off by default.
+  `UserTurnIdleFrame` and `UserWaitingFrame` are broadcast with the idle and
+  waiting events and carry `QuietSecs`; `UserWaitingTimeoutUpdateFrame` sets
+  the waiting timeout at runtime. See the
+  `turn-management-detect-user-waiting` example.
+- **Eval expectations take `allow_continue: false`** alongside `eval:`, so the
+  judge answers yes or no for that reply, never continue: a wait reassurance is
+  judged as final instead of skipped. A non-boolean value, or the key without
+  `eval:`, is refused when the scenario loads. `llm_marker` expectations accept
+  `marker: silent` (`eval.MarkerSilent`), and the release suite has an
+  `async_tool_wait_reassurance` scenario.
+- **The `openai-responses-frontend-filter-incomplete-turns` example**:
+  an LLMWithBackend frontend on the Responses API with incomplete user turns
+  filtered.
+
+### Changed
+
+- **Turn completion is an LLM extension.** `llm.LLMTurnCompletionLLMExtension`
+  is installed by `turns.LLMTurnCompletionStop` over a settings update, one per
+  service. The async-tool guidance and `cancel_<name>` tools come from
+  `llm.AsyncToolLLMExtension`, which every LLM service holds, and
+  `WithAsyncToolCancellation` widens cancellability when a tool is registered.
+  `LLMWithBackend` installs its pairing on the frontend as
+  `llmwithbackend.BackendPairingLLMExtension`, and a `delegate` call is
+  announced with `OnFunctionCallsStarted` and a `FunctionCallsStartedFrame`. A
+  service that connects at setup sends the composed system instruction,
+  built-in tool guidance included, on its first connection.
+- **BREAKING: `llmwithbackend.Frontend`** requires `Extensions()`,
+  `AddExtension` and `Broadcast` in place of `RegisterFunction` and
+  `AppendSystemInstruction`, and `BackendConnector.Deliver` and `RunSession`
+  take a frontend that can broadcast. `*llm.Base` satisfies it.
+- **BREAKING: `eval.Judge.Evaluate`** takes a third argument, `allowContinue
+  *bool`: whether this reply may be judged continue, nil leaving it to the
+  judge's own setting. `EvalJudge` caches a verdict by the answers it was
+  allowed as well.
+
+- **BREAKING: the Piper HTTP server client moved** from
+  `piper.NewTTS(piper.Config)` to `piper.NewHTTPTTS(piper.HTTPConfig)`. Its
+  `BaseURL` is the server's synthesis endpoint
+  (`http://localhost:5000/synthesize`); requests are now JSON carrying the
+  text, the voice and the synthesis settings that are set; the audio streams as
+  it arrives, at the rate the WAV header gives; and a failed request is
+  reported as an error frame. `piper.HTTPTTSSettings` changes the voice per
+  request.
+- **Deepgram STT settings are shared.** `deepgram.Settings` now embeds
+  `deepgram.BaseSTTSettings`, the settings both Deepgram STT APIs accept. The
+  streaming service gains `language_hint`, a runtime-changeable `version`
+  (seeded from `Config.Version`) and a local `speaker_format`; changing only
+  `speaker_format` no longer reopens the session.
+
+### Deprecated
+
+- `settings.LLM.FilterIncompleteUserTurns` and
+  `settings.LLM.UserTurnCompletionConfig`: use
+  `turns.FilterIncompleteUserTurnStrategies`. An update that sets them still
+  installs, removes or reconfigures the turn-completion extension, with a
+  warning. Likewise `Base.FilterIncompleteUserTurns`,
+  `SetFilterIncompleteUserTurns`, `SetUserTurnCompletionConfig` and
+  `UserTurnCompletionConfig`.
+
+### Fixed
+
+- The user idle timeout no longer fires while an asynchronous function call or
+  an LLMWithBackend backend works on the user's behalf; the user waiting
+  timeout covers that silence.
+- The user idle controller counts a function call as finished only if it saw
+  that call start.
+- A turn-completion configuration sent while filtering is off now applies when
+  filtering is turned on later.
+
 ## [0.7.0] - 2026-11-20
 
 ### Added

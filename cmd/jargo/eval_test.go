@@ -299,7 +299,7 @@ func TestJudgeFlags(t *testing.T) {
 		endpoint := newJudgeEndpoint(t, judgedNo, `{"reason": "it never mentions the weather"}`)
 		judge := judgeFromFlags(t, endpoint)
 		judge.AddAssistantMessage("Hello there.")
-		v := judge.Evaluate(t.Context(), "describes the weather")
+		v := judge.Evaluate(t.Context(), "describes the weather", nil)
 		if v.Verdict != eval.VerdictNo || v.Reason != "it never mentions the weather" {
 			t.Fatalf("verdict = %+v", v)
 		}
@@ -325,7 +325,7 @@ func TestJudgeFlags(t *testing.T) {
 		endpoint := newJudgeEndpoint(t, judgedNo)
 		judge := judgeFromFlags(t, endpoint, "--judge-explainer=false")
 		judge.AddAssistantMessage("Hello there.")
-		v := judge.Evaluate(t.Context(), "describes the weather")
+		v := judge.Evaluate(t.Context(), "describes the weather", nil)
 		if !strings.HasPrefix(v.Reason, "P(") || len(endpoint.bodies()) != 1 {
 			t.Fatalf("verdict = %+v after %d requests, want the probabilities alone", v, len(endpoint.bodies()))
 		}
@@ -339,7 +339,7 @@ func TestJudgeFlags(t *testing.T) {
 			endpoint := newJudgeEndpoint(t, judgedNo, `{"reason": "no"}`)
 			judge := judgeFromFlags(t, endpoint, flag)
 			judge.AddAssistantMessage("Hello there.")
-			judge.Evaluate(t.Context(), "describes the weather")
+			judge.Evaluate(t.Context(), "describes the weather", nil)
 			if got := strings.Contains(endpoint.bodies()[0], "- continue:"); got != wantContinue {
 				t.Errorf("%s: continue offered = %v, want %v", flag, got, wantContinue)
 			}
@@ -351,7 +351,7 @@ func TestJudgeFlags(t *testing.T) {
 		endpoint := newJudgeEndpoint(t, unsureYes, `{"reason": "close enough"}`)
 		judge := judgeFromFlags(t, endpoint, "--judge-explain-below", "0.5")
 		judge.AddAssistantMessage("Sunny-ish.")
-		if v := judge.Evaluate(t.Context(), "gives the weather"); !v.Passed() || len(endpoint.bodies()) != 1 {
+		if v := judge.Evaluate(t.Context(), "gives the weather", nil); !v.Passed() || len(endpoint.bodies()) != 1 {
 			t.Fatalf("verdict = %+v after %d requests, want a yes surer than 0.5 left unexplained",
 				v, len(endpoint.bodies()))
 		}

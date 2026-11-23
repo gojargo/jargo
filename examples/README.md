@@ -54,7 +54,7 @@ VAD. They need the ONNX Runtime, like the getting-started voice agents.
 | [`voice-deepgram-flux`](voice/voice-deepgram-flux) | Deepgram Flux speech-to-text and text-to-speech, with an OpenAI LLM. |
 | [`voice-deepgram-flux-eager`](voice/voice-deepgram-flux-eager) | Deepgram Flux speech-to-text and text-to-speech, with an OpenAI LLM, answering Flux's eager end of turn while the LLM's turn-completion markers hold incomplete turns open. |
 | [`voice-deepgram-flux-manual`](voice/voice-deepgram-flux-manual) | Deepgram Flux speech-to-text and text-to-speech, with an OpenAI LLM, where the pipeline's own user turn strategies decide when the user's turn ends and each VAD stop asks Flux to finalize. |
-| [`voice-deepgram-http`](voice/voice-deepgram-http) | Deepgram speech-to-text and text-to-speech (over HTTP), with an OpenAI LLM. |
+| [`voice-deepgram-http`](voice/voice-deepgram-http) | Deepgram speech-to-text (on the pre-recorded API, one request per speech segment) and text-to-speech (over HTTP), with an OpenAI LLM. |
 | [`voice-elevenlabs`](voice/voice-elevenlabs) | ElevenLabs realtime speech-to- text and streaming text-to-speech, with an OpenAI LLM. |
 | [`voice-elevenlabs-http`](voice/voice-elevenlabs-http) | ElevenLabs speech-to-text and text-to-speech over HTTP, with an OpenAI LLM. |
 | [`voice-fal`](voice/voice-fal) | Fal speech-to-text, an OpenAI LLM and Cartesia text-to-speech. |
@@ -84,7 +84,7 @@ VAD. They need the ONNX Runtime, like the getting-started voice agents.
 | [`voice-openai-responses`](voice/voice-openai-responses) | Deepgram speech-to-text, OpenAI's Responses API and Cartesia text-to-speech. |
 | [`voice-openai-responses-http`](voice/voice-openai-responses-http) | Deepgram speech-to- text, OpenAI's Responses API over HTTP and Cartesia text-to-speech. |
 | [`voice-openai-turn-detection`](voice/voice-openai-turn-detection) | OpenAI's realtime transcription with the server's VAD driving turns, an OpenAI LLM and OpenAI text-to-speech. |
-| [`voice-piper`](voice/voice-piper) | Deepgram speech-to-text, an OpenAI LLM and Piper text-to-speech. |
+| [`voice-piper`](voice/voice-piper) | Deepgram speech-to-text, an OpenAI LLM and local Piper text-to-speech (libpiper, in process, no server). |
 | [`voice-pockettts`](voice/voice-pockettts) | Deepgram speech-to-text, an OpenAI LLM and Pocket TTS text-to-speech. |
 | [`voice-resemble`](voice/voice-resemble) | Deepgram speech-to-text, an OpenAI LLM and Resemble AI text-to-speech. |
 | [`voice-rime`](voice/voice-rime) | Rime speech-to-text, an OpenAI LLM and Rime text-to-speech (over WebSocket). |
@@ -245,6 +245,7 @@ the bot describes the image, then talks by voice.
 | --- | --- | --- |
 | [`turn-management-classifier-turn-completion`](turn-management/turn-management-classifier-turn-completion) | A Jev classifier deciding that the user's turn is complete. | Deepgram, Cartesia, OpenAI, TypeSafe |
 | [`turn-management-detect-user-idle`](turn-management/turn-management-detect-user-idle) | Escalating idle prompts, then ending, with idle detection toggled at runtime. | Deepgram, Cartesia, OpenAI |
+| [`turn-management-detect-user-waiting`](turn-management/turn-management-detect-user-waiting) | The bot telling a user waiting quietly on a slow asynchronous tool that it is still working. | Deepgram, Cartesia, OpenAI |
 | [`turn-management-eager-end-of-turn`](turn-management/turn-management-eager-end-of-turn) | Answering Deepgram Flux's predicted end of turn ahead of the committed one. | Deepgram, Cartesia, OpenAI |
 | [`turn-management-empty-user-turn`](turn-management/turn-management-empty-user-turn) | Recovering from a user turn that ends with no transcript. | Deepgram, Cartesia, OpenAI |
 | [`turn-management-filter-incomplete-turns`](turn-management/turn-management-filter-incomplete-turns) | LLM turn-completion markers suppressing answers to incomplete turns. | Deepgram, Cartesia, OpenAI |
@@ -425,6 +426,7 @@ seconds after the client connects, with the frame that service takes.
 | [`openai-responses-frontend-predictive-delegation`](multi-worker/llm-with-backend/openai-responses-frontend-predictive-delegation) | The same, with a Jev classifier deciding after each request whether to start the delegation early. | Deepgram, OpenAI, Anthropic, Cartesia, TypeSafe |
 | [`anthropic-frontend`](multi-worker/llm-with-backend/anthropic-frontend) | A frontend on Claude delegates tool work to a Claude backend worker. | Deepgram, Anthropic, Cartesia |
 | [`google-frontend`](multi-worker/llm-with-backend/google-frontend) | A frontend on Gemini delegates tool work to a Claude backend worker. | Deepgram, Google AI, Anthropic, Cartesia |
+| [`openai-responses-frontend-filter-incomplete-turns`](multi-worker/llm-with-backend/openai-responses-frontend-filter-incomplete-turns) | `openai-responses-frontend`, with incomplete user turns filtered (`FilterIncompleteUserTurnStrategies`). | Deepgram, OpenAI, Anthropic, Cartesia |
 | [`openai-realtime-frontend`](multi-worker/llm-with-backend/openai-realtime-frontend) | An OpenAI Realtime frontend delegates tool work to a Claude backend worker. | OpenAI, Anthropic |
 | [`gemini-live-frontend`](multi-worker/llm-with-backend/gemini-live-frontend) | A Gemini Live frontend delegates tool work to a Claude backend worker. | Google AI, Anthropic |
 | [`redis-handoff`](multi-worker/distributed-handoff/redis-handoff) | The local handoff split into a transport process and one process per LLM worker, connected by a Redis bus. A module of its own. | Deepgram, OpenAI, Cartesia |

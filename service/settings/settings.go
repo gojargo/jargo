@@ -295,8 +295,13 @@ type LLM struct {
 	// Seed makes generation reproducible where the provider supports it.
 	Seed Opt[int] `settings:"seed"`
 	// FilterIncompleteUserTurns gates each reply on the model's own verdict of
-	// whether the user had finished speaking. It is set by the turn strategy that
-	// drives the protocol rather than by an application directly.
+	// whether the user had finished speaking. An update that sets it installs
+	// the turn-completion LLM extension, and one that clears it removes the
+	// extension, with a warning either way.
+	//
+	// Deprecated: use turns.FilterIncompleteUserTurnStrategies on the user
+	// aggregator, whose stop strategy installs the turn-completion extension
+	// over a settings update of its own.
 	FilterIncompleteUserTurns Opt[bool] `settings:"filter_incomplete_user_turns"`
 	// UseProviderThinkingDefault reports whether a model with no thinking
 	// configured runs at its provider's default. Services that otherwise send
@@ -305,13 +310,78 @@ type LLM struct {
 	// means false.
 	UseProviderThinkingDefault Opt[bool] `settings:"use_provider_thinking_default"`
 	// UserTurnCompletionConfig configures that gating: the protocol taught to the
-	// model, the waits before re-prompting, and the re-prompts themselves. It is
-	// set by the same turn strategy.
+	// model, the waits before re-prompting, and the re-prompts themselves. An
+	// update that sets it reconfigures the turn-completion LLM extension, with a
+	// warning.
 	//
 	// It is typed loosely because the type belongs to the LLM service, which is
 	// built on this package and so cannot be named here. Set it to an
 	// llm.UserTurnCompletionConfig; anything else is reported and ignored.
+	//
+	// Deprecated: pass the configuration to
+	// turns.FilterIncompleteUserTurnStrategies instead.
 	UserTurnCompletionConfig Opt[any] `settings:"user_turn_completion_config"`
+	// Extensions are the LLM extensions attached to the service (see
+	// llm.LLMExtension). A delta adds to the extensions held. An entry is an
+	// extension, for the one service the settings are for, or a function taking
+	// no arguments that builds one, for each service the delta reaches: an
+	// update marked to reach inactive services reaches every LLM behind a
+	// service switcher, and an extension belongs to one service, which refuses
+	// one that another has. The stored value holds the extensions themselves.
+	Extensions Opt[Extensions] `settings:"extensions"`
+}
+
+// Extensions is the entries of the extensions setting: each an LLM extension,
+// or a function that takes no arguments and returns one. It is typed loosely
+// because the extension type belongs to the LLM service, which is built on this
+// package and so cannot be named here.
+type Extensions []any
+
+// extensionsOptType is the type of the extensions setting, which is merged
+// rather than replaced.
+//
+//nolint:gochecknoglobals // the reflected type, resolved once
+var extensionsOptType = reflect.TypeFor[Opt[Extensions]]()
+
+// mergeExtensions adds a delta's extension entries to the ones held: an entry
+// that builds an extension is called for it, and an entry held already is left
+// as it is, so a store merged twice with the same delta holds each extension
+// once.
+func mergeExtensions(held, entries Extensions) Extensions {
+	merged := append(Extensions(nil), held...)
+	for _, entry := range entries {
+		built := buildExtension(entry)
+		if !holdsExtension(held, built) {
+			merged = append(merged, built)
+		}
+	}
+	return merged
+}
+
+// buildExtension calls an entry that builds an extension, a function with no
+// arguments and one result, and returns any other entry as it is.
+func buildExtension(entry any) any {
+	fn := reflect.ValueOf(entry)
+	if fn.Kind() != reflect.Func || fn.IsNil() || fn.Type().NumIn() != 0 || fn.Type().NumOut() != 1 {
+		return entry
+	}
+	return fn.Call(nil)[0].Interface()
+}
+
+// holdsExtension reports whether held has the extension itself, not merely one
+// equal to it.
+func holdsExtension(held Extensions, extension any) bool {
+	rv := reflect.ValueOf(extension)
+	if !rv.IsValid() || !rv.Comparable() {
+		return false
+	}
+	for _, h := range held {
+		hv := reflect.ValueOf(h)
+		if hv.IsValid() && hv.Type() == rv.Type() && hv.Comparable() && h == extension {
+			return true
+		}
+	}
+	return false
 }
 
 // TTS is the runtime-updatable settings of a speech synthesis service.
@@ -514,6 +584,16 @@ func ApplyFields(store, delta any) (Changed, error) {
 	for _, u := range updates {
 		s, _ := reflect.TypeAssert[option](u.field)
 		d, _ := reflect.TypeAssert[option](u.value)
+		if u.field.Type() == extensionsOptType {
+			// The extensions a delta gives add to the ones held rather than
+			// replacing them, and the field is reported changed with what was
+			// held, so the service can tell the extensions it is to attach.
+			held, _ := s.AsAny().(Extensions)
+			added, _ := d.AsAny().(Extensions)
+			changed[u.name] = append(Extensions(nil), held...)
+			u.field.Set(reflect.ValueOf(Set(mergeExtensions(held, added))))
+			continue
+		}
 		if reflect.DeepEqual(s.AsAny(), d.AsAny()) {
 			continue
 		}

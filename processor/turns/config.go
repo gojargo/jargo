@@ -24,10 +24,21 @@ type Config struct {
 	// StopTimeout is how long an open turn goes without user activity before it
 	// is ended, unless a stop strategy has a decision scheduled; 0 uses 5s.
 	StopTimeout time.Duration
-	// IdleTimeout enables the idle watchdog; a value <= 0 disables it.
+	// IdleTimeout is how long the conversation stays quiet after the bot's turn,
+	// with no background work in progress, before the user counts as idle and
+	// the on_user_turn_idle event fires; a value <= 0 disables idle detection.
 	IdleTimeout time.Duration
-	// OnIdle fires when the conversation goes idle. Required to enable idle.
+	// OnIdle fires, beside the on_user_turn_idle event, when the user is idle.
 	OnIdle IdleCallback
+	// WaitingTimeout is how long the conversation stays quiet, while background
+	// work is in progress (an asynchronous function call, or a task delegated to
+	// an LLMWithBackend backend), before the user counts as waiting and the
+	// on_user_waiting event fires; a value <= 0, the default, disables waiting
+	// detection.
+	WaitingTimeout time.Duration
+	// OnWaiting fires, beside the on_user_waiting event, when the user has
+	// waited quietly on background work.
+	OnWaiting IdleCallback
 	// MuteStrategies suppress user input while engaged (e.g. while the bot
 	// speaks or a tool call runs). They are OR-reduced; empty means never mute.
 	MuteStrategies []MuteStrategy

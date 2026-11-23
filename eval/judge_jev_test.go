@@ -172,7 +172,7 @@ func TestJevAReplyIsAskedAsAChoiceOverTheConversation(t *testing.T) {
 	j.AddAssistantMessage("Let me check.")
 	j.AddAssistantMessage("It's 72 and sunny.")
 
-	v := j.Evaluate(t.Context(), "describes the weather")
+	v := j.Evaluate(t.Context(), "describes the weather", nil)
 
 	if !v.Passed() || *v.Confidence != 0.95 || !strings.Contains(v.Reason, "P(yes)=0.95") {
 		t.Fatalf("verdict = %+v", v)
@@ -265,7 +265,7 @@ func TestJevARunAsksTheGoalAndEveryTurnAtOnce(t *testing.T) {
 func jevAsk(t *testing.T, j *eval.EvalJudge) eval.JudgeVerdict {
 	t.Helper()
 	j.AddAssistantMessage("It rains.")
-	return j.Evaluate(t.Context(), "mentions weather")
+	return j.Evaluate(t.Context(), "mentions weather", nil)
 }
 
 func TestJevATimeoutIsAskedAgain(t *testing.T) {

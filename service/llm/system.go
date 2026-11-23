@@ -3,9 +3,6 @@ package llm
 import (
 	"log/slog"
 	"strings"
-
-	"github.com/gojargo/jargo/expressive"
-	"github.com/gojargo/jargo/frames"
 )
 
 // The system instruction a service sends is composed rather than stored whole:
@@ -32,10 +29,17 @@ func (b *Base) SystemInstruction() string {
 // composed instruction from it. It is what an LLMUpdateSettingsFrame carrying a
 // system instruction ends up calling.
 func (b *Base) SetSystemInstruction(instruction string) {
+	b.setBaseSystemInstruction(instruction)
+	b.composeSystemInstruction()
+}
+
+// setBaseSystemInstruction replaces the base system prompt without composing,
+// for a settings update that composes once it has applied everything it
+// carries.
+func (b *Base) setBaseSystemInstruction(instruction string) {
 	b.systemMu.Lock()
 	b.baseSystemInstruction = instruction
 	b.systemMu.Unlock()
-	b.composeSystemInstruction()
 }
 
 // AppendSystemInstruction adds durable text to the end of the system
@@ -46,7 +50,7 @@ func (b *Base) SetSystemInstruction(instruction string) {
 // every generation. It is for a framework component that owns an LLM and has to
 // tell the model something the application did not: how to use a wire format it
 // is being asked to produce, say. Appended text is joined after the base prompt
-// and before the instructions the built-in tools contribute.
+// and before the instructions the LLM extensions contribute.
 func (b *Base) AppendSystemInstruction(instruction string) {
 	b.systemMu.Lock()
 	b.appendedSystemInstructions = append(b.appendedSystemInstructions, instruction)
@@ -55,8 +59,10 @@ func (b *Base) AppendSystemInstruction(instruction string) {
 }
 
 // composeSystemInstruction rebuilds the instruction from the base prompt and
-// every addition currently in force. It always rebuilds from the base, so it is
-// safe to call repeatedly.
+// every addition currently in force: the appended instructions, how to read
+// perception and the expression tags the TTS service performs (with expressive
+// conversation on), and what each LLM extension contributes, in extension
+// order. It always rebuilds from the base, so it is safe to call repeatedly.
 func (b *Base) composeSystemInstruction() {
 	b.systemMu.Lock()
 	parts := make([]string, 0, len(b.appendedSystemInstructions)+1)
@@ -74,35 +80,13 @@ func (b *Base) composeSystemInstruction() {
 	if expression := b.expressionInstructionsLocked(); expression != "" {
 		parts = append(parts, expression)
 	}
-	perceives := b.expression.perception != nil && len(b.expression.perception.Signals) > 0
 	b.systemMu.Unlock()
 
-	// The marker protocol is composed on rather than appended, so turning the
-	// gating off takes it back out again.
-	b.turnCompletion.mu.Lock()
-	if b.turnCompletion.enabled {
-		parts = append(parts, b.turnCompletion.config.CompletionInstructions())
-		// With perception taught, a reading of how the user sounded is not to
-		// decide the marker.
-		if perceives {
-			parts = append(parts, expressive.PerceptionTurnCompletionInstructions(b.turnCompletion.config.Markers()))
+	// Read outside the lock: an extension guards its own state.
+	for _, extension := range b.Extensions() {
+		if instruction := extension.SystemInstruction(); instruction != "" {
+			parts = append(parts, instruction)
 		}
-	}
-	b.turnCompletion.mu.Unlock()
-
-	// Likewise the guidance on stopping work early: it comes and goes with the
-	// cancel tools it describes, so a session with none never carries it.
-	if len(b.cancelToolNames()) > 0 {
-		parts = append(parts, asyncToolCancellationInstructions)
-	}
-
-	// The standing policy on results that arrive after the reply. The message
-	// carrying each result says the same thing, but it lands in a conversation
-	// whose most recent turn is the user asking for something else, and a model
-	// weighing the two follows the nearer request. Stating it up front puts it in
-	// force before any result exists.
-	if b.hasAsyncTools() {
-		parts = append(parts, frames.AsyncToolInstructions)
 	}
 
 	b.systemMu.Lock()

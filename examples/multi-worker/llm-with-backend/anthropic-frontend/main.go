@@ -37,6 +37,7 @@ import (
 	"github.com/gojargo/jargo/pipeline/llmwithbackend"
 	"github.com/gojargo/jargo/processor/aggregators"
 	"github.com/gojargo/jargo/processor/rtvi"
+	"github.com/gojargo/jargo/processor/turns"
 	"github.com/gojargo/jargo/provider/anthropic"
 	"github.com/gojargo/jargo/provider/cartesia"
 	"github.com/gojargo/jargo/provider/deepgram"
@@ -70,6 +71,10 @@ func runBot(ctx context.Context, t transport.Transport, args runner.Arguments) e
 
 	frontend := anthropic.NewLLM(anthropic.Config{APIKey: os.Getenv("ANTHROPIC_API_KEY")})
 	frontend.SetSystemInstruction(backend.FrontendInstructions)
+	// A brief word from the LLM while the backend works.
+	if err := frontend.AddExtension(turns.NewWaitReassuranceLLMExtension(turns.WaitReassuranceConfig{})); err != nil {
+		return err
+	}
 
 	be, err := backend.BuildBackend()
 	if err != nil {
@@ -78,11 +83,12 @@ func runBot(ctx context.Context, t transport.Transport, args runner.Arguments) e
 	llm, err := llmwithbackend.New(llmwithbackend.Config{
 		Frontend: frontend,
 		Backend:  be,
-		// To watch every exchange with the backend in a client's event log,
-		// such as the prebuilt UI's Events panel, pass a connector with client
-		// tracing on: each request, output, tool-call phase, error and idle is
-		// then sent to the client as an RTVI server message.
-		// Connector: llmwithbackend.NewBackendConnector(llmwithbackend.ConnectorConfig{ClientTrace: true}),
+		// Every exchange with the backend (each request, output, tool-call phase,
+		// error and idle) is sent to the client as an RTVI "server-message" whose
+		// data has "type": "llm-with-backend", so the prebuilt UI's Events panel
+		// shows the backend at work. Tracing is off by default; comment out the
+		// connector to leave it off.
+		Connector: llmwithbackend.NewBackendConnector(llmwithbackend.ConnectorConfig{ClientTrace: true}),
 	})
 	if err != nil {
 		return err

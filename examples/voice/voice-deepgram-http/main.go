@@ -1,5 +1,6 @@
-// Command voice-deepgram-http is a voice agent: Deepgram speech-to-text and
-// text-to-speech (over HTTP), with an OpenAI LLM.
+// Command voice-deepgram-http is a voice agent: Deepgram speech-to-text (on the
+// pre-recorded API, one request per speech segment) and text-to-speech (over
+// HTTP), with an OpenAI LLM.
 //
 //	DEEPGRAM_API_KEY=… OPENAI_API_KEY=… \
 //	  go run ./examples/voice/voice-deepgram-http
@@ -44,7 +45,11 @@ const systemInstruction = "You are a helpful assistant in a voice conversation. 
 func runBot(ctx context.Context, t transport.Transport, args runner.Arguments) error {
 	slog.Info("Starting bot")
 
-	stt := deepgram.NewSTT(deepgram.Config{APIKey: os.Getenv("DEEPGRAM_API_KEY")})
+	// Deepgram's pre-recorded API transcribes one VAD-detected speech
+	// segment per HTTP request.
+	stt := deepgram.NewSegmentedSTT(deepgram.SegmentedSTTConfig{
+		APIKey: os.Getenv("DEEPGRAM_API_KEY"),
+	})
 
 	tts := deepgram.NewTTS(deepgram.TTSConfig{
 		APIKey: os.Getenv("DEEPGRAM_API_KEY"),

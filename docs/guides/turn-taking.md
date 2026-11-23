@@ -168,9 +168,10 @@ unless a stop strategy has a decision of its own scheduled
 `turns.FilterIncompleteUserTurnStrategies` adds the optional LLM turn-completion
 gate. The model starts every response with a marker (● complete, ◐ the user will
 go on shortly, ○ the user needs more time), and the service reports each one as
-a `UserTurnCompletionFrame`. `LLMTurnCompletionStop` turns the markers on in the
-LLM when the pipeline starts and ends the turn on ●, a tool call, or a response
-with no marker; ◐ and ○ keep the turn open, and a user who then stays quiet for
+a `UserTurnCompletionFrame`. `LLMTurnCompletionStop` installs the
+`llm.LLMTurnCompletionLLMExtension` on the LLM when the pipeline starts, over a
+settings update that reaches every LLM behind a switcher, and ends the turn on ●,
+a tool call, or a response with no marker; ◐ and ○ keep the turn open, and a user who then stays quiet for
 `IncompleteShortTimeout` or `IncompleteLongTimeout` is re-prompted. It works
 next to any other stop strategy, an eager end of turn included, and on top of a
 service's own turn detection with `StopMergeMode: turns.MergeModeExtend`:
@@ -196,6 +197,85 @@ phrase, so use it as the only start strategy. To combine it with another start
 condition, such as `turns.NewMinWordsStart`, put both in a `StrategyModeAll`
 list.
 
+### Idle and waiting
+
+The `UserIdleController` times the silence after the bot finishes speaking and
+reports it as one of two things, told apart by whether background work is in
+progress. Background work is what a `BackgroundWorkStartedFrame` announced and
+no `BackgroundWorkFinishedFrame` has ended yet. The LLM service broadcasts the
+pair around an asynchronous function call (one registered with
+`llm.WithCancelOnInterruption(false)`), and `llmwithbackend.BackendConnector`
+around the work a backend has in flight. Anything else that dispatches such
+work, a job sent to another worker for instance, should broadcast the same
+pair, keyed by `WorkID`.
+
+- **Idle**: no background work, so it is the user's turn and they have said
+  nothing. After `Config.IdleTimeout`, the `on_user_turn_idle` event fires,
+  with `Config.OnIdle`.
+- **Waiting**: background work is in progress, and the user is waiting on it.
+  After `Config.WaitingTimeout`, the `on_user_waiting` event fires, with
+  `Config.OnWaiting`. Waiting detection is off by default.
+
+A synchronous function call is not background work: it is part of the bot's
+turn, so no idle timer runs while one is pending. Each timer fires once per
+start; the bot speaking again starts it over. Background work starting while
+the conversation is already quiet starts the waiting timer, and the last of it
+finishing hands over to the idle one. With each event, the user aggregator (or
+the `UserTurnProcessor`) broadcasts a `UserTurnIdleFrame` or a
+`UserWaitingFrame`, carrying `QuietSecs`, so a processor can act on the silence
+too. `UserIdleTimeoutUpdateFrame` and `UserWaitingTimeoutUpdateFrame` retune
+either timeout at runtime.
+
+```go
+aggregators.WithTurns(turns.Config{
+    IdleTimeout:    5 * time.Second,
+    WaitingTimeout: 10 * time.Second,
+})
+
+events.OnSignal(agg.User().Events(), aggregators.EventUserWaiting, func(ctx context.Context) {
+    f := frames.NewLLMMessagesAppendFrame([]frames.Message{{
+        Role: frames.RoleDeveloper,
+        Text: "The user has been waiting quietly. Briefly let them know you're still working on it.",
+    }})
+    f.RunLLM = true
+    _ = agg.User().PushFrame(ctx, f, processor.Downstream)
+})
+```
+
+See [`examples/turn-management/turn-management-detect-user-waiting`](../../examples/turn-management/turn-management-detect-user-waiting)
+for the complete bot.
+
+#### Wait reassurance
+
+`turns.WaitReassuranceLLMExtension` answers the wait for you, in the LLM's own
+words. Attached to a text LLM service, it sets the user aggregator's waiting
+timeout to its interval at start (10 seconds unless
+`WaitReassuranceConfig.Interval` says otherwise), so the interval is configured
+in one place. On each `UserWaitingFrame` it appends a short developer prompt
+and runs the LLM, which says one short sentence that the work is still going
+on, shaped by what the user asked for, or answers with the silent mark (`∅`) to
+say nothing.
+
+A reply opening with the mark is dropped before the TTS or the context sees it,
+and the decision is broadcast as an `LLMMarkerResponseFrame` of kind
+`frames.LLMMarkerKindSilent`, on which the user aggregator starts the interval
+over. The RTVI processor reports it as `bot-llm-marker` to a client that asked
+for marker reports. Its standing instruction is composed into the service's
+system instruction; the instruction, the prompt and the mark can each be
+replaced through `WaitReassuranceConfig`.
+
+```go
+if err := model.AddExtension(turns.NewWaitReassuranceLLMExtension(turns.WaitReassuranceConfig{})); err != nil {
+    return err
+}
+```
+
+The extension belongs on a text LLM: a speech-to-speech service's audio carries
+no mark to read. It works beside turn completion, whose marker is read first.
+[`examples/function-calling/function-calling-openai-async`](../../examples/function-calling/function-calling-openai-async)
+attaches it for an asynchronous tool, and the `llm-with-backend` frontends for
+the work their backend does.
+
 ### Turns with nothing transcribed
 
 A turn can start on voice activity alone and end with no transcript: a cough,
@@ -212,7 +292,8 @@ what happens then, and the two cases differ in what silence costs:
 - **The bot was waiting for the user.** The conversation is not stuck, and
   answering what may be noise would be intrusive, so the turn gets no answer
   unless `IdlePrompt` is set. The idle timer starts again, as it would have had
-  the turn not happened.
+  the turn not happened (the waiting timer, while background work is in
+  progress).
 
 `MaxConsecutiveRecoveries` (1 by default) bounds how many empty turns in a row
 are answered; a transcribed turn resets the count. An empty `InterruptedPrompt`

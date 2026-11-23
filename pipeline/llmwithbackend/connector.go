@@ -49,10 +49,17 @@ type backendSession interface {
 }
 
 // frontendFrames is what the connector needs of the frontend to deliver what
-// the backend produced: somewhere to queue a message and to push a report.
+// the backend produced: somewhere to queue a message and to push a report, and
+// a way to tell the whole pipeline when the backend's work starts and ends.
 type frontendFrames interface {
 	QueueFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error
 	PushFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error
+	workBroadcaster
+}
+
+// workBroadcaster is what announcing the backend's work needs of the frontend.
+type workBroadcaster interface {
+	Broadcast(ctx context.Context, build func() frames.Frame) error
 }
 
 // ErrStrategyNeedsContext is reported when a speech-to-speech frontend is given
@@ -136,6 +143,9 @@ type BackendConnector struct {
 	tools       []frames.Tool
 	session     backendSession
 	sessionOpen chan struct{}
+	// backendWorking is whether the pipeline was told the backend's background
+	// work started and not yet that it finished.
+	backendWorking bool
 }
 
 // NewBackendConnector builds a connector.
@@ -230,6 +240,13 @@ func (c *BackendConnector) BuildTools() []frames.Tool {
 // frontend runs in.
 func (c *BackendConnector) RunSession(ctx context.Context, requester jobcontext.Requester, frontend frontendFrames) {
 	name := c.bound.BackendName
+	defer func() {
+		// The session ended on its own, with the frontend still running: work it
+		// was in the middle of is over.
+		if ctx.Err() == nil {
+			c.finishWork(ctx, frontend)
+		}
+	}()
 	session, err := llmworker.OpenBackendSession(ctx, requester, name, c.timeout)
 	if err != nil {
 		if ctx.Err() == nil {
@@ -325,7 +342,14 @@ func (c *BackendConnector) Delegate(ctx context.Context, params llm.FunctionCall
 		c.trace(ctx, params.LLM, map[string]any{traceEvent: "request", "text": request, "backend": status})
 	}
 	respond := c.cfg.RespondOnDelegate == nil || *c.cfg.RespondOnDelegate
-	return params.Result(ctx, resultJSON(map[string]any{"status": "delegated", "backend": status}), runLLM(respond))
+	if err := params.Result(ctx, resultJSON(map[string]any{"status": "delegated", "backend": status}),
+		runLLM(respond)); err != nil {
+		return err
+	}
+	if params.LLM != nil {
+		c.startWork(ctx, params.LLM)
+	}
+	return nil
 }
 
 // runLLM is result properties that say whether the result runs the model.
@@ -383,6 +407,7 @@ func (c *BackendConnector) Deliver(ctx context.Context, frontend frontendFrames,
 	case llmworker.BackendError:
 		c.trace(ctx, frontend, map[string]any{traceEvent: "error", "error": e.Error})
 		slog.WarnContext(ctx, "backend error", "error", e.Error)
+		c.finishWork(ctx, frontend)
 		c.appendMessage(ctx, frontend, frames.Message{
 			Role: frames.RoleDeveloper,
 			Text: BackendMessagePrefix + "The work could not be completed.\n\n" + BackendMessageRelayInstruction,
@@ -390,6 +415,43 @@ func (c *BackendConnector) Deliver(ctx context.Context, frontend frontendFrames,
 	case llmworker.BackendIdle:
 		c.trace(ctx, frontend, map[string]any{traceEvent: "idle"})
 		slog.DebugContext(ctx, "backend is idle")
+		c.finishWork(ctx, frontend)
+	}
+}
+
+// startWork tells the pipeline the backend's background work has started, once
+// per lull.
+func (c *BackendConnector) startWork(ctx context.Context, frontend workBroadcaster) {
+	c.mu.Lock()
+	if c.backendWorking {
+		c.mu.Unlock()
+		return
+	}
+	c.backendWorking = true
+	c.mu.Unlock()
+	name := c.bound.BackendName
+	if err := frontend.Broadcast(ctx, func() frames.Frame {
+		return frames.NewBackgroundWorkStartedFrame(name)
+	}); err != nil {
+		slog.DebugContext(ctx, "could not announce the backend's work", "err", err)
+	}
+}
+
+// finishWork tells the pipeline the backend's background work is over, if any
+// was in progress.
+func (c *BackendConnector) finishWork(ctx context.Context, frontend workBroadcaster) {
+	c.mu.Lock()
+	if !c.backendWorking {
+		c.mu.Unlock()
+		return
+	}
+	c.backendWorking = false
+	c.mu.Unlock()
+	name := c.bound.BackendName
+	if err := frontend.Broadcast(ctx, func() frames.Frame {
+		return frames.NewBackgroundWorkFinishedFrame(name)
+	}); err != nil {
+		slog.DebugContext(ctx, "could not announce the end of the backend's work", "err", err)
 	}
 }
 

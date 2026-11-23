@@ -376,7 +376,9 @@ func TestNoTurnIsRacedWhileTheFrontendFiltersIncompleteTurns(t *testing.T) {
 	service, _ := withPredictiveDelegation(t, frontend, c)
 
 	runSteps(t, service,
-		frames.NewLLMUpdateSettingsFrame(&settings.LLM{FilterIncompleteUserTurns: settings.Set(true)}),
+		frames.NewLLMUpdateSettingsFrame(&settings.LLM{Extensions: settings.Set(settings.Extensions{
+			func() llm.LLMExtension { return llm.NewLLMTurnCompletionLLMExtension(llm.UserTurnCompletionConfig{}) },
+		})}),
 		100*ms, userTurn(""), 100*ms)
 
 	if got := c.asked(); len(got) != 0 {

@@ -71,9 +71,14 @@ const (
 	// EventUserTurnStopTimeout fires when a turn was closed because no stop
 	// strategy decided it had ended. It carries no argument.
 	EventUserTurnStopTimeout = "on_user_turn_stop_timeout"
-	// EventUserTurnIdle fires when the user has said nothing for the configured
-	// idle timeout. It carries no argument.
+	// EventUserTurnIdle fires when the user has said nothing, with no
+	// background work in progress, for the configured idle timeout. A
+	// UserTurnIdleFrame is broadcast with it. It carries no argument.
 	EventUserTurnIdle = "on_user_turn_idle"
+	// EventUserWaiting fires when the user has waited quietly on background
+	// work for the configured waiting timeout. A UserWaitingFrame is broadcast
+	// with it. It carries no argument.
+	EventUserWaiting = "on_user_waiting"
 	// EventUserTurnMessageAdded fires when the user's words are written to the
 	// conversation, carrying a UserTurnMessageAdded. A turn can write more than
 	// once, when an early inference answers part of it, so this fires per write
@@ -504,7 +509,7 @@ func newUser(
 	// whatever is listening to it.
 	for _, name := range []string{
 		EventUserTurnStarted, EventUserTurnStopped, EventUserTurnInferenceTriggered,
-		EventUserTurnStopTimeout, EventUserTurnIdle, EventUserTurnMessageAdded,
+		EventUserTurnStopTimeout, EventUserTurnIdle, EventUserWaiting, EventUserTurnMessageAdded,
 		EventUserMuteStarted, EventUserMuteStopped, EventUserBackchannel,
 	} {
 		u.Events().Register(name, false)
@@ -514,13 +519,27 @@ func newUser(
 	// the aggregator hears about an idle conversation without having to be the
 	// one thing the pipeline was built with.
 	onIdle := func(ctx context.Context, c *turns.UserIdleController) error {
+		quiet := c.QuietSecs()
+		_ = u.Broadcast(ctx, func() frames.Frame { return frames.NewUserTurnIdleFrame(quiet) })
 		u.Events().Call(ctx, EventUserTurnIdle, u)
 		if cfg.OnIdle == nil {
 			return nil
 		}
 		return cfg.OnIdle(ctx, c)
 	}
-	u.idle = turns.NewUserIdleController(turns.IdleConfig{Timeout: cfg.IdleTimeout, Callback: onIdle})
+	onWaiting := func(ctx context.Context, c *turns.UserIdleController) error {
+		quiet := c.QuietSecs()
+		_ = u.Broadcast(ctx, func() frames.Frame { return frames.NewUserWaitingFrame(quiet) })
+		u.Events().Call(ctx, EventUserWaiting, u)
+		if cfg.OnWaiting == nil {
+			return nil
+		}
+		return cfg.OnWaiting(ctx, c)
+	}
+	u.idle = turns.NewUserIdleController(turns.IdleConfig{
+		Timeout: cfg.IdleTimeout, Callback: onIdle,
+		WaitingTimeout: cfg.WaitingTimeout, WaitingCallback: onWaiting,
+	})
 	u.turn.SetHooks(turns.ControllerHooks{
 		Started:             u.onTurnStarted,
 		Stopped:             u.onTurnStopped,
@@ -1431,6 +1450,9 @@ func (a *AssistantAggregator) ProcessFrame(ctx context.Context, f frames.Frame, 
 	if mf, ok := f.(*frames.LLMMarkerFrame); ok {
 		return a.handleMarker(ctx, mf)
 	}
+	if mr, ok := f.(*frames.LLMMarkerResponseFrame); ok {
+		a.handleMarkerResponse(mr)
+	}
 	if _, ok := f.(*frames.ExpressionMetadataFrame); ok {
 		a.mu.Lock()
 		a.taggedAfterLLM = true
@@ -1704,6 +1726,19 @@ func (a *AssistantAggregator) endThought(ctx context.Context, fr *frames.LLMThou
 // the only thing that happened. A marker that does not is the prefix of a reply
 // still being aggregated, so it joins the aggregation and is written with the
 // text as one message.
+// handleMarkerResponse reads the service's report on a reply's markers, which
+// is then forwarded like any other frame. A reply dropped as silent records
+// nothing: what the aggregation holds by now is a turn-completion marker pushed
+// before the silent mark after it was read.
+func (a *AssistantAggregator) handleMarkerResponse(fr *frames.LLMMarkerResponseFrame) {
+	if fr.Kind != frames.LLMMarkerKindSilent {
+		return
+	}
+	a.mu.Lock()
+	a.aggregation = nil
+	a.mu.Unlock()
+}
+
 func (a *AssistantAggregator) handleMarker(ctx context.Context, fr *frames.LLMMarkerFrame) error {
 	// Recorded so a service configured with markers of its own still gets them
 	// stripped from the transcript: the defaults are known here, the rest is

@@ -72,7 +72,7 @@ func (j *fakeConversationJudge) AddToolCall(text string)         { j.add("tool",
 
 // Evaluate and EvaluateCall make it a Judge too, as a session's services hold
 // it.
-func (*fakeConversationJudge) Evaluate(context.Context, string) JudgeVerdict {
+func (*fakeConversationJudge) Evaluate(context.Context, string, *bool) JudgeVerdict {
 	return JudgeVerdict{Verdict: VerdictYes}
 }
 

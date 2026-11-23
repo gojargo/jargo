@@ -78,6 +78,16 @@ MOONSHINE_SHA256_x86_64 ?= 04e438f393af3f963ac7988204f379d04a9c8949801595cab4bd6
 MOONSHINE_SHA256_aarch64 ?= 41bfd82ca61f1878e4681c25cf1a6c8f2692a14c2ca88a6840ffa00c452891fe
 MOONSHINE_WHEEL = moonshine_voice-$(MOONSHINE_VERSION)-py3-none-manylinux_2_34_$(MOONSHINE_ARCH).whl
 
+# libpiper, for the in-process Piper TTS provider, is published as source only:
+# the piper1-gpl releases ship Python wheels and no shared library. It is built
+# with CMake (3.26 or later) and a C++17 compiler from the pinned tag, whose
+# commit is checked. The build fetches and statically links espeak-ng and
+# OpenJTalk; the ONNX Runtime it links against is the one deps-onnx installs,
+# so a process running both Piper and the VAD loads one copy of it.
+PIPER_VERSION ?= v1.8.0
+PIPER_COMMIT ?= 639388b6317fc4731e91d53da42aea68fd4166ff
+PIPER_JOBS ?= $(shell nproc)
+
 ##@ General
 
 .PHONY: help
@@ -287,7 +297,7 @@ docs-check: ## Fail on any relative link in docs/ or the README that points at n
 
 # These follow docker/runtime.Dockerfile, which is Debian and Linux only, so the
 # host install is too. On another system install the same libraries by hand:
-# the ONNX Runtime, RNNoise and libmoonshine.
+# the ONNX Runtime, RNNoise, libmoonshine and libpiper.
 .PHONY: require-linux
 require-linux:
 	@[[ "$$(uname -s)" == "Linux" ]] || { \
@@ -335,6 +345,33 @@ deps-moonshine: require-linux ## Fetch libmoonshine for the Moonshine STT provid
 	@rm -f $(NATIVE_DIR)/$(MOONSHINE_WHEEL)
 	@echo
 	@echo "export JARGO_MOONSHINE_LIB=$(NATIVE_DIR)/moonshine/moonshine_voice/libmoonshine.so"
+
+# libpiper is installed into $(NATIVE_DIR)/lib beside the ONNX Runtime it was
+# linked against, with an $$ORIGIN run path, and espeak-ng's data into
+# $(NATIVE_DIR)/share/espeak-ng-data, where the provider looks for it next to
+# the library. The ONNX Runtime is fetched first when it is not there yet. Its
+# release archive ships a CMake package whose paths do not match the archive,
+# so libpiper is pointed at the directory instead of searching for a package.
+.PHONY: deps-piper
+deps-piper: require-linux ## Build libpiper for the in-process Piper TTS provider (needs cmake)
+	@command -v cmake >/dev/null || { echo "deps-piper needs cmake 3.26 or later" >&2; exit 1; }
+	@[[ -e $(NATIVE_DIR)/lib/libonnxruntime.so ]] || $(MAKE) deps-onnx
+	@mkdir -p $(NATIVE_DIR)/src
+	rm -rf $(NATIVE_DIR)/src/piper1-gpl
+	git clone --quiet --depth 1 --branch $(PIPER_VERSION) \
+		https://github.com/OHF-Voice/piper1-gpl $(NATIVE_DIR)/src/piper1-gpl
+	[[ "$$(git -C $(NATIVE_DIR)/src/piper1-gpl rev-parse HEAD)" == "$(PIPER_COMMIT)" ]]
+	cmake -S $(NATIVE_DIR)/src/piper1-gpl/libpiper -B $(NATIVE_DIR)/src/piper1-gpl/libpiper/build \
+		-DCMAKE_BUILD_TYPE=Release \
+		-DCMAKE_INSTALL_PREFIX=$(NATIVE_DIR) \
+		-DCMAKE_INSTALL_LIBDIR=lib \
+		-DCMAKE_INSTALL_RPATH='$$ORIGIN' \
+		-DCMAKE_DISABLE_FIND_PACKAGE_onnxruntime=ON \
+		-DONNXRUNTIME_DIR=$(NATIVE_DIR)
+	cmake --build $(NATIVE_DIR)/src/piper1-gpl/libpiper/build --config Release -j $(PIPER_JOBS)
+	cmake --install $(NATIVE_DIR)/src/piper1-gpl/libpiper/build --config Release
+	@echo
+	@echo "export JARGO_PIPER_LIB=$(NATIVE_DIR)/lib/libpiper.so"
 
 ##@ Packaging
 

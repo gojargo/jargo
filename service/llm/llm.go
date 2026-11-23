@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"reflect"
 	"runtime/debug"
 	"slices"
 	"strings"
@@ -387,11 +388,11 @@ type Base struct {
 	callTimeout   time.Duration
 	runInParallel bool
 	groupCalls    bool
-	// warnNoAdapter reports once that cancellation was asked for on a service
-	// with no adapter to put the tool on.
+	// warnNoAdapter reports once that an extension's built-in tools were asked
+	// for on a service with no adapter to put them on.
 	warnNoAdapter sync.Once
 	// asyncToolCancellation widens cancellation to every asynchronous tool
-	// rather than the ones that opted in. Deprecated; see
+	// rather than the ones that opted in, at registration. Deprecated; see
 	// WithAsyncToolCancellation.
 	asyncToolCancellation bool
 	// callFilter narrows the calls of a response to the ones that run. Nil, the
@@ -403,14 +404,12 @@ type Base struct {
 	// warnedNoTurnFrames keeps the report that a realtime service emits no turn
 	// frames to one.
 	warnedNoTurnFrames atomic.Bool
-	// cancelTools names the cancel tools currently registered, so each is added
-	// and withdrawn exactly once and a call of one is recognized as internal.
-	// Guarded by handlersMu.
-	cancelTools map[string]bool
-	// warnedCancelCollisions names the cancel tools already reported as
-	// colliding with a tool of the application's own, so the collision is
-	// reported once rather than on every inference. Guarded by handlersMu.
-	warnedCancelCollisions map[string]bool
+	// extensionToolNames names the extensions' built-in tools currently
+	// advertised, whose names are reserved, and announcedExtensionToolNames
+	// those of them whose calls are announced when they start. Guarded by
+	// handlersMu.
+	extensionToolNames          map[string]bool
+	announcedExtensionToolNames map[string]bool
 	// warnedRedundantRegistrations names the tools already reported as
 	// registered by hand though their advertised tool carries a handler, so the
 	// warning is given once rather than on every inference. Guarded by
@@ -429,9 +428,18 @@ type Base struct {
 	// one at a time. Nil unless the service was built to run them that way.
 	sequential chan *functionCall
 
-	// Turn-completion markers: the protocol the model answers under, and the
-	// state of the response being read.
-	turnCompletion turnCompletionState
+	// The LLM extensions (see extension.go). attached is them in the order they
+	// were attached, which the settings hold; extensions is them in running
+	// order, from the one "closest" to the service to the one "farthest" from
+	// it. extensionSetup is the setup the service was given, nil until it is set
+	// up, from when an extension attaching is wired at once. metadataFrames is
+	// the latest metadata frame of each kind the service has processed, handed
+	// to an extension attached later.
+	extensionsMu   sync.RWMutex
+	attached       []LLMExtension
+	extensions     []LLMExtension
+	extensionSetup *processor.Setup
+	metadataFrames map[reflect.Type]frames.ServiceMetadata
 
 	// Summary generations in flight. They run on the session's lifetime rather
 	// than the turn's, like the tool calls above: compressing the conversation
@@ -538,6 +546,7 @@ func New(name string, gen Generator, opts ...Option) *Base {
 	}
 	b.Base = service.New(name, self)
 	b.gate = newSpeculationGate(b.Name())
+	b.attachInitialExtensions()
 	return b
 }
 
@@ -618,7 +627,7 @@ func (b *Base) Setup(ctx context.Context, s processor.Setup) error {
 		b.sequential = make(chan *functionCall, sequentialQueueDepth)
 		b.callsWG.Go(b.runSequentially)
 	}
-	return nil
+	return b.setupExtensions(ctx, s)
 }
 
 // sequentialQueueDepth bounds the calls waiting for the sequential runner. It is
@@ -656,6 +665,7 @@ func (b *Base) Cleanup(ctx context.Context) error {
 	// Released after the calls that were using them have been stopped and waited
 	// for, so nothing is mid-call against a connection being closed.
 	b.runToolCleanups(ctx)
+	b.cleanupExtensions(ctx)
 	return b.Base.Cleanup(ctx)
 }
 
@@ -914,6 +924,7 @@ func (b *Base) traceParameters() map[string]any {
 		return nil
 	}
 	delete(given, "system_instruction")
+	delete(given, "extensions")
 	for k, v := range given {
 		if v == nil {
 			given[k] = notGiven
@@ -993,7 +1004,7 @@ func universalMessages(convo *frames.LLMContext) string {
 // Registering under the empty name registers a catch-all: it takes every call no
 // named handler claims, which is how one handler serves a whole toolset.
 func (b *Base) RegisterFunction(name string, h FunctionCallHandler, opts ...RegisterOption) {
-	if b.isCancelTool(name) {
+	if b.isExtensionTool(name) {
 		slog.Error("refusing to register a reserved built-in tool name",
 			"service", b.Name(), "function", name)
 		return
@@ -1122,14 +1133,17 @@ func missingFunctionHandler(ctx context.Context, params FunctionCallParams) erro
 // updateSettings merges an update into the provider's own settings and lets it
 // act on what changed. There is no reconnection here: a generation is a request
 // of its own, so a provider reads its settings the next time it generates.
-func (b *Base) updateSettings(ctx context.Context, f *frames.LLMUpdateSettingsFrame) {
+//
+// It attaches the extensions the update adds. An extension the service cannot
+// hold (one of a type it holds already, or one another service holds) is
+// reported as the error, and the provider is not told of the update.
+func (b *Base) updateSettings(ctx context.Context, f *frames.LLMUpdateSettingsFrame) error {
 	changed, err := b.applySettingsUpdate(f)
 	if err != nil {
-		b.PushError(ctx, "llm: settings update", err, false)
-		return
+		return err
 	}
 	if len(changed) == 0 {
-		return
+		return nil
 	}
 	slog.Info("updated settings", "service", b.Name(), "fields", changed.String())
 	b.SettingsUpdated(ctx)
@@ -1143,33 +1157,47 @@ func (b *Base) updateSettings(ctx context.Context, f *frames.LLMUpdateSettingsFr
 		b.SetModel(model)
 	}
 
-	if changed.Has("filter_incomplete_user_turns") {
-		on := b.setting("filter_incomplete_user_turns")
-		enabled, _ := on.(bool)
-		b.SetFilterIncompleteUserTurns(enabled)
+	if changed.Has("system_instruction") {
+		// The application replaced the base prompt. It is re-read before
+		// anything composes, so an update that also attaches an extension
+		// composes on the new prompt.
+		instruction := b.setting("system_instruction")
+		text, _ := instruction.(string)
+		b.setBaseSystemInstruction(text)
 	}
 
-	// A turn-completion configuration takes effect only while incomplete turns
-	// are filtered, the flag being applied first so an update turning both on
-	// takes both. One sent while filtering is off is kept in the settings but
-	// not put in force.
-	if changed.Has("user_turn_completion_config") && b.FilterIncompleteUserTurns() {
-		v := b.setting("user_turn_completion_config")
-		if cfg, ok := v.(UserTurnCompletionConfig); ok {
-			b.SetUserTurnCompletionConfig(cfg)
-		} else if v != nil {
-			slog.Error("the turn-completion configuration is not the expected type; ignoring it",
-				"service", b.Name(), "type", fmt.Sprintf("%T", v))
+	if changed.Has("extensions") {
+		// The extensions the update built are attached one by one, as
+		// AddExtension's are.
+		if err := b.updateExtensions(ctx, changed["extensions"]); err != nil {
+			b.composeSystemInstruction()
+			return err
 		}
 	}
 
-	if changed.Has("system_instruction") {
-		// The application replaced the base prompt, so it is re-read and the
-		// composed instruction rebuilt from it. Rebuilding rather than assigning is
-		// what keeps whatever was composed onto the prompt in place.
-		instruction := b.setting("system_instruction")
-		text, _ := instruction.(string)
-		b.SetSystemInstruction(text)
+	if changed.Has("filter_incomplete_user_turns") {
+		slog.Warn("settings.LLM.FilterIncompleteUserTurns is deprecated and will be removed; "+
+			"use turns.FilterIncompleteUserTurnStrategies instead", "service", b.Name())
+		on, _ := b.setting("filter_incomplete_user_turns").(bool)
+		if err := b.setTurnCompletion(ctx, on, b.turnCompletionConfigSetting()); err != nil {
+			b.composeSystemInstruction()
+			return err
+		}
+	}
+
+	if changed.Has("user_turn_completion_config") {
+		slog.Warn("settings.LLM.UserTurnCompletionConfig is deprecated and will be removed; pass the "+
+			"configuration to turns.FilterIncompleteUserTurnStrategies instead", "service", b.Name())
+		if extension, ok := GetExtension[*LLMTurnCompletionLLMExtension](b); ok {
+			extension.SetConfig(b.turnCompletionConfigSetting())
+		}
+	}
+
+	// Any of these changes the composed instruction, so it is rebuilt.
+	if slices.ContainsFunc([]string{
+		"extensions", "filter_incomplete_user_turns", "system_instruction", "user_turn_completion_config",
+	}, changed.Has) {
+		b.composeSystemInstruction()
 	}
 
 	if updater, ok := b.gen.(SettingsUpdater); ok {
@@ -1177,6 +1205,42 @@ func (b *Base) updateSettings(ctx context.Context, f *frames.LLMUpdateSettingsFr
 			b.PushError(ctx, "llm: settings update", err, false)
 		}
 	}
+	return nil
+}
+
+// turnCompletionConfigSetting is the turn-completion configuration the
+// settings hold, the defaults when they hold none. One of the wrong type is
+// reported and taken as none.
+func (b *Base) turnCompletionConfigSetting() UserTurnCompletionConfig {
+	v := b.setting("user_turn_completion_config")
+	if cfg, ok := v.(UserTurnCompletionConfig); ok {
+		return cfg
+	}
+	if v != nil {
+		slog.Error("the turn-completion configuration is not the expected type; ignoring it",
+			"service", b.Name(), "type", fmt.Sprintf("%T", v))
+	}
+	return UserTurnCompletionConfig{}
+}
+
+// setTurnCompletion installs the turn-completion extension, built with cfg,
+// when on and none is attached, and removes the one attached when off. It is
+// what the deprecated settings that switch turn completion do.
+func (b *Base) setTurnCompletion(ctx context.Context, on bool, cfg UserTurnCompletionConfig) error {
+	extension, attached := GetExtension[*LLMTurnCompletionLLMExtension](b)
+	switch {
+	case on && !attached:
+		extension = NewLLMTurnCompletionLLMExtension(cfg)
+		if err := b.attachExtension(extension); err != nil {
+			return err
+		}
+		if b.isSetUp() {
+			return b.wireExtension(ctx, extension)
+		}
+	case !on && attached:
+		b.detachExtension(ctx, extension)
+	}
+	return nil
 }
 
 // applySettingsUpdate resolves an update against the settings and merges it in,
@@ -1224,12 +1288,9 @@ func (b *Base) settingsStore() any {
 // ProcessFrame runs the generator on each LLMContextFrame and forwards other
 // frames untouched.
 func (b *Base) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
-	if err := b.processBaseAndGate(ctx, f, dir); err != nil {
+	if err := b.processIncoming(ctx, f, dir); err != nil {
 		return err
 	}
-	// The inference a turn-completion report names is tracked whether or not
-	// the markers are on, so turning them on mid-response names the right one.
-	b.handleTurnCompletionProcessFrame(ctx, f)
 	b.handleExpressionMetadata(f)
 	switch fr := f.(type) {
 	case *frames.LLMContextFrame:
@@ -1270,52 +1331,47 @@ func (b *Base) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.D
 			// Meant for another service; leave it untouched for that one.
 			return b.PushFrame(ctx, f, dir)
 		}
-		b.updateSettings(ctx, fr)
+		if err := b.updateSettings(ctx, fr); err != nil {
+			b.PushError(ctx, "llm: settings update", err, false)
+		}
 		return nil
 	default:
 		return b.PushFrame(ctx, f, dir)
 	}
 }
 
-// PushFrame stamps the frames of a response with the output configuration in
-// effect before pushing them on, so a TTS service downstream knows whether to
-// speak them. Only the frames that describe the model's own output are stamped:
-// the ones a TTS service reads to decide what it synthesizes.
+// processIncoming has the service base handle a frame, then hands it to the
+// extensions, which are layers around the service: an incoming frame goes
+// through them from the outside in, before the output gate and the service
+// itself handle it.
+func (b *Base) processIncoming(ctx context.Context, f frames.Frame, dir processor.Direction) error {
+	if err := b.Base.ProcessFrame(ctx, f, dir); err != nil {
+		return err
+	}
+	if err := b.processThroughExtensions(ctx, f, dir); err != nil {
+		return err
+	}
+	if b.outputGate != nil {
+		return b.outputGate.ProcessFrame(ctx, b, f)
+	}
+	return nil
+}
+
+// PushFrame pushes a frame through the service's extensions. Each extension
+// filters the frame in turn, from the one "closest" to the service to the one
+// "farthest" from it, and what one returns goes on through the extensions
+// "farther" from the service than it. Frames go out in the order the extensions
+// produce them: each frame an extension returns goes through the rest of the
+// chain and out before the next one.
 //
-// Nothing is stamped until something configures the output, which leaves the
-// decision to whatever else in the pipeline may set it on a frame. An output
-// gate, when one is set, may drop the frame before any of this.
+// An output gate, when one is set, may drop the frame before any of this. Past
+// the extensions, the frames of a response are stamped with the output
+// configuration in effect and the frame goes past the speculation gate.
 func (b *Base) PushFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
 	if b.outputGate != nil && !b.outputGate.AllowPush(f) {
 		return nil
 	}
-	// The gating sees the response-lifecycle frames the service generates before
-	// anything downstream does. They never arrive as input, so this is the only
-	// place they can be intercepted.
-	if b.FilterIncompleteUserTurns() {
-		b.handleTurnCompletionPushFrame(ctx, f)
-	}
-	if skip, ok := b.currentSkipTTS(); ok {
-		// A copy per frame: the frames travel on their own from here, and one
-		// must not be able to change what another says.
-		switch fr := f.(type) {
-		case *frames.LLMTextFrame:
-			fr.SkipTTS = &skip
-		case *frames.LLMFullResponseStartFrame:
-			fr.SkipTTS = &skip
-		case *frames.LLMFullResponseEndFrame:
-			fr.SkipTTS = &skip
-		}
-	}
-
-	// Everything the gate hands back is pushed past it: routing it back through
-	// here would gate it a second time.
-	for _, out := range b.gateProcess(f, dir) {
-		if err := b.Base.PushFrame(ctx, out.frame, out.dir); err != nil {
-			return err
-		}
-	}
-	return nil
+	return b.pushThroughExtensions(ctx, f, dir, b.Extensions())
 }
 
 // gateProcess runs one frame past the speculation gate, returning what it
@@ -1431,8 +1487,16 @@ func (b *Base) runText(ctx context.Context, convo *frames.LLMContext) error {
 	}
 	traceOutput(span, out.String())
 	b.emitTiming(ctx, span, time.Since(start))
-	b.pushMarkerResponse(ctx)
 	return b.PushFrame(ctx, frames.NewLLMFullResponseEndFrame(), processor.Downstream)
+}
+
+// pushLLMText pushes text the model produced, recording the time to its first
+// answer token.
+func (b *Base) pushLLMText(ctx context.Context, text string) error {
+	// Measured before the extensions filter the text, which can hold it back or
+	// drop it entirely. Neither says anything about how fast the model answered.
+	b.StopTTFATMetrics(ctx)
+	return b.PushFrame(ctx, frames.NewLLMTextFrame(text), processor.Downstream)
 }
 
 // sink adapts per-pass closures to the Sink interface.
@@ -1493,7 +1557,6 @@ func (b *Base) runWithTools(ctx context.Context, convo *frames.LLMContext, tg To
 	}
 	traceOutput(span, preamble.String())
 	b.emitTiming(ctx, span, time.Since(start))
-	b.pushMarkerResponse(ctx)
 	err := b.PushFrame(ctx, frames.NewLLMFullResponseEndFrame(), processor.Downstream)
 	launch()
 	return err
@@ -1536,9 +1599,6 @@ func (b *Base) announceFunctionCalls(
 	if b.outputGate != nil && !b.outputGate.AllowFunctionCalls() {
 		return noop, nil
 	}
-	// The built-in cancellation tool is how the model abandons an asynchronous
-	// call, an internal mechanism rather than a tool the application put up, so
-	// it is announced to neither the application nor the pipeline.
 	if b.isSpeculating() {
 		// Tools run inside the service, so no gate downstream can undo their
 		// side effects if the speculation is discarded. Withdraw it instead: the
@@ -1550,6 +1610,9 @@ func (b *Base) announceFunctionCalls(
 		return noop, b.Broadcast(ctx, func() frames.Frame { return frames.NewUserTurnResponseCancelFrame() })
 	}
 
+	// The extensions' built-in tools that are their own mechanism, such as a
+	// cancel tool, are announced to neither the application nor the pipeline. An
+	// extension's tool is one unless it asks for its calls to be announced.
 	if visible := b.userVisibleCalls(calls); len(visible) > 0 {
 		b.eventsMu.RLock()
 		started := b.onStarted
@@ -1564,19 +1627,11 @@ func (b *Base) announceFunctionCalls(
 	return b.runFunctionCalls(ctx, convo, calls), nil
 }
 
-// isCancelTool reports whether name belongs to a built-in cancel tool.
-func (b *Base) isCancelTool(name string) bool {
-	b.handlersMu.RLock()
-	defer b.handlersMu.RUnlock()
-	return b.cancelTools[name]
-}
-
-// userVisibleCalls drops the built-in cancel tools from the calls, leaving the
-// ones the application put up. It returns the calls untouched when there is
-// nothing to drop, which is every response but the rare one that abandons an
-// asynchronous call.
+// userVisibleCalls drops the calls of the extensions' internal tools, leaving
+// the ones announced. It returns the calls untouched when there is nothing to
+// drop, which is every response but the rare one that calls such a tool.
 func (b *Base) userVisibleCalls(calls []frames.ToolCall) []frames.ToolCall {
-	internal := func(c frames.ToolCall) bool { return b.isCancelTool(c.Name) }
+	internal := func(c frames.ToolCall) bool { return b.isInternalExtensionTool(c.Name) }
 	if !slices.ContainsFunc(calls, internal) {
 		return calls
 	}
@@ -1682,6 +1737,13 @@ func (b *Base) runFunctionCall(call *functionCall) {
 		)
 	}); err != nil {
 		return
+	}
+	// An async call is background work: the pipeline is told when it starts and
+	// when it settles.
+	if !item.cancelOnInterruption {
+		_ = b.Broadcast(ctx, func() frames.Frame {
+			return frames.NewBackgroundWorkStartedFrame(call.toolCallID)
+		})
 	}
 
 	report := b.resultCallback(call, item)
@@ -1824,7 +1886,7 @@ func (b *Base) timeoutFunctionCall(ctx context.Context, call *functionCall) {
 
 // broadcastFunctionCallCanceled settles a canceled call downstream, asking for
 // inference when runLLM says the cancellation is the last thing that will happen
-// to the call.
+// to the call. An asynchronous call's background work is over with it.
 func (b *Base) broadcastFunctionCallCanceled(
 	ctx context.Context, call *functionCall, runLLM bool,
 ) {
@@ -1833,6 +1895,11 @@ func (b *Base) broadcastFunctionCallCanceled(
 		f.RunLLM = runLLM
 		return f
 	})
+	if !call.item.cancelOnInterruption {
+		_ = b.Broadcast(ctx, func() frames.Frame {
+			return frames.NewBackgroundWorkFinishedFrame(call.toolCallID)
+		})
+	}
 }
 
 // resultCallback builds the callback the handler reports through. It is bound to
@@ -1848,7 +1915,7 @@ func (b *Base) resultCallback(call *functionCall, item registryItem) FunctionCal
 // call whose handler failed, and "" on one that returned: it travels on the
 // frame beside the result so a failed call is legible as one, where the result
 // itself only ever names the function. item is the registration the call runs
-// under.
+// under. A final result ends an asynchronous call's background work.
 func (b *Base) settleCall(
 	ctx context.Context, call *functionCall, item registryItem, result, failure string,
 	props *frames.FunctionCallResultProperties,
@@ -1881,12 +1948,20 @@ func (b *Base) settleCall(
 	if stop != nil {
 		stop()
 	}
-	return b.Broadcast(ctx, func() frames.Frame {
+	if err := b.Broadcast(ctx, func() frames.Frame {
 		f := frames.NewFunctionCallResultFrame(call.toolCallID, call.name, call.args, result)
 		f.Properties = props
 		f.Error = failure
 		return f
-	})
+	}); err != nil {
+		return err
+	}
+	if props.Final() && !item.cancelOnInterruption {
+		return b.Broadcast(ctx, func() frames.Frame {
+			return frames.NewBackgroundWorkFinishedFrame(call.toolCallID)
+		})
+	}
+	return nil
 }
 
 // handleInterruptions cancels the calls in flight of every function registered
@@ -1906,7 +1981,7 @@ func (b *Base) handleInterruptions(ctx context.Context) {
 	for _, name := range names {
 		b.cancelFunctionCallTasks(ctx, func(call *functionCall) bool {
 			return call.item.name == name
-		}, "interruption", false)
+		}, "interruption")
 	}
 }
 
@@ -1921,7 +1996,7 @@ func (b *Base) handleInterruptions(ctx context.Context) {
 // is how a caller lets go of the asynchronous ones too, when whoever asked for
 // the work has gone.
 func (b *Base) CancelFunctionCalls(ctx context.Context, reason string) []frames.ToolCall {
-	return b.cancelFunctionCallTasks(ctx, func(*functionCall) bool { return true }, reason, false)
+	return b.cancelFunctionCallTasks(ctx, func(*functionCall) bool { return true }, reason)
 }
 
 // LLMWithBackendRole is a role a service can fill in a pairing of a
@@ -1972,10 +2047,12 @@ func (b *Base) AcceptsIntermediateFunctionCallResults() bool { return true }
 // cancelFunctionCallTasks cancels the calls in flight that match, and returns
 // them. Each handler's context is canceled so a cancel-aware handler runs its
 // cleanup, a FunctionCallCancelFrame is broadcast so the rest of the pipeline
-// settles the call, and OnFunctionCallsCanceled is told. runLLM says whether
-// inference should run once the canceled calls are settled in the conversation.
+// settles the call, and OnFunctionCallsCanceled is told. No inference is asked
+// for once the canceled calls are settled in the conversation: an interruption
+// means the user is talking, and a cancellation the model asked for is answered
+// by the result of the tool that asked.
 func (b *Base) cancelFunctionCallTasks(
-	ctx context.Context, match func(*functionCall) bool, reason string, runLLM bool,
+	ctx context.Context, match func(*functionCall) bool, reason string,
 ) []frames.ToolCall {
 	b.callsMu.Lock()
 	var canceled []*functionCall
@@ -2000,7 +2077,7 @@ func (b *Base) cancelFunctionCallTasks(
 		slog.DebugContext(ctx, "canceling function call", "service", b.Name(),
 			"function", call.name, "tool_call_id", call.toolCallID, "reason", reason)
 		call.cancel()
-		b.broadcastFunctionCallCanceled(ctx, call, runLLM)
+		b.broadcastFunctionCallCanceled(ctx, call, false)
 		items = append(items, frames.ToolCall{ID: call.toolCallID, Name: call.name, Args: call.args})
 	}
 

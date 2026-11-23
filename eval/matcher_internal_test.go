@@ -51,7 +51,7 @@ func (j *fakeJudge) AddAssistantMessage(text string) {
 	j.segments = append(j.segments, text)
 }
 
-func (j *fakeJudge) Evaluate(_ context.Context, criterion string) JudgeVerdict {
+func (j *fakeJudge) Evaluate(_ context.Context, criterion string, _ *bool) JudgeVerdict {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	j.calls = append(j.calls, criterion)

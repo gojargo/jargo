@@ -1,6 +1,6 @@
 ---
 title: Installation
-description: "Install jargo with go get. The default build needs Go 1.27 and no C toolchain; the ONNX Runtime, RNNoise, libmoonshine, libespeak-ng and the video codecs are loaded at run time."
+description: "Install jargo with go get. The default build needs Go 1.27 and no C toolchain; the ONNX Runtime, RNNoise, libmoonshine, libespeak-ng, libpiper and the video codecs are loaded at run time."
 weight: 1
 ---
 
@@ -34,6 +34,7 @@ it unless you have a measured reason not to.
 | **RNNoise** | Optional input noise reduction | `JARGO_RNNOISE_LIB` | Bot runs without denoising. |
 | **libmoonshine** | The Moonshine STT provider (`provider/moonshine`) | `JARGO_MOONSHINE_LIB` | `moonshine.NewSTT` returns `moonshine.ErrLibraryNotAvailable`. |
 | **libespeak-ng** | The local Kokoro TTS provider (`provider/kokoro`), which also needs the ONNX Runtime | `JARGO_ESPEAK_LIB` | `kokoro.NewTTS` returns `kokoro.ErrEspeakNotAvailable`. |
+| **libpiper** | The in-process Piper TTS provider (`piper.NewTTS`) | `JARGO_PIPER_LIB` | `piper.NewTTS` returns `piper.ErrLibraryNotAvailable`. `piper.NewHTTPTTS` needs only a Piper HTTP server. |
 | **libvpx** | Video over the WebRTC transport (`transport/rtc`): VP8 in both directions | none | No VP8 video is received or sent; an error is logged once per track. |
 | **libopenh264** | Video over the WebRTC transport: H.264 sent by the client | none | No H.264 video is received; an error is logged once per track. |
 
@@ -135,6 +136,61 @@ The model is not in the binary either. The Kokoro v1.0 model and voices files
 `jargo/kokoro-onnx` under the user's cache directory. `Config.CacheDir` moves
 the cache, and `Config.ModelPath` and `Config.VoicesPath` load files already on
 disk instead.
+
+### libpiper
+
+The Piper TTS provider has two constructors. `piper.NewHTTPTTS` posts each
+utterance to a Piper HTTP server (`python -m piper.http_server`) and needs
+nothing native. `piper.NewTTS` runs the voice in process, in `libpiper`, Piper's
+native library (`libpiper.so`, `libpiper.dylib` on macOS, `piper.dll` on
+Windows), which phonemizes with the espeak-ng it is built with and runs the
+voice on the ONNX Runtime it is linked against.
+
+Piper publishes no prebuilt `libpiper`, so `make deps-piper` builds it on Linux
+from a pinned release of `OHF-Voice/piper1-gpl` with CMake (3.26 or later) and a
+C++17 compiler. It links the library against the ONNX Runtime `make deps-onnx`
+installs (fetching it first when it is missing), installs it beside that
+runtime in `.native/lib/`, with espeak-ng's data in `.native/share/espeak-ng-data/`,
+and prints the path to export:
+
+```sh
+make deps-piper
+export JARGO_PIPER_LIB=$PWD/.native/lib/libpiper.so
+```
+
+The provider takes the path in its configuration rather than reading the
+environment; `JARGO_PIPER_LIB` is the variable the `voice-piper` example reads,
+and the one to use in your own application:
+
+```go
+tts, err := piper.NewTTS(piper.Config{
+    Voice:       "en_US-ryan-high",
+    LibraryPath: os.Getenv(piper.LibPathEnv), // empty searches the default path
+})
+```
+
+The espeak-ng data is found in `share/espeak-ng-data` beside the library's
+`lib` directory, as the build installs it; `Config.EspeakDataPath` points
+elsewhere.
+
+`libpiper` and jargo's VAD and turn models share one ONNX Runtime when both are
+in one process. The dynamic loader reuses a runtime already loaded for the
+library's `libonnxruntime.so.1` dependency, so with the VAD built first,
+`libpiper` runs on the runtime `JARGO_ONNXRUNTIME_LIB` names, which has to be at
+least the version it was built against (`piper.NewTTS` reports an older one as
+`piper.ErrLibraryNotAvailable`). With `libpiper` loaded first, it loads the
+runtime beside it, and the VAD loads a second copy unless
+`JARGO_ONNXRUNTIME_LIB` names the same file. Installing both with the `make`
+targets keeps them on the same file in either order.
+
+`libpiper` is licensed under the GPL-3.0. Distributing an application that loads
+it may subject the application to the GPL's source-disclosure terms;
+`piper.NewHTTPTTS` keeps Piper out of the application's process.
+
+The voice is not in the binary. Its model and configuration are downloaded once,
+on first use, from the `rhasspy/piper-voices` repository on Hugging Face into
+`jargo/piper` under the user's cache directory. `Config.DownloadDir` moves them,
+and `Config.ForceRedownload` fetches them again.
 
 ### Video codecs
 

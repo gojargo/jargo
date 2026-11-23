@@ -665,7 +665,8 @@ type BotLLMMarkerData struct {
 	// carried none.
 	Text string `json:"text"`
 	// Kind is what the marker meant, in the emitter's vocabulary: the
-	// turn-completion protocol's "complete", "short" or "long". Empty when the
+	// turn-completion protocol's "complete", "short" or "long", or "silent" for
+	// a reply dropped as the wait-reassurance silent mark. Empty when the
 	// emitter gave none.
 	Kind string `json:"kind,omitempty"`
 	// Raw is the response's text as the model produced it, markers included.

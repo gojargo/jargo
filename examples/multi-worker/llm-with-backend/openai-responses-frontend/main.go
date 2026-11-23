@@ -38,6 +38,7 @@ import (
 	"github.com/gojargo/jargo/pipeline/llmwithbackend"
 	"github.com/gojargo/jargo/processor/aggregators"
 	"github.com/gojargo/jargo/processor/rtvi"
+	"github.com/gojargo/jargo/processor/turns"
 	"github.com/gojargo/jargo/provider/cartesia"
 	"github.com/gojargo/jargo/provider/deepgram"
 	"github.com/gojargo/jargo/provider/openai/responses"
@@ -69,21 +70,28 @@ func runBot(ctx context.Context, t transport.Transport, args runner.Arguments) e
 		VoiceID: "9626c31c-bec5-4cca-baa8-f8ba9e84c8bc", // Jacqueline
 	})
 
+	frontend := responses.NewLLM(responses.Config{
+		APIKey:       os.Getenv("OPENAI_API_KEY"),
+		Instructions: backend.FrontendInstructions,
+	})
+	// A brief word from the LLM while the backend works.
+	if err := frontend.AddExtension(turns.NewWaitReassuranceLLMExtension(turns.WaitReassuranceConfig{})); err != nil {
+		return err
+	}
+
 	be, err := backend.BuildBackend()
 	if err != nil {
 		return err
 	}
 	llm, err := llmwithbackend.New(llmwithbackend.Config{
-		Frontend: responses.NewLLM(responses.Config{
-			APIKey:       os.Getenv("OPENAI_API_KEY"),
-			Instructions: backend.FrontendInstructions,
-		}),
-		Backend: be,
-		// To watch every exchange with the backend in a client's event log,
-		// such as the prebuilt UI's Events panel, pass a connector with client
-		// tracing on: each request, output, tool-call phase and cancellation is
-		// then sent to the client as an RTVI server message.
-		// Connector: llmwithbackend.NewBackendConnector(llmwithbackend.ConnectorConfig{ClientTrace: true}),
+		Frontend: frontend,
+		Backend:  be,
+		// Every exchange with the backend (each request, output, tool-call phase,
+		// error and idle) is sent to the client as an RTVI "server-message" whose
+		// data has "type": "llm-with-backend", so the prebuilt UI's Events panel
+		// shows the backend at work. Tracing is off by default; comment out the
+		// connector to leave it off.
+		Connector: llmwithbackend.NewBackendConnector(llmwithbackend.ConnectorConfig{ClientTrace: true}),
 	})
 	if err != nil {
 		return err

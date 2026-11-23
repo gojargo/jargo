@@ -228,6 +228,26 @@ func catalog() []catalogEntry {
 			build: func() frames.Frame { return frames.NewUserIdleTimeoutUpdateFrame(5 * time.Second) },
 		},
 		{
+			label: "UserWaitingTimeoutUpdateFrame", cat: system, wantString: "timeout: 5s",
+			build: func() frames.Frame { return frames.NewUserWaitingTimeoutUpdateFrame(5 * time.Second) },
+		},
+		{
+			label: "UserTurnIdleFrame", cat: system, wantString: "quiet_secs: 1.500",
+			build: func() frames.Frame { return frames.NewUserTurnIdleFrame(1.5) },
+		},
+		{
+			label: "UserWaitingFrame", cat: system, wantString: "quiet_secs: 2.250",
+			build: func() frames.Frame { return frames.NewUserWaitingFrame(2.25) },
+		},
+		{
+			label: "BackgroundWorkStartedFrame", cat: system, wantString: "work_id: call_1",
+			build: func() frames.Frame { return frames.NewBackgroundWorkStartedFrame("call_1") },
+		},
+		{
+			label: "BackgroundWorkFinishedFrame", cat: system, wantString: "work_id: call_1",
+			build: func() frames.Frame { return frames.NewBackgroundWorkFinishedFrame("call_1") },
+		},
+		{
 			label: "SpeechControlParamsFrame", cat: system,
 			build: func() frames.Frame {
 				return frames.NewSpeechControlParamsFrame(&vad.Params{StopSecs: 0.8}, &turn.Params{StopSecs: 0.8})

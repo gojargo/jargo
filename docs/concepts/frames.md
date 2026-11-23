@@ -195,6 +195,9 @@ is data precisely so that it *can* be thrown away.
 | `InterruptionFrame` | system | Barge-in. See [Interruptions](interruptions.md). |
 | `UserMuteStartedFrame` / `UserMuteStoppedFrame` | system | Input suppression, e.g. while the bot speaks. |
 | `UserIdleTimeoutUpdateFrame` | system | Retune the idle watchdog at runtime. |
+| `UserWaitingTimeoutUpdateFrame` | system | Retune the waiting watchdog at runtime. |
+| `UserTurnIdleFrame` | system | The user has been idle for the idle timeout, with no background work in progress. |
+| `UserWaitingFrame` | system | The user has waited quietly on background work for the waiting timeout. |
 | `SpeechControlParamsFrame` | system | Broadcast the active end-of-turn timing. |
 | `UserTurnInferenceCompletedFrame` | system | An external judge finished ruling on the turn. |
 | `LLMMarkerFrame` | data | A turn-completion marker the LLM emitted. |
@@ -241,6 +244,7 @@ frames of the turn they are changing.
 | `FunctionCallInProgressFrame` | control | A specific call started. **Uninterruptible.** |
 | `FunctionCallResultFrame` | data | The result. **Uninterruptible.** |
 | `FunctionCallCancelFrame` | system | The call was canceled. |
+| `BackgroundWorkStartedFrame` / `BackgroundWorkFinishedFrame` | system | Bracket work the bot runs without blocking the conversation: an asynchronous call, or a backend's task. |
 
 ### TTS
 

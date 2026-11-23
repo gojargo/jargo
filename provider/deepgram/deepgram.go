@@ -1,8 +1,9 @@
 // Package deepgram provides Deepgram's streaming speech-to-text service (over
-// the live transcription WebSocket, see stt.go), its Aura text-to-speech
-// service over HTTP (see tts.go) and over the WebSocket API (see
-// websocket_tts.go), and its Flux streaming STT and TTS services (see flux.go
-// and flux_tts.go).
+// the live transcription WebSocket, see stt.go), its segmented speech-to-text
+// service on the pre-recorded API, one request per speech segment (see
+// segmented_stt.go), its Aura text-to-speech service over HTTP (see tts.go) and
+// over the WebSocket API (see websocket_tts.go), and its Flux streaming STT and
+// TTS services (see flux.go and flux_tts.go).
 //
 // The STT service pushes InterimTranscriptionFrames and TranscriptionFrames
 // downstream. It asks Deepgram to flush the transcript as soon as the speech

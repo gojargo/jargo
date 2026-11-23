@@ -194,6 +194,11 @@ return c.Push(ctx, frames.NewEndWorkerFrame(), processor.Downstream)
 Retune the timeout mid-call with `UserIdleTimeoutUpdateFrame`: shorter while
 waiting for a yes/no, longer while the caller reads out a number.
 
+The idle timeout does not run while the bot works in the background on the
+caller's behalf, an asynchronous tool for instance: the caller is waiting then,
+not idle. `WaitingTimeout` and `OnWaiting` cover that silence; see
+[Idle and waiting](turn-taking.md#idle-and-waiting).
+
 ## DTMF
 
 Keypresses arrive as `InputDTMFFrame` (a system frame, so they are never dropped

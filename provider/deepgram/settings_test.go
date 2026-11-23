@@ -2,6 +2,7 @@ package deepgram
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/gojargo/jargo/language"
@@ -118,5 +119,51 @@ func TestListSettingsReplace(t *testing.T) {
 	got := q["keyterm"]
 	if len(got) != 2 || got[0] != "two" || got[1] != "three" {
 		t.Errorf("keyterm = %v, want [two three]", got)
+	}
+}
+
+// The settings shared with the pre-recorded service reach the streaming query
+// too: a language hint is sent, and a version can be changed while the
+// pipeline runs.
+func TestSharedSettingsReachTheStreamingQuery(t *testing.T) {
+	t.Parallel()
+
+	cfg := baseConfig()
+	cfg.Version = "2021-03-17.0"
+	live := newSettings(cfg)
+	if got := cfg.query(16000, live).Get("version"); got != "2021-03-17.0" {
+		t.Fatalf("version = %q, want the configured one", got)
+	}
+
+	if _, err := settings.Apply(live, &Settings{
+		LanguageHint: settings.Set([]string{"en", "fr"}),
+		Version:      settings.Set("2025-07-31.0"),
+	}); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	q := cfg.query(16000, live)
+	if got := q["language_hint"]; len(got) != 2 || got[0] != "en" || got[1] != "fr" {
+		t.Errorf("language_hint = %v, want [en fr]", got)
+	}
+	if got := q.Get("version"); got != "2025-07-31.0" {
+		t.Errorf("version = %q, want 2025-07-31.0", got)
+	}
+}
+
+// The speaker format is applied to transcripts locally, so changing it alone
+// keeps the session open.
+func TestASpeakerFormatChangeKeepsTheSession(t *testing.T) {
+	t.Parallel()
+
+	c := &connector{cfg: baseConfig(), live: newSettings(baseConfig())}
+	reopen, err := c.UpdateSettings(context.Background(), settings.Changed{"speaker_format": nil})
+	if err != nil {
+		t.Fatalf("update settings: %v", err)
+	}
+	if reopen {
+		t.Error("a speaker format change asked for a new session")
+	}
+	if strings.Contains(c.cfg.query(16000, c.live).Encode(), "speaker_format") {
+		t.Error("speaker_format was sent to Deepgram")
 	}
 }

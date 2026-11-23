@@ -25,6 +25,7 @@ import (
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/processor/aggregators"
+	"github.com/gojargo/jargo/processor/turns"
 	"github.com/gojargo/jargo/provider/openai/chat"
 	"github.com/gojargo/jargo/provider/openai/realtime"
 	"github.com/gojargo/jargo/runner"
@@ -201,6 +202,10 @@ func runBot(ctx context.Context, t transport.Transport, args runner.Arguments) e
 
 	model := chat.NewLLM(chat.LLMConfig{APIKey: os.Getenv("OPENAI_API_KEY")})
 	model.SetSystemInstruction(systemInstruction)
+	// A brief word from the LLM while an async tool runs.
+	if err := model.AddExtension(turns.NewWaitReassuranceLLMExtension(turns.WaitReassuranceConfig{})); err != nil {
+		return err
+	}
 
 	model.OnFunctionCallsStarted(func(ctx context.Context, _ []frames.ToolCall) {
 		_ = tts.QueueFrame(ctx, frames.NewTTSSpeakFrame("Let me check on that."), processor.Downstream)

@@ -160,31 +160,34 @@ func deepgramLanguage(l language.Language) string {
 	return l.Code()
 }
 
-// Settings is the part of the Deepgram configuration that can change while the
-// pipeline runs. It is the same set the provider itself treats as changeable;
-// everything else about the connection, the endpoint, the encoding, the channel
-// count, is fixed when the service is built.
+// BaseSTTSettings is the settings both Deepgram speech-to-text APIs accept,
+// streaming and pre-recorded. Settings and SegmentedSTTSettings embed it and add
+// the settings only their own API accepts.
 //
-// A change to any of it reopens the transcription session, because Deepgram
-// takes these as query parameters when the session opens and has no way to be
-// told about them afterwards.
-type Settings struct {
+// Model and Language come from settings.STT. On the segmented service, any
+// other Deepgram request parameter can be passed through Extra, and a key of
+// Extra that names one of the settings below sets that setting instead (see
+// syncExtraToFields).
+type BaseSTTSettings struct {
 	settings.STT
 
 	// DetectEntities enables named-entity detection.
 	DetectEntities settings.Opt[bool] `settings:"detect_entities"`
-	// Diarize labels speakers in the transcript.
+	// Diarize labels speakers in the transcript. The segmented service emits
+	// each contiguous speaker run of a result as its own frame, with Deepgram's
+	// speaker number ("0", "1", ...) as its speaker label.
 	Diarize settings.Opt[bool] `settings:"diarize"`
 	// Dictation converts spoken commands (e.g. "comma") to punctuation.
 	Dictation settings.Opt[bool] `settings:"dictation"`
-	// Endpointing is the silence in ms before Deepgram's speech_final.
-	Endpointing settings.Opt[int] `settings:"endpointing"`
-	// InterimResults emits partial transcripts.
-	InterimResults settings.Opt[bool] `settings:"interim_results"`
 	// Keyterm boosts recognition of the given terms (nova-3).
 	Keyterm settings.Opt[[]string] `settings:"keyterm"`
 	// Keywords boosts recognition of the given terms (legacy models).
 	Keywords settings.Opt[[]string] `settings:"keywords"`
+	// LanguageHint is one or more BCP-47 tags biasing language detection on
+	// Nova-3 multilingual. Deepgram ignores it unless the request sets model
+	// "nova-3" and language "multi", and rejects a tag the multilingual model
+	// does not cover.
+	LanguageHint settings.Opt[[]string] `settings:"language_hint"`
 	// Numerals converts spoken numbers to numerals.
 	Numerals settings.Opt[bool] `settings:"numerals"`
 	// ProfanityFilter filters profanity from transcripts.
@@ -199,6 +202,39 @@ type Settings struct {
 	Search settings.Opt[[]string] `settings:"search"`
 	// SmartFormat applies Deepgram smart formatting.
 	SmartFormat settings.Opt[bool] `settings:"smart_format"`
+	// Version is the model version to transcribe with, e.g. a dated
+	// standard-model version such as "2021-03-17.0" or a custom model's version
+	// id. No value omits the parameter, leaving Deepgram on "latest".
+	Version settings.Opt[string] `settings:"version"`
+	// SpeakerFormat formats each diarized speaker run: {speaker} is the
+	// speaker label, {text} the transcript text, and {speaker_number} the
+	// speaker's order of first appearance in the session (1, 2, ...), e.g.
+	// "{speaker}: {text}". No value leaves the text as it is. It is applied
+	// locally, so changing it does not reopen the session.
+	SpeakerFormat settings.Opt[string] `settings:"speaker_format"`
+}
+
+// localSTTFields are the settings applied locally to transcripts. They are
+// never sent to Deepgram, and changing one needs no new session.
+//
+//nolint:gochecknoglobals // a fixed set
+var localSTTFields = []string{"speaker_format"}
+
+// Settings is the part of the Deepgram configuration that can change while the
+// pipeline runs. It is the same set the provider itself treats as changeable;
+// everything else about the connection, the endpoint, the encoding, the channel
+// count, is fixed when the service is built.
+//
+// A change to any of it but the local SpeakerFormat reopens the transcription
+// session, because Deepgram takes these as query parameters when the session
+// opens and has no way to be told about them afterwards.
+type Settings struct {
+	BaseSTTSettings
+
+	// Endpointing is the silence in ms before Deepgram's speech_final.
+	Endpointing settings.Opt[int] `settings:"endpointing"`
+	// InterimResults emits partial transcripts.
+	InterimResults settings.Opt[bool] `settings:"interim_results"`
 	// UtteranceEndMs is the silence in ms before an utterance-end event.
 	UtteranceEndMs settings.Opt[int] `settings:"utterance_end_ms"`
 }
@@ -224,6 +260,9 @@ func newSettings(cfg Config) *Settings {
 	setOptSlice(&s.Redact, cfg.Redact)
 	setOptSlice(&s.Replace, cfg.Replace)
 	setOptSlice(&s.Search, cfg.Search)
+	if cfg.Version != "" {
+		s.Version = settings.Set(cfg.Version)
+	}
 	return s
 }
 
@@ -270,7 +309,6 @@ func (cfg *Config) query(sampleRate int, live *Settings) url.Values {
 	setBoolOpt(q, "vad_events", cfg.VADEvents)
 	setBoolOpt(q, "multichannel", cfg.Multichannel)
 	setBoolOpt(q, "mip_opt_out", cfg.MipOptOut)
-	setStrOpt(q, "version", cfg.Version)
 	addAll(q, "tag", cfg.Tag)
 
 	// Changeable while the pipeline runs.
@@ -291,6 +329,8 @@ func (cfg *Config) query(sampleRate int, live *Settings) url.Values {
 	addAll(q, "redact", live.Redact.Or(nil))
 	addAll(q, "replace", live.Replace.Or(nil))
 	addAll(q, "search", live.Search.Or(nil))
+	addAll(q, "language_hint", live.LanguageHint.Or(nil))
+	setStrOpt(q, "version", live.Version.Or(""))
 
 	for k, v := range cfg.ExtraQuery {
 		q.Set(k, v)
@@ -364,11 +404,11 @@ func (c *connector) Metadata() stt.Metadata {
 // Settings is the configuration a caller may change while the pipeline runs.
 func (c *connector) Settings() any { return c.live }
 
-// UpdateSettings asks for the session to be reopened whenever anything changed.
-// Deepgram takes all of it as query parameters when the session opens, so a
-// change reaches it only by opening another.
-func (c *connector) UpdateSettings(context.Context, settings.Changed) (bool, error) {
-	return true, nil
+// UpdateSettings asks for the session to be reopened whenever anything but a
+// local setting changed. Deepgram takes the rest as query parameters when the
+// session opens, so a change reaches it only by opening another.
+func (c *connector) UpdateSettings(_ context.Context, changed settings.Changed) (bool, error) {
+	return len(changed.Except(localSTTFields...)) > 0, nil
 }
 
 // ServiceLanguage names a language the way Deepgram does. It uses BCP-47 codes

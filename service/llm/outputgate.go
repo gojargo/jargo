@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/gojargo/jargo/frames"
-	"github.com/gojargo/jargo/processor"
 )
 
 // OutputGate decides whether the service's output goes out: each frame it
@@ -29,15 +28,3 @@ type OutputGate interface {
 // function calls it runs, or removes it with nil. Set it before the service
 // starts.
 func (b *Base) SetOutputGate(g OutputGate) { b.outputGate = g }
-
-// processBaseAndGate has the service base handle a frame, then shows the frame
-// to the output gate, if one is set, before the LLM service handles it.
-func (b *Base) processBaseAndGate(ctx context.Context, f frames.Frame, dir processor.Direction) error {
-	if err := b.Base.ProcessFrame(ctx, f, dir); err != nil {
-		return err
-	}
-	if b.outputGate != nil {
-		return b.outputGate.ProcessFrame(ctx, b, f)
-	}
-	return nil
-}

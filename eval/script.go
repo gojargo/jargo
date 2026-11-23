@@ -63,9 +63,10 @@ const (
 	// (audio mode only).
 	EventVADUserStoppedSpeaking = "vad_user_stopped_speaking"
 	// EventLLMMarker carries the sideband marker the bot's model emitted in a
-	// response, such as a turn-completion marker. It arrives when the response
-	// ends, and carries the response's raw text with it. Markers never reach a
-	// client by default; a scenario asserting on one asks the bot to report them.
+	// response, such as a turn-completion marker or the silent mark of a reply
+	// dropped unspoken. It arrives when the response ends, and carries the
+	// response's raw text with it. Markers never reach a client by default; a
+	// scenario asserting on one asks the bot to report them.
 	EventLLMMarker = "llm_marker"
 	// EventExpression is the expression the bot's TTS performed in an
 	// expressive conversation (alpha), from bot-output, in the tags the LLM
@@ -98,6 +99,10 @@ const (
 	// MarkerIncomplete matches either of the two above, for a scenario that
 	// cares that the bot held the turn open rather than which reason it read.
 	MarkerIncomplete = "incomplete"
+	// MarkerSilent means the LLM answered with its silent mark and the bot
+	// dropped the reply unspoken. It is the kind the LLM service stamps on
+	// such a reply's marker (frames.LLMMarkerKindSilent).
+	MarkerSilent = "silent"
 )
 
 // Where an expectation checks for its event from.
@@ -128,8 +133,9 @@ var (
 	FunctionCallEvents = []string{EventFunctionCall, EventFunctionCallStopped}
 	// MarkerKinds are what a marker: may name on an llm_marker expectation.
 	// The first three are the kinds the turn-completion markers carry;
-	// incomplete accepts short or long.
-	MarkerKinds = []string{MarkerComplete, MarkerShort, MarkerLong, MarkerIncomplete}
+	// incomplete accepts short or long; silent is the LLM service's kind for a
+	// reply it dropped as its silent mark.
+	MarkerKinds = []string{MarkerComplete, MarkerShort, MarkerLong, MarkerIncomplete, MarkerSilent}
 	// CheckFrom are the values check_from: may take.
 	CheckFrom = []string{CheckFromPrevious, CheckFromTurnStart}
 	// vadEvents are the raw VAD speaking events, which the bot reports only when
@@ -239,6 +245,11 @@ type Expectation struct {
 	// or turn_start, the beginning of the turn, at events the expectations
 	// above it did not use.
 	CheckFrom string
+	// AllowContinue, with Eval, is whether the judge may answer continue and
+	// have the harness wait for more of the reply; nil leaves it to the judge's
+	// own setting. False forces the judge to consider the reply as final, the
+	// thing to be judged, rather than skipping it.
+	AllowContinue *bool
 	// Absent inverts the expectation: it passes only when no event of this type
 	// arrives before the WithinMS budget expires, and fails as soon as one does.
 	// It matches on event type only, so no content, call, marker or metric check may
@@ -854,23 +865,15 @@ func parseExpectation(raw any, path string, ti, ei int) (Expectation, error) {
 		return Expectation{}, invalidf("%s missing or invalid 'event:'", where)
 	}
 
-	criterion, hasCriterion := e[keyEval]
-	hasCriterion = hasCriterion && criterion != nil
-	if hasCriterion && event == EventFunctionCallStopped {
-		return Expectation{}, invalidf("%s: 'eval:' on 'function_call_stopped': a stopped call carries "+
-			"no arguments to judge; put the 'eval:' on the 'function_call' instead", where)
+	allowContinue, err := parseEval(e, event, where)
+	if err != nil {
+		return Expectation{}, err
 	}
-	if hasCriterion && !slices.Contains(JudgeableEvents, event) && event != EventFunctionCall {
-		slog.Warn(fmt.Sprintf("%s: 'eval:' on event %s; a judge only makes sense on bot-generated text "+
-			"events (%s) and 'function_call'. Will run but is unlikely to be meaningful.",
-			where, pyRepr(event), strings.Join(JudgeableEvents, ", ")))
-	}
-
 	absent, checkFrom, err := parseAbsentAndCheckFrom(e, where)
 	if err != nil {
 		return Expectation{}, err
 	}
-	exp := Expectation{Event: event, Absent: absent, CheckFrom: checkFrom}
+	exp := Expectation{Event: event, AllowContinue: allowContinue, Absent: absent, CheckFrom: checkFrom}
 	if !absent {
 		if exp.Calls, err = parseFunctionCalls(e, event, where); err != nil {
 			return Expectation{}, err
@@ -883,6 +886,36 @@ func parseExpectation(raw any, path string, ti, ei int) (Expectation, error) {
 		return Expectation{}, err
 	}
 	return exp, parseTextChecks(e, &exp, where)
+}
+
+// parseEval checks an expectation's eval: against its event, and reads the
+// allow_continue: that goes with it, which must be a boolean and only applies
+// with eval:.
+func parseEval(e map[string]any, event, where string) (*bool, error) {
+	criterion, hasCriterion := e[keyEval]
+	hasCriterion = hasCriterion && criterion != nil
+	if hasCriterion && event == EventFunctionCallStopped {
+		return nil, invalidf("%s: 'eval:' on 'function_call_stopped': a stopped call carries "+
+			"no arguments to judge; put the 'eval:' on the 'function_call' instead", where)
+	}
+	if hasCriterion && !slices.Contains(JudgeableEvents, event) && event != EventFunctionCall {
+		slog.Warn(fmt.Sprintf("%s: 'eval:' on event %s; a judge only makes sense on bot-generated text "+
+			"events (%s) and 'function_call'. Will run but is unlikely to be meaningful.",
+			where, pyRepr(event), strings.Join(JudgeableEvents, ", ")))
+	}
+
+	v := e["allow_continue"]
+	if v == nil {
+		return nil, nil //nolint:nilnil // not set: the judge's own setting applies
+	}
+	allowContinue, ok := v.(bool)
+	if !ok {
+		return nil, invalidf("%s 'allow_continue:' must be a boolean", where)
+	}
+	if !hasCriterion {
+		return nil, invalidf("%s 'allow_continue:' only applies with 'eval:'", where)
+	}
+	return &allowContinue, nil
 }
 
 // parseAbsentAndCheckFrom reads an expectation's absent: and check_from:, and

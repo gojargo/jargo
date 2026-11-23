@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"maps"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -96,10 +97,12 @@ type Judge interface {
 	AddUserMessage(text string)
 	// AddAssistantMessage appends a segment of the bot's current reply.
 	AddAssistantMessage(text string)
-	// Evaluate judges the conversation so far against criterion. A judge that
-	// cannot answer reports VerdictNone with the reason, rather than failing:
-	// an unavailable judge leaves the assertion undecided, not the run broken.
-	Evaluate(ctx context.Context, criterion string) JudgeVerdict
+	// Evaluate judges the conversation so far against criterion. allowContinue
+	// is whether this reply may be judged VerdictContinue; nil leaves it to the
+	// judge's own setting. A judge that cannot answer reports VerdictNone with
+	// the reason, rather than failing: an unavailable judge leaves the
+	// assertion undecided, not the run broken.
+	Evaluate(ctx context.Context, criterion string, allowContinue *bool) JudgeVerdict
 	// EvaluateCall judges a tool call the bot made against criterion, by the
 	// call's name and arguments, with the conversation so far as context. It is
 	// how a scenario checks what an argument subset cannot match verbatim.
@@ -213,6 +216,15 @@ var replyOutcomes = []classifier.Option{
 		"incomplete fragment."},
 }
 
+// replyOutcomesFor is the answers a reply can get: the three, or yes and no
+// alone.
+func replyOutcomesFor(allowContinue bool) []classifier.Option {
+	if allowContinue {
+		return replyOutcomes
+	}
+	return replyOutcomes[:2]
+}
+
 // The keys of the state a question is about: the conversation before what is
 // judged, and the bot's reply being judged.
 const (
@@ -258,7 +270,11 @@ type EvalJudgeConfig struct {
 	// AllowContinue is whether a reply may be judged continue: the bot is still
 	// working toward its answer, so the harness waits for more of it. Nil allows
 	// it. A suite whose judged replies are all final answers turns it off, and a
-	// reply is then yes or no.
+	// reply is then yes or no; a reply that is still arriving is still judged
+	// again as more of it comes. An expectation can set allow_continue: false
+	// on itself alone, which forces the judge to consider its reply as final,
+	// the thing to be judged, rather than skipping it: a wait reassurance
+	// ("still working on it...") is judged that way.
 	AllowContinue *bool
 	// MaxTokens caps the explainer's answer for one reason; zero uses 200,
 	// enough for a short sentence.
@@ -341,10 +357,7 @@ func NewEvalJudge(cfg EvalJudgeConfig) (*EvalJudge, error) {
 	if cfg.ExplainBelow != nil {
 		j.explainBelow = *cfg.ExplainBelow
 	}
-	j.outcomes = replyOutcomes
-	if !j.allowContinue {
-		j.outcomes = replyOutcomes[:2]
-	}
+	j.outcomes = replyOutcomesFor(j.allowContinue)
 	if cfg.Explainer != nil {
 		maxTokens := cfg.MaxTokens
 		if maxTokens == 0 {
@@ -457,11 +470,17 @@ func (j *EvalJudge) spoken() (spoken, all []transcriptEntry) {
 }
 
 // Evaluate judges whether the bot's latest reply satisfies criterion, in the
-// conversation so far. It gives a yes, a no, or, when continue is allowed, a
-// continue when the bot is still working toward its answer, cached by criterion
-// and conversation. A final verdict that needs a reason is explained, and a
-// failed question is a none with the failure as its reason, not cached.
-func (j *EvalJudge) Evaluate(ctx context.Context, criterion string) JudgeVerdict {
+// conversation so far. allowContinue is whether this reply may be judged
+// continue; nil leaves it to the judge's own setting. It gives a yes, a no, or,
+// when continue is allowed, a continue when the bot is still working toward its
+// answer, cached by criterion, conversation and the answers it was allowed. A
+// final verdict that needs a reason is explained, and a failed question is a
+// none with the failure as its reason, not cached.
+func (j *EvalJudge) Evaluate(ctx context.Context, criterion string, allowContinue *bool) JudgeVerdict {
+	outcomes := j.outcomes
+	if allowContinue != nil {
+		outcomes = replyOutcomesFor(*allowContinue)
+	}
 	spoken, all := j.spoken()
 	entries := numberedTurns(spoken)
 	latest := ""
@@ -473,14 +492,14 @@ func (j *EvalJudge) Evaluate(ctx context.Context, criterion string) JudgeVerdict
 		{Key: stateConversation, Value: conversation(entries)},
 		{Key: stateLatestReply, Value: latest},
 	}
-	key := cacheKey("reply", criterion, state)
+	key := cacheKey("reply", criterion, state, sortedOptionNames(outcomes))
 	if v, ok := j.cached(key); ok {
 		return v
 	}
 
 	question := classifier.ChoiceQuestion{
 		Instructions: instructions(replyQuestion, "Criterion", criterion, ""),
-		Options:      j.outcomes,
+		Options:      outcomes,
 	}
 	answers, err := askTwice(ctx, j, func() (map[string]classifier.ChoiceResult, error) {
 		return j.classifier.Choice(ctx, state, []classifier.Named[classifier.ChoiceQuestion]{
@@ -936,6 +955,17 @@ func argsOrEmpty(args map[string]any) map[string]any {
 		return map[string]any{}
 	}
 	return args
+}
+
+// sortedOptionNames is the names of options, sorted, for a cache key that
+// tells apart the same question offered different answers.
+func sortedOptionNames(options []classifier.Option) []string {
+	names := make([]string, 0, len(options))
+	for _, o := range options {
+		names = append(names, o.Name)
+	}
+	slices.Sort(names)
+	return names
 }
 
 // cacheKey hashes what a question was about: its kind, criterion and state.

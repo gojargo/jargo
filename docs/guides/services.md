@@ -81,7 +81,7 @@ type Stream interface {
 final `TranscriptionFrame`s out.
 
 **Segment** STT transcribes a finished buffer instead, for providers with no
-streaming API:
+streaming API or through a provider's batch API:
 
 ```go
 type Transcriber interface {
@@ -89,10 +89,15 @@ type Transcriber interface {
 }
 ```
 
+A provider whose result carries more than text (one transcript per speaker of a
+diarized result, say) implements `SegmentRunner` instead, yielding the frames
+itself, and is built with `stt.NewSegmentRunner`.
+
 Segment STT emits no interim transcriptions. It still works with
 `WithTurnTaking()`, which gates on a *finalized* transcript, but start strategies
 that key on partial transcripts never fire, so turn starts fall back to VAD alone.
-`chat.NewSTT` is segment-based; `deepgram.NewSTT` streams.
+`chat.NewSTT` and `deepgram.NewSegmentedSTT` (Deepgram's pre-recorded API, one
+request per segment) are segment-based; `deepgram.NewSTT` streams.
 
 ### LLM
 
@@ -222,17 +227,56 @@ set. A handler registered by hand always wins and is never dropped.
 
 | Option | What it does |
 |---|---|
-| `llm.WithCancelOnInterruption(false)` | Registers an **asynchronous** tool: the model carries on rather than waiting, and the call survives a barge-in. A result that arrives before the conversation moves on settles into the call's placeholder like any other; one that arrives after reaches the model on a later turn as a developer message. Call `p.Result` with `IsFinal` false for the ones before the last. |
+| `llm.WithCancelOnInterruption(false)` | Registers an **asynchronous** tool: the model carries on rather than waiting, and the call survives a barge-in. A result that arrives before the conversation moves on settles into the call's placeholder like any other; one that arrives after reaches the model on a later turn as a developer message. Call `p.Result` with `IsFinal` false for the ones before the last. The call is background work: the service broadcasts a `BackgroundWorkStartedFrame` as it starts and a `BackgroundWorkFinishedFrame` once it settles, so a user quiet meanwhile counts as [waiting](turn-taking.md#idle-and-waiting), not idle. |
 | `llm.WithTimeout(d)` | Bounds one function's calls. |
 | `llm.WithFunctionCallTimeout(d)` | Bounds every call. One that overruns is given up on: it records as completed rather than answering on the tool's behalf. |
 | `llm.WithSequentialFunctionCalls()` | Runs the calls of one response one after another, for tools that share something not safe to use concurrently. |
 | `llm.WithUngroupedFunctionCalls()` | Re-runs generation per result instead of once the batch finishes. |
-| `llm.WithAsyncToolCancellation()` | Offers the model a built-in `cancel_async_tool_call`, while any asynchronous tool is registered, so it can abandon background work it no longer needs. |
+| `llm.WithCancellableByLLM(true)` | Lets the model stop an asynchronous tool's calls while they run, through a built-in `cancel_<name>` tool advertised beside it. Pair it with `WithCancelOnInterruption(false)`. |
 
 Register the empty name for a **catch-all** that takes any call no named handler
 claims. `UnregisterFunction` withdraws a handler, `HasFunction` asks whether a
 call would be claimed, and `OnFunctionCallsStarted` / `OnFunctionCallsCanceled`
 report which calls a response started and which an interruption took away.
+`RunningFunctionCalls` lists the calls in flight, and `CancelFunctionCall`
+cancels one by its `tool_call_id`.
+
+While an asynchronous tool is registered, the service adds guidance on such
+tools to its system instruction, and while a cancellable one is, the guidance on
+canceling. Both come from the service's async-tool extension, which every LLM
+service holds (see [LLM extensions](#llm-extensions)).
+
+## LLM extensions
+
+An LLM extension is a pluggable feature of an LLM service. It embeds
+`llm.BaseLLMExtension` and overrides what it needs:
+
+| Method | What it does |
+|---|---|
+| `SystemInstruction()` | Standing instructions, composed onto the service's system instruction after the application's prompt. |
+| `BuiltinTools(registered)` | Tools added to the service's built-in tools, given the registered ones. Their names are reserved, and their calls are announced only when `AnnounceCallStart` is set. |
+| `ProcessFrame` | Watches every frame the service processes, before the service handles it. |
+| `FilterPushFrame` | Filters every frame the service pushes: passes it on, holds it back, drops it, or adds frames. |
+| `Order()` | Where the extension sits among the others. |
+
+Extensions wrap the service the way middleware wraps a handler. An incoming frame
+goes through them from the outside in and an outgoing frame from the inside out,
+and a frame an extension pushes itself, with `PushFrame` or `BroadcastFrame`,
+goes through the extensions outside it. A service holds one extension of each
+type; `llm.GetExtension[*T](service)` finds it.
+
+A component that has the service in hand attaches one with `AddExtension`
+before the pipeline runs. A running service takes one over an
+`LLMUpdateSettingsFrame` whose `settings.LLM` delta lists it in `Extensions`; an
+entry that is a `func() llm.LLMExtension` builds one for each service the update
+reaches, which is what an update reaching every LLM behind a switcher needs,
+since an extension belongs to one service.
+
+jargo's own features are extensions: turn completion
+(`llm.LLMTurnCompletionLLMExtension`, installed by the turn strategy, see
+[Turn-taking](turn-taking.md)), the async-tool guidance and cancel tools
+(`llm.AsyncToolLLMExtension`), and the pairing of a frontend with its backend
+(`llmwithbackend.BackendPairingLLMExtension`).
 
 ## Speech-to-speech
 
@@ -282,8 +326,10 @@ is kept as notes on the work. The user can keep talking meanwhile: a second
 request joins the work in progress, and a correction changes or stops it.
 
 The frontend's system instruction says who the assistant is, the backend's says
-what work it does, and each gets a pairing instruction appended that explains how
-the two work together. `llmwithbackend.ConnectorConfig` changes the wording, how
+what work it does, and each gets a pairing instruction that explains how the two
+work together. On the frontend, the pairing instruction and `delegate` come from
+a `llmwithbackend.BackendPairingLLMExtension` the pairing installs on it, and a
+call of `delegate` is announced as a call of the application's own tools is. `llmwithbackend.ConnectorConfig` changes the wording, how
 requests are composed, and whether each exchange is traced to the client as an
 RTVI server message. The frontend has to carry built-in tools: the OpenAI chat
 completions, Anthropic and Gemini services do.

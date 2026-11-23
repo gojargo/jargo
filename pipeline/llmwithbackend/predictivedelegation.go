@@ -298,9 +298,9 @@ const needsBackendQuestion = "needs_backend"
 // predictiveFrontend is what predictive delegation needs of the frontend: a
 // text LLM service built on the LLM service base.
 type predictiveFrontend interface {
+	llm.ExtensionHolder
 	SetOutputGate(g llm.OutputGate)
 	SystemInstruction() string
-	FilterIncompleteUserTurns() bool
 }
 
 // ErrPredictiveDelegationNeedsTextFrontend is reported when predictive
@@ -455,7 +455,7 @@ func (p *PredictiveDelegation) shouldStartRace(ctx context.Context, f *frames.LL
 			"predictive delegation: speculative turns (eager end of turn) are left to the frontend")
 		return false
 	}
-	if p.frontend.FilterIncompleteUserTurns() {
+	if _, filtering := llm.GetExtension[*llm.LLMTurnCompletionLLMExtension](p.frontend); filtering {
 		p.warnOnce(ctx, "filtering",
 			"predictive delegation: turns are left to the frontend while it filters incomplete user turns")
 		return false

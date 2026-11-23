@@ -28,9 +28,10 @@ import (
 // Only standard tools carry handlers, so custom tools written in a provider's
 // own format contribute nothing to register.
 //
-// It ends by settling what the registry decides: the cancel tools, and the
-// system instruction, whose guidance on asynchronous tools and on canceling
-// them depends on which handlers are registered.
+// It ends by settling what the registry decides: the extensions' built-in
+// tools, and the system instruction, to which the extensions contribute
+// according to which handlers are registered (the guidance on asynchronous
+// tools, and on canceling them, for one).
 func (b *Base) SyncToolHandlers(ctx context.Context, tools frames.ToolsSchema) {
 	if tools.Empty() {
 		// No tools advertised? Fall back to the service's own configured tools.
@@ -51,11 +52,11 @@ func (b *Base) SyncToolHandlers(ctx context.Context, tools frames.ToolsSchema) {
 	b.dropUnadvertisedToolHandlers(advertised)
 	b.forgetUnadvertisedRemovals(advertised)
 
-	// What the registry holds decides both whether the asynchronous-tool
-	// guidance belongs in the system instruction and whether the cancel tools
-	// do, and it is settled only here: tools advertised on a conversation
-	// register during this sync, and a conversation can advertise nothing.
-	b.syncCancelTools()
+	// What the registry holds decides what the extensions add, tools and
+	// instructions both, and it is settled only here: tools advertised on a
+	// conversation register during this sync, a handler registered by hand never
+	// goes through that path at all, and a conversation can advertise nothing.
+	b.syncExtensionTools()
 	b.composeSystemInstruction()
 }
 
@@ -220,7 +221,7 @@ func toolCallOptions(t frames.Tool) []RegisterOption {
 
 // dropUnadvertisedToolHandlers removes the handlers that came from a toolset no
 // longer advertising them. Handlers registered by hand, the catch-all and the
-// service's own built-in tools are left alone.
+// extensions' built-in tools are left alone.
 func (b *Base) dropUnadvertisedToolHandlers(advertised map[string]bool) {
 	b.handlersMu.Lock()
 	defer b.handlersMu.Unlock()

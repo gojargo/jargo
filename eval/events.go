@@ -37,8 +37,10 @@ import (
 //	llm_started                bot-llm-started
 //	llm_response               the LLM text: bot-llm-text joined at bot-llm-stopped
 //	llm_marker                 bot-llm-marker: the sideband marker the LLM emitted in a
-//	                           response, with its kind and the response's raw text;
-//	                           sent when the response ends, only on request
+//	                           response, such as a turn-completion marker or the
+//	                           silent mark of a reply dropped unspoken, with its
+//	                           kind and the response's raw text; sent when the
+//	                           response ends, only on request
 //	tts_response               the TTS's spoken text, one segment per bot-tts-text
 //	                           (audio modality only)
 //	response                   the harness's own transcription of the bot's audio
