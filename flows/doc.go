@@ -39,4 +39,16 @@
 // else it needs with RegisterAction. A node's pre-actions run before its context
 // is applied; its post-actions run after, or, on a node that waits for the user,
 // once the assistant's first turn there is over.
+//
+// # Configured flows
+//
+// A flow can also be described as data. A FlowConfig, loaded from YAML or JSON,
+// holds the nodes, what each one says, which tools it offers and where each
+// tool leads, and NewFlow joins it to the application's handlers: the
+// NodeFunctions and ActionHandlers the config refers to by name. The resulting
+// Flow hands ready-made nodes to the FlowManager. A tool of a configured flow
+// returns TransitionInYAML in its next-node slot and the config decides where
+// the conversation goes, by a fixed target or by a field of the tool's result.
+// A set of nodes used more than once is written once as a subflow and run from
+// each node that needs it.
 package flows

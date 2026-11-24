@@ -1,10 +1,16 @@
 package flows
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+	"strings"
+)
 
 // The errors a flow reports. They form a hierarchy: every one of them wraps
 // ErrFlow, so a caller that only wants to know the flow failed matches on that,
-// and one that wants to know how matches on the specific error.
+// and one that wants to know how matches on the specific error. A flow config
+// that does not load is the exception: it is a FlowConfigError, which is about
+// the document rather than about a flow.
 //
 //nolint:gochecknoglobals // sentinel errors
 var (
@@ -64,3 +70,66 @@ func errf(kind error, msg string) error { return &flowError{kind: kind, msg: msg
 
 // wrapErr reports cause as a failure of the given kind, keeping cause matchable.
 func wrapErr(kind error, cause error) error { return &flowError{kind: kind, cause: cause} }
+
+// The codes of a FlowProblem.
+const (
+	// ProblemMissingTool is a tool the config names that is not in the handlers.
+	ProblemMissingTool = "missing_tool"
+	// ProblemAmbiguousTool is a tool that more than one of the handlers defines.
+	ProblemAmbiguousTool = "ambiguous_tool"
+	// ProblemInvalidTool is a tool whose entry in the handlers cannot be offered.
+	ProblemInvalidTool = "invalid_tool"
+	// ProblemMissingHandler is an action handler the config names that is not in
+	// the handlers.
+	ProblemMissingHandler = "missing_handler"
+	// ProblemAmbiguousHandler is an action handler that more than one of the
+	// handlers defines.
+	ProblemAmbiguousHandler = "ambiguous_handler"
+)
+
+// FlowProblem is one reference a flow config makes that its handlers do not
+// satisfy.
+type FlowProblem struct {
+	// Code is a stable identifier for the kind of problem: ProblemMissingTool,
+	// ProblemAmbiguousTool, ProblemInvalidTool, ProblemMissingHandler or
+	// ProblemAmbiguousHandler.
+	Code string
+	// Message is a human-readable description naming the node or function
+	// involved.
+	Message string
+	// Node is the node the problem is about, or "" when there is none.
+	Node string
+	// Function is the function entry the problem is about, or "" when there is
+	// none.
+	Function string
+}
+
+// FlowReferenceError reports that a flow config's references cannot all be
+// resolved.
+//
+// NewFlow checks every tool and action handler the config names and returns
+// this once, with every unresolved reference, rather than stopping at the
+// first. It matches ErrFlow.
+type FlowReferenceError struct {
+	// Problems is every unresolved reference, in the order found.
+	Problems []FlowProblem
+}
+
+// Error implements error.
+func (e *FlowReferenceError) Error() string {
+	var b strings.Builder
+	plural := "s"
+	if len(e.Problems) == 1 {
+		plural = ""
+	}
+	fmt.Fprintf(&b, "flow config has %d problem%s:", len(e.Problems), plural)
+	for _, p := range e.Problems {
+		b.WriteString("\n- " + p.Message)
+	}
+	return b.String()
+}
+
+// Is reports the error as a flow error.
+func (e *FlowReferenceError) Is(target error) bool {
+	return target == ErrFlow //nolint:errorlint // sentinel identity
+}

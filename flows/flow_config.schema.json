@@ -1,0 +1,392 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "Action": {
+      "additionalProperties": true,
+      "description": "A pre- or post-action on a node.\n\nThe built-in tts_say and end_conversation types take no handler. The\nbuilt-in function type requires one: the handler runs inline in the\npipeline, queued behind the bot's turn. A custom type may name a handler\ntoo, which then runs immediately when the node's actions execute; a\ncustom type without one must be registered in code with\nFlowManager.RegisterAction. Any additional keys pass through to the\nhandler. The text of a tts_say action may contain {{ key }}\nplaceholders; see FlowConfig.\n\nParameters:\n    type: Action type identifier.\n    handler: Name of the handler in the handlers a Flow is built with.\n        Required for function, optional for custom types, not allowed\n        on tts_say or end_conversation.",
+      "properties": {
+        "type": {
+          "title": "Type",
+          "type": "string"
+        },
+        "handler": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Handler"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "Action",
+      "type": "object"
+    },
+    "Branch": {
+      "additionalProperties": false,
+      "description": "A transition chosen by a field of the tool's result.\n\nParameters:\n    field: Key of the tool's result whose value selects the case.\n    cases: Result value to node name. Keys may be written as strings,\n        booleans, or numbers; they match the result value by its\n        canonical string, so true: matches a result of true.\n    default: Node to transition to when the value matches no case.\n        When omitted, an unmatched value stays on the current node.",
+      "properties": {
+        "field": {
+          "title": "Field",
+          "type": "string"
+        },
+        "cases": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "minProperties": 1,
+          "title": "Cases",
+          "type": "object"
+        },
+        "default": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Default"
+        }
+      },
+      "required": [
+        "field",
+        "cases"
+      ],
+      "title": "Branch",
+      "type": "object"
+    },
+    "Function": {
+      "additionalProperties": false,
+      "description": "A tool offered at a node.\n\nOrdinarily the entry names a NodeFunction in the handlers a Flow is\nbuilt with, and the tool's description and parameters come from that\nfunction. A transition_only entry is defined entirely here instead: it\ntakes no parameters, runs no code, and moves the conversation to\ntransition_to when the LLM calls it.\n\nParameters:\n    name: The tool's name, as the LLM sees it. For an ordinary entry,\n        also the name of the NodeFunction in the handlers.\n    transition_only: Whether the tool is defined here rather than in\n        code. Requires description and a transition_to that names a\n        node.\n    description: What the tool is for, for the LLM. Only a\n        transition_only entry has one; a NodeFunction carries its own.\n    transition_to: Node to transition to after the tool completes, or\n        a Branch. Omitted for tools that stay on the current node.\n        Inside a subflow a target may also be return; see \"Subflows\"\n        in FlowConfig.\n    metadata: JSON data the application attaches to the tool. See\n        \"Metadata\" in FlowConfig.",
+      "else": {
+        "not": {
+          "required": [
+            "description"
+          ]
+        }
+      },
+      "if": {
+        "properties": {
+          "transition_only": {
+            "const": true
+          }
+        },
+        "required": [
+          "transition_only"
+        ]
+      },
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "transition_only": {
+          "default": false,
+          "title": "Transition Only",
+          "type": "boolean"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        },
+        "transition_to": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/Branch"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Transition To"
+        },
+        "metadata": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "$ref": "#/$defs/JsonValue"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Metadata"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "then": {
+        "properties": {
+          "transition_to": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "description",
+          "transition_to"
+        ]
+      },
+      "title": "Function",
+      "type": "object"
+    },
+    "JsonValue": {},
+    "Message": {
+      "additionalProperties": false,
+      "description": "One message in a node's task_messages.\n\nParameters:\n    role: Message role, e.g. developer or system.\n    content: Message text. May contain {{ key }} placeholders; see\n        FlowConfig.",
+      "properties": {
+        "role": {
+          "title": "Role",
+          "type": "string"
+        },
+        "content": {
+          "title": "Content",
+          "type": "string"
+        }
+      },
+      "required": [
+        "role",
+        "content"
+      ],
+      "title": "Message",
+      "type": "object"
+    },
+    "Node": {
+      "additionalProperties": false,
+      "description": "One node of the flow.\n\nA node either prompts the LLM, with task_messages and the fields that\ngo with them, or runs a subflow, with flow and return_to in their\nplace. See \"Subflows\" in FlowConfig.\n\nParameters:\n    task_messages: What the LLM should do at this node. Required\n        unless the node runs a subflow.\n    role_message: The bot's role or personality, sent as the LLM's\n        system instruction on entering this node. It persists across\n        transitions until another node sets its own. May contain\n        {{ key }} placeholders; see FlowConfig.\n    functions: Tools offered at this node, in addition to the\n        config's global_functions.\n    pre_actions: Actions run before the LLM responds at this node.\n    post_actions: Actions run after the LLM responds at this node.\n    context_strategy: How the LLM context is updated on entering this\n        node. Defaults to the FlowManager's strategy.\n    respond_immediately: Whether the LLM responds as soon as the node\n        is entered. Defaults to true.\n    metadata: JSON data the application attaches to the node. See\n        \"Metadata\" in FlowConfig.\n    flow: Id of the subflow this node runs, a key of the config's\n        flows. A node that runs a subflow takes only return_to and\n        metadata besides.\n    return_to: The node that return in the subflow leads to. May be\n        omitted when the subflow never returns.",
+      "else": {
+        "properties": {
+          "return_to": {
+            "type": "null"
+          }
+        },
+        "required": [
+          "task_messages"
+        ]
+      },
+      "if": {
+        "properties": {
+          "flow": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "flow"
+        ]
+      },
+      "properties": {
+        "task_messages": {
+          "items": {
+            "$ref": "#/$defs/Message"
+          },
+          "title": "Task Messages",
+          "type": "array"
+        },
+        "role_message": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Role Message"
+        },
+        "functions": {
+          "items": {
+            "$ref": "#/$defs/Function"
+          },
+          "title": "Functions",
+          "type": "array"
+        },
+        "pre_actions": {
+          "items": {
+            "$ref": "#/$defs/Action"
+          },
+          "title": "Pre Actions",
+          "type": "array"
+        },
+        "post_actions": {
+          "items": {
+            "$ref": "#/$defs/Action"
+          },
+          "title": "Post Actions",
+          "type": "array"
+        },
+        "context_strategy": {
+          "anyOf": [
+            {
+              "enum": [
+                "append",
+                "reset"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Context Strategy"
+        },
+        "respond_immediately": {
+          "default": true,
+          "title": "Respond Immediately",
+          "type": "boolean"
+        },
+        "metadata": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "$ref": "#/$defs/JsonValue"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Metadata"
+        },
+        "flow": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Flow"
+        },
+        "return_to": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Return To"
+        }
+      },
+      "then": {
+        "properties": {
+          "task_messages": {
+            "maxItems": 0
+          },
+          "role_message": {
+            "type": "null"
+          },
+          "functions": {
+            "maxItems": 0
+          },
+          "pre_actions": {
+            "maxItems": 0
+          },
+          "post_actions": {
+            "maxItems": 0
+          },
+          "context_strategy": {
+            "type": "null"
+          },
+          "respond_immediately": {
+            "const": true
+          }
+        }
+      },
+      "title": "Node",
+      "type": "object"
+    },
+    "Subflow": {
+      "additionalProperties": false,
+      "description": "A set of nodes that a flow's nodes can run.\n\nInside a subflow a function transitions to one of the subflow's own\nnodes, or to return. See \"Subflows\" in FlowConfig.\n\nParameters:\n    initial_node: Name of the node the subflow starts in.\n    nodes: The subflow's nodes, keyed by name.",
+      "properties": {
+        "initial_node": {
+          "title": "Initial Node",
+          "type": "string"
+        },
+        "nodes": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Node"
+          },
+          "minProperties": 1,
+          "title": "Nodes",
+          "type": "object"
+        }
+      },
+      "required": [
+        "initial_node",
+        "nodes"
+      ],
+      "title": "Subflow",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "A conversation flow described as data.\n\nLoad one with FlowConfigFromFile for a YAML or JSON file,\nFlowConfigFromYAML for YAML text, FlowConfigFromJSON for JSON text, or\nFlowConfigFromMap for a document that is already parsed.\n\n!include resolves paths on the application's file system and can read\nany file the process can read, so it belongs only in configs the\napplication ships. Load a config from another source, such as a request\nbody, with FlowConfigFromYAML and no base directory, which rejects\n!include, or with FlowConfigFromJSON.\n\nPrompt text may refer to the manager's state with {{ key }}\nplaceholders: a node's role_message, the content of its task_messages,\nand the text of a tts_say action. The FlowManager fills them from its\nstate each time it enters the node, so a value stored by a handler\nearlier in the conversation can appear in a later prompt.\n{{ order.size }} walks into a stored map. A key that is not in state is\nan error when the node is entered. To show the LLM a literal {{ key }},\nescape it as \\{{ key }}.\n\nMetadata: a node and a function each take an optional metadata mapping\nof JSON values, for whatever the application wants to keep with them,\nsuch as the id of the element a node stands for in an editor. The flow\ncarries it and never acts on it, and it is never sent to the LLM. A\nFlow copies it onto the nodes and functions it builds, and the\nFlowManager passes it to node-entered handlers and to an RTVI client as\nthe flow moves. Metadata is sent to the client, so keep anything the\nend user should not see out of it.\n\nSubflows: a set of nodes used by several flows, or several times in\none, is written once as a subflow under flows. A node runs it by naming\nit as its flow, in place of prompts and functions of its own, and says\nwhere the subflow's return leads:\n\n    initial_node: verify_caller\n    flows:\n      verification: !include verification.yaml\n    nodes:\n      verify_caller:\n        flow: verification\n        return_to: book\n      book:\n        ...\n\nEntering such a node enters the subflow at its first node. Inside a\nsubflow a transition target names one of its own nodes, or is return,\nwhich leads to the return_to of the node running it; to return to two\nplaces, run the subflow from two nodes. return_to may be omitted for a\nsubflow that never returns. A Flow builds a subflow's nodes once for\neach node that runs it, named <node>.<subflow node>, so everything\nbefore the dot is the node that runs the subflow; that is the name the\nFlowManager reports as its current node, and the node-entered event\ngives the running node separately as its parent. A config that has\nsubflows therefore cannot have a dot in a node name. A subflow's nodes\ncannot run subflows, and global_functions are offered at them too.\n\nParameters:\n    initial_node: Name of the node the flow starts in.\n    nodes: The flow's nodes, keyed by name.\n    global_functions: Tools offered at every node.\n    flows: Subflows the flow's nodes can run, keyed by flow id.",
+  "properties": {
+    "initial_node": {
+      "title": "Initial Node",
+      "type": "string"
+    },
+    "nodes": {
+      "additionalProperties": {
+        "$ref": "#/$defs/Node"
+      },
+      "minProperties": 1,
+      "title": "Nodes",
+      "type": "object"
+    },
+    "global_functions": {
+      "items": {
+        "$ref": "#/$defs/Function"
+      },
+      "title": "Global Functions",
+      "type": "array"
+    },
+    "flows": {
+      "additionalProperties": {
+        "$ref": "#/$defs/Subflow"
+      },
+      "title": "Flows",
+      "type": "object"
+    }
+  },
+  "required": [
+    "initial_node",
+    "nodes"
+  ],
+  "title": "FlowConfig",
+  "type": "object"
+}
