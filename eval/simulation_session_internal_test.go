@@ -17,7 +17,6 @@ import (
 
 	"github.com/gojargo/jargo/audio/vad"
 	"github.com/gojargo/jargo/frames"
-	"github.com/gojargo/jargo/processor/aggregators"
 	"github.com/gojargo/jargo/processor/rtvi"
 	"github.com/gojargo/jargo/processor/turns"
 	"github.com/gojargo/jargo/service/llm"
@@ -397,13 +396,12 @@ func TestSimulationIntegrationThePersonaAnswersTheBotsSpeech(t *testing.T) {
 		params.StopSecs = botVADStopSecs
 		return &energyVAD{params: params}, nil
 	}
-	// The turn ends on a speech timeout rather than the default Smart Turn
-	// model, which needs the ONNX runtime.
-	session.client.botTurnOptions = []aggregators.Option{aggregators.WithTurns(turns.Config{
-		Strategies: turns.UserTurnStrategies{Stop: []turns.StopStrategy{
-			turns.NewSpeechTimeoutStop(turns.SpeechTimeoutConfig{UserSpeechTimeout: 200 * time.Millisecond}),
-		}},
-	})}
+	// A speech timeout hears the bot stop rather than the default Smart Turn
+	// model, which needs the ONNX runtime. The turn then ends once the
+	// persona's LLM marks it complete.
+	session.client.botTurnStop = []turns.StopStrategy{
+		turns.NewSpeechTimeoutStop(turns.SpeechTimeoutConfig{UserSpeechTimeout: 200 * time.Millisecond}),
+	}
 
 	res := runSimulationSession(t, session)
 

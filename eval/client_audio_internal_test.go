@@ -26,7 +26,6 @@ import (
 	"github.com/gojargo/jargo/audio/vad"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
-	"github.com/gojargo/jargo/processor/aggregators"
 	"github.com/gojargo/jargo/processor/rtvi"
 	"github.com/gojargo/jargo/processor/turns"
 	"github.com/gojargo/jargo/service/stt"
@@ -884,11 +883,9 @@ func TestTheBotsSpeechIsTheResponse(t *testing.T) {
 	}
 	// The turn ends on a speech timeout rather than the default Smart Turn
 	// model, which needs the ONNX runtime.
-	s.client.botTurnOptions = []aggregators.Option{aggregators.WithTurns(turns.Config{
-		Strategies: turns.UserTurnStrategies{Stop: []turns.StopStrategy{
-			turns.NewSpeechTimeoutStop(turns.SpeechTimeoutConfig{UserSpeechTimeout: 200 * time.Millisecond}),
-		}},
-	})}
+	s.client.botTurnStop = []turns.StopStrategy{
+		turns.NewSpeechTimeoutStop(turns.SpeechTimeoutConfig{UserSpeechTimeout: 200 * time.Millisecond}),
+	}
 	res, err := s.Run(t.Context())
 	if err != nil {
 		t.Fatal(err)

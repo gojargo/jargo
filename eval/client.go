@@ -30,6 +30,8 @@ import (
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/processor/aggregators"
 	"github.com/gojargo/jargo/processor/rtvi"
+	"github.com/gojargo/jargo/processor/turns"
+	"github.com/gojargo/jargo/service/llm"
 	"github.com/gojargo/jargo/service/settings"
 	"github.com/gojargo/jargo/service/stt"
 	"github.com/gojargo/jargo/transport/wsclient"
@@ -260,6 +262,11 @@ type botTurnResetter interface {
 // persona answers from here: in text mode it hears each finished bot response
 // through the sink, in audio mode the aggregator hands it the bot's turn; either
 // way nothing reaches it once it hung up.
+//
+// Once the persona has hung up, its LLM no longer marks the bot's turns
+// complete. The sink marks the closing turn complete in its place once the bot
+// reports it stopped speaking, so a pause between two of the bot's sentences
+// does not end it.
 type botFrameSink struct {
 	*processor.Base
 	stream  *EventStream
@@ -267,6 +274,11 @@ type botFrameSink struct {
 	// personaHears is whether the persona hears the bot's responses through
 	// the sink (text mode, with no aggregator to hand it the turn).
 	personaHears bool
+
+	mu sync.Mutex
+	// closingInference is the closing turn's latest inference, marked complete
+	// once the bot stopped speaking.
+	closingInference *frames.LLMContextFrame
 }
 
 // newBotFrameSink builds the sink. persona is the simulated caller, or nil;
@@ -312,6 +324,12 @@ func (s *botFrameSink) ProcessFrame(ctx context.Context, f frames.Frame, dir pro
 		}
 	case *frames.LLMContextFrame:
 		// The aggregator handing the persona the bot's turn (audio mode).
+		if s.persona != nil && s.persona.HungUp() {
+			s.mu.Lock()
+			s.closingInference = fr
+			s.mu.Unlock()
+			return s.maybeCompleteClosingTurn(ctx)
+		}
 		return s.answer(ctx, fr)
 	}
 	return s.PushFrame(ctx, f, dir)
@@ -326,9 +344,25 @@ func (s *botFrameSink) botMessage(ctx context.Context, message *frames.InputTran
 	}
 	s.stream.Append(event)
 	if s.personaHears {
-		return s.answer(ctx, s.persona.Hear(event))
+		if err := s.answer(ctx, s.persona.Hear(event)); err != nil {
+			return err
+		}
 	}
-	return nil
+	return s.maybeCompleteClosingTurn(ctx)
+}
+
+// maybeCompleteClosingTurn marks the closing turn complete for the persona once
+// the bot stopped speaking.
+func (s *botFrameSink) maybeCompleteClosingTurn(ctx context.Context) error {
+	s.mu.Lock()
+	inference := s.closingInference
+	if inference == nil || s.stream.BotSpeaking() {
+		s.mu.Unlock()
+		return nil
+	}
+	s.closingInference = nil
+	s.mu.Unlock()
+	return s.PushFrame(ctx, frames.NewUserTurnCompletionFrame(MarkerComplete, "", inference.ID()), processor.Upstream)
 }
 
 // answer pushes the frame that has the persona answer, unless there is none or
@@ -552,9 +586,10 @@ type Client struct {
 	// newBotVAD builds the VAD the bot-turn aggregator hears the bot's speech
 	// with; a test stands in for it.
 	newBotVAD func() (vad.Analyzer, error)
-	// botTurnOptions are added to the bot-turn aggregator's; a test sets its
-	// turn strategies this way.
-	botTurnOptions []aggregators.Option
+	// botTurnStop are the stop strategies that hear the bot stop speaking, or
+	// nil for the defaults; a test stands in for the default turn model this
+	// way.
+	botTurnStop []turns.StopStrategy
 	// recorder records the conversation audio (bot and user) when the run
 	// records and is in audio mode; fed raw audio by the transport, written on
 	// Stop.
@@ -1205,7 +1240,7 @@ func (c *Client) processors(tr *ClientTransport) ([]processor.Processor, error) 
 	if c.botSTT != nil {
 		starts := &segmentStarts{}
 		tagBotSegments(c.botSTT, starts)
-		pair, err := c.botTurnAggregator(convo)
+		pair, err := c.botTurnAggregator(convo, persona != nil)
 		if err != nil {
 			return nil, err
 		}
@@ -1259,14 +1294,22 @@ func (p *personaStage) Setup(ctx context.Context, s processor.Setup) error {
 // has answered the send (see EventStream.BotTurnStopped). Its turn hooks give
 // the stream the timing of the bot's replies, and its finished turn is the
 // persona's next user message.
-func (c *Client) botTurnAggregator(convo *frames.LLMContext) (*aggregators.Pair, error) {
+//
+// persona is whether a persona answers the bot's turns (a simulation). Its LLM
+// then also judges whether the bot finished what it was saying: the turn model
+// hears a finished turn at the end of every sentence the bot's TTS speaks, and
+// the persona waits for the rest of a reply that reads unfinished. Once it
+// hangs up, the bot's report that it stopped speaking decides instead (see
+// botFrameSink).
+func (c *Client) botTurnAggregator(convo *frames.LLMContext, persona bool) (*aggregators.Pair, error) {
 	analyzer, err := c.newBotVAD()
 	if err != nil {
 		return nil, fmt.Errorf("eval: the VAD that hears the bot's speech: %w", err)
 	}
-	options := append([]aggregators.Option{
-		aggregators.WithVAD(aggregators.VADConfig{Analyzer: analyzer}),
-	}, c.botTurnOptions...)
+	options := []aggregators.Option{aggregators.WithVAD(aggregators.VADConfig{Analyzer: analyzer})}
+	if strategies, set := c.botTurnStrategies(persona); set {
+		options = append(options, aggregators.WithTurns(turns.Config{Strategies: strategies}))
+	}
 	pair := aggregators.New(convo, options...)
 	user := pair.User()
 	user.Events().Add(aggregators.EventUserTurnStarted, func(context.Context, any, ...any) {
@@ -1282,6 +1325,19 @@ func (c *Client) botTurnAggregator(convo *frames.LLMContext) (*aggregators.Pair,
 		c.stream.BotTurnStopped(text)
 	})
 	return pair, nil
+}
+
+// botTurnStrategies are the turn strategies of the bot-turn aggregator, and
+// false when it keeps the defaults: a scripted run's turns are the turn
+// model's, and a simulation's end once the persona's LLM marks them complete.
+func (c *Client) botTurnStrategies(persona bool) (turns.UserTurnStrategies, bool) {
+	if persona {
+		return turns.FilterIncompleteUserTurnStrategies(c.botTurnStop, llm.UserTurnCompletionConfig{}), true
+	}
+	if c.botTurnStop != nil {
+		return turns.UserTurnStrategies{Stop: c.botTurnStop}, true
+	}
+	return turns.UserTurnStrategies{}, false
 }
 
 // writeRecording writes the recorded conversation audio (bot and user) to the
