@@ -440,6 +440,10 @@ seconds after the client connects, with the frame that service takes.
 | [`food_ordering`](flows/food_ordering) | A pizza or sushi ordering flow with a pre-action, a global function, confirmation, revision and an end-of-call post-action, on the LLM picked by `LLM_PROVIDER`. | Deepgram, Cartesia, OpenAI |
 | [`food_ordering_advanced_functionschema`](flows/food_ordering_advanced_functionschema) | The same with each function schema written out by hand, with enum and range constraints. | Deepgram, Cartesia, OpenAI |
 | [`multi_worker_handoff`](flows/multi_worker_handoff) | A transport worker, a free-form router worker and a reservation worker driven by a flow, handing off over the bus. | Deepgram, Cartesia, OpenAI |
+| [`yaml/hello_world`](flows/yaml/hello_world) | `hello_world` with the flow in `flow.yaml` and its one tool in `handlers.go`. | Cartesia, Google AI |
+| [`yaml/food_ordering`](flows/yaml/food_ordering) | The food ordering flow loaded from YAML, with the restaurant name filled into the prompts from the manager's state. | Deepgram, Cartesia, OpenAI |
+| [`yaml/restaurant_reservation`](flows/yaml/restaurant_reservation) | A reservation flow from YAML whose availability check routes to confirmation or alternative times through a branch table. | Deepgram, Cartesia, OpenAI |
+| [`yaml/podcast_interview`](flows/yaml/podcast_interview) | An interview flow from YAML whose interview node transitions back to itself once per topic aspect. | Deepgram, Cartesia, OpenAI |
 
 ## Transports
 
