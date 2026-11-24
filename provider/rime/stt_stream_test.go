@@ -154,6 +154,7 @@ func TestSTTStreamErrorCategoryAndUsability(t *testing.T) {
 	}{
 		{kindAuthentication, errs.Authentication, false},
 		{kindPermission, errs.Authorization, false},
+		{kindBilling, errs.Quota, true},
 		{kindInput, errs.InvalidRequest, false},
 		{kindTimeout, errs.Connectivity, true},
 		{kindUnavailable, errs.Connectivity, true},

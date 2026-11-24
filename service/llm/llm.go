@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"reflect"
 	"runtime/debug"
@@ -1149,12 +1150,36 @@ func missingFunctionHandler(ctx context.Context, params FunctionCallParams) erro
 // hold (one of a type it holds already, or one another service holds) is
 // reported as the error, and the provider is not told of the update.
 func (b *Base) updateSettings(ctx context.Context, f *frames.LLMUpdateSettingsFrame) error {
-	changed, err := b.applySettingsUpdate(f)
-	if err != nil {
+	changed, err := b.ApplySettingsUpdate(ctx, f)
+	if err != nil || len(changed) == 0 {
 		return err
 	}
+	if updater, ok := b.gen.(SettingsUpdater); ok {
+		if err := updater.UpdateSettings(ctx, changed); err != nil {
+			b.PushError(ctx, "llm: settings update", err, false)
+		}
+	}
+	return nil
+}
+
+// ApplySettingsUpdate merges an update into the service's settings and does
+// what the base does with what changed: it relabels the model, re-reads the
+// base prompt, attaches the extensions the update adds and recomposes the
+// system instruction. It reports what changed, with each field's previous
+// value, and does not tell the provider.
+//
+// It is for a service that implements [SettingsUpdateDeferrer]: such a service
+// applies an update itself, later than the frame arrives, and acts on what
+// changed where it applies it.
+func (b *Base) ApplySettingsUpdate(
+	ctx context.Context, f *frames.LLMUpdateSettingsFrame,
+) (settings.Changed, error) {
+	changed, err := b.applySettingsUpdate(f)
+	if err != nil {
+		return nil, err
+	}
 	if len(changed) == 0 {
-		return nil
+		return changed, nil
 	}
 	slog.Info("updated settings", "service", b.Name(), "fields", changed.String())
 	b.SettingsUpdated(ctx)
@@ -1182,7 +1207,7 @@ func (b *Base) updateSettings(ctx context.Context, f *frames.LLMUpdateSettingsFr
 		// AddExtension's are.
 		if err := b.updateExtensions(ctx, changed["extensions"]); err != nil {
 			b.composeSystemInstruction()
-			return err
+			return changed, err
 		}
 	}
 
@@ -1192,7 +1217,7 @@ func (b *Base) updateSettings(ctx context.Context, f *frames.LLMUpdateSettingsFr
 		on, _ := b.setting("filter_incomplete_user_turns").(bool)
 		if err := b.setTurnCompletion(ctx, on, b.turnCompletionConfigSetting()); err != nil {
 			b.composeSystemInstruction()
-			return err
+			return changed, err
 		}
 	}
 
@@ -1210,13 +1235,66 @@ func (b *Base) updateSettings(ctx context.Context, f *frames.LLMUpdateSettingsFr
 	}, changed.Has) {
 		b.composeSystemInstruction()
 	}
+	return changed, nil
+}
 
-	if updater, ok := b.gen.(SettingsUpdater); ok {
-		if err := updater.UpdateSettings(ctx, changed); err != nil {
-			b.PushError(ctx, "llm: settings update", err, false)
-		}
+// SettingsUpdateDeferrer is an optional interface a Generator implements to
+// take a settings update over from the base, for a service that has to apply
+// its updates in step with other work rather than as their frames arrive: one
+// that writes each change to a provider session in the order it was asked
+// for, say.
+//
+// The base hands such a service every update meant for it and applies nothing
+// itself. The service applies the update when its turn comes, with
+// [Base.ApplySettingsUpdate].
+type SettingsUpdateDeferrer interface {
+	// DeferSettingsUpdate takes an update to apply later.
+	DeferSettingsUpdate(ctx context.Context, f *frames.LLMUpdateSettingsFrame)
+}
+
+// SettingsState is what a settings update changes: the settings store, the base
+// system prompt, and the handlers removed by hand while their tools were
+// advertised. A service that applies an update a provider can refuse takes it
+// before the update and restores it on a refusal.
+type SettingsState struct {
+	store                 any
+	baseSystemInstruction string
+	unregisteredByHand    map[string]bool
+}
+
+// SettingsState returns the state to restore should an update be refused.
+func (b *Base) SettingsState() SettingsState {
+	b.systemMu.Lock()
+	state := SettingsState{baseSystemInstruction: b.baseSystemInstruction}
+	b.systemMu.Unlock()
+	b.handlersMu.RLock()
+	state.unregisteredByHand = maps.Clone(b.unregisteredByHand)
+	b.handlersMu.RUnlock()
+	b.settingsMu.RLock()
+	if store, err := settings.Copy(b.settingsStore()); err == nil {
+		state.store = store
 	}
-	return nil
+	b.settingsMu.RUnlock()
+	return state
+}
+
+// RestoreSettingsState puts back the state taken before an update that was
+// refused. The caller syncs the tool handlers afterwards, which recomposes the
+// system instruction.
+func (b *Base) RestoreSettingsState(state SettingsState) {
+	b.setBaseSystemInstruction(state.baseSystemInstruction)
+	b.handlersMu.Lock()
+	b.unregisteredByHand = maps.Clone(state.unregisteredByHand)
+	b.handlersMu.Unlock()
+	if state.store == nil {
+		return
+	}
+	b.settingsMu.Lock()
+	defer b.settingsMu.Unlock()
+	store, previous := reflect.ValueOf(b.settingsStore()), reflect.ValueOf(state.store)
+	if store.Kind() == reflect.Pointer && store.Type() == previous.Type() {
+		store.Elem().Set(previous.Elem())
+	}
 }
 
 // turnCompletionConfigSetting is the turn-completion configuration the
@@ -1341,6 +1419,10 @@ func (b *Base) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.D
 		if !fr.TargetsService(b) {
 			// Meant for another service; leave it untouched for that one.
 			return b.PushFrame(ctx, f, dir)
+		}
+		if deferrer, ok := b.gen.(SettingsUpdateDeferrer); ok {
+			deferrer.DeferSettingsUpdate(ctx, fr)
+			return nil
 		}
 		if err := b.updateSettings(ctx, fr); err != nil {
 			b.PushError(ctx, "llm: settings update", err, false)

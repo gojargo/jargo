@@ -3,7 +3,6 @@ package rime
 import (
 	"context"
 	"crypto/tls"
-	"encoding/binary"
 	"errors"
 	"io"
 	"slices"
@@ -12,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/gojargo/jargo/provider/rime/internal/rimepcm"
 	"github.com/gojargo/jargo/provider/rime/internal/rimepb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -46,9 +46,15 @@ const (
 	sttMessageBytes = 65536
 	// sttWireRate is the rate Rime takes audio at: every stream's audio is
 	// converted to it.
-	sttWireRate = 16000
+	sttWireRate = rimepcm.WireRate
 	// requestIDHeader names the metadata that carries Rime's request identity.
 	requestIDHeader = "x-request-id"
+	// errorKindHeader names the metadata that carries Rime's structured reason
+	// for a refusal.
+	errorKindHeader = "x-rime-error-kind"
+	// kindInsufficientCredits is the structured reason for refusing an account
+	// that has run out of credits.
+	kindInsufficientCredits = "insufficient_credits"
 )
 
 // The values the stream configuration names.
@@ -67,6 +73,7 @@ const (
 	kindStream errorKind = iota
 	kindAuthentication
 	kindPermission
+	kindBilling
 	kindInput
 	kindResourceLimit
 	kindUnavailable
@@ -83,6 +90,8 @@ func (k errorKind) String() string {
 		return "RimeAuthenticationError"
 	case kindPermission:
 		return "RimePermissionError"
+	case kindBilling:
+		return "RimeBillingError"
 	case kindInput:
 		return "RimeInputError"
 	case kindResourceLimit:
@@ -124,8 +133,22 @@ func asRimeError(err error) *rimeError {
 	return nil
 }
 
-// rpcError is the failure a gRPC status means.
-func rpcError(code codes.Code, requestID, details string) *rimeError {
+// serverKind is the structured reason for a refusal the headers carry, else the
+// one the trailers carry.
+func serverKind(headers, trailers metadata.MD) string {
+	if v := headers.Get(errorKindHeader); len(v) > 0 && v[0] != "" {
+		return v[0]
+	}
+	if v := trailers.Get(errorKindHeader); len(v) > 0 {
+		return v[0]
+	}
+	return ""
+}
+
+// rpcError is the failure a gRPC status means. serverKind is Rime's structured
+// reason for it, which tells a refusal for exhausted credits from any other
+// denied permission.
+func rpcError(code codes.Code, requestID, details, serverKind string) *rimeError {
 	kind := kindStream
 	switch code {
 	case codes.Unauthenticated:
@@ -144,6 +167,9 @@ func rpcError(code codes.Code, requestID, details string) *rimeError {
 		kind = kindCancelled
 	default:
 		// Every other status is a stream failure.
+	}
+	if code == codes.PermissionDenied && serverKind == kindInsufficientCredits {
+		kind = kindBilling
 	}
 	message := details
 	if strings.TrimSpace(message) == "" {
@@ -466,7 +492,7 @@ func (t *transcriptionCall) statusError(err error, trailers metadata.MD) *rimeEr
 	id := requestID(headers, trailers, t.currentRequestID())
 	t.setRequestID(id)
 	st := status.Convert(err)
-	return rpcError(st.Code(), id, st.Message())
+	return rpcError(st.Code(), id, st.Message(), serverKind(headers, trailers))
 }
 
 // produce sends the audio once Rime has accepted the stream, and ends the
@@ -677,7 +703,7 @@ func (s *transcriptState) finish() (transcriptFinal, error) {
 // frames, at 16 kHz, in messages no larger than Rime accepts. A frame split
 // across two chunks is carried over to the next; nothing is padded or cut.
 type inputAudio struct {
-	converter *rateConverter
+	converter *rimepcm.RateConverter
 	pending   []byte
 }
 
@@ -686,64 +712,12 @@ func newInputAudio(sampleRate int) (*inputAudio, error) {
 	in := &inputAudio{}
 	switch sampleRate {
 	case 8000, 24000, 48000:
-		in.converter = newRateConverter(sampleRate, sttWireRate)
+		in.converter = rimepcm.NewRateConverter(sampleRate, sttWireRate)
 	case sttWireRate:
 	default:
 		return nil, newRimeError(kindAudioFormat, "Use PCM16 at 8, 16, 24 or 48 kHz")
 	}
 	return in, nil
-}
-
-// rateConverter converts 16-bit mono PCM from one rate to another by linear
-// interpolation between neighboring samples, carrying its state from one chunk
-// to the next so a stream converts as one. It is the conversion Rime's own
-// client applies to audio it is given at another rate than 16 kHz, and like it
-// adds no delay: the first sample out is the first sample in.
-type rateConverter struct {
-	inRate, outRate int64
-	// d is the position of the next output sample between prev and cur, in
-	// units of 1/outRate of an input sample; negative means another input
-	// sample is needed first.
-	d         int64
-	prev, cur int64
-}
-
-func newRateConverter(inRate, outRate int) *rateConverter {
-	g := int64(gcd(inRate, outRate))
-	c := &rateConverter{inRate: int64(inRate) / g, outRate: int64(outRate) / g}
-	c.d = -c.outRate
-	return c
-}
-
-func gcd(a, b int) int {
-	for b != 0 {
-		a, b = b, a%b
-	}
-	return a
-}
-
-// process converts a chunk of whole samples.
-func (c *rateConverter) process(pcm []byte) []byte {
-	out := make([]byte, 0, len(pcm)*int(c.outRate)/int(c.inRate)+4)
-	for i := 0; ; {
-		for c.d < 0 {
-			if i+1 >= len(pcm) {
-				return out
-			}
-			c.prev = c.cur
-			// Scaled to 32 bits, as the conversion is carried out at that width.
-			c.cur = int64(int16(binary.LittleEndian.Uint16(pcm[i:]))) << 16
-			i += 2
-			c.d += c.outRate
-		}
-		for c.d >= 0 {
-			// Truncated toward zero, then scaled back down with an arithmetic
-			// shift, as the 32-bit conversion does.
-			v := (c.prev*c.d + c.cur*(c.outRate-c.d)) / c.outRate
-			out = binary.LittleEndian.AppendUint16(out, uint16(int16(v>>16)))
-			c.d -= c.inRate
-		}
-	}
 }
 
 // feed converts one chunk, and returns the messages that carry it.
@@ -758,7 +732,7 @@ func (in *inputAudio) feed(data []byte) [][]byte {
 		}
 		converted := part[:complete]
 		if in.converter != nil {
-			converted = in.converter.process(converted)
+			converted = in.converter.Process(converted)
 		}
 		for start := 0; start < len(converted); start += sttMessageBytes {
 			out = append(out, converted[start:min(start+sttMessageBytes, len(converted))])

@@ -342,6 +342,10 @@ func errorCategory(err *rimeError) errs.Category {
 		return errs.Authentication
 	case kindPermission:
 		return errs.Authorization
+	case kindBilling:
+		// Credits can be added, so the service stays usable and recovers once
+		// they are.
+		return errs.Quota
 	case kindTimeout, kindUnavailable:
 		return errs.Connectivity
 	case kindInput:

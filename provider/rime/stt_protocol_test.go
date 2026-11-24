@@ -17,6 +17,7 @@ import (
 
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/provider/rime/internal/rimepb"
+	"github.com/gojargo/jargo/provider/rime/internal/rimepcm"
 	errs "github.com/gojargo/jargo/utils/errors"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -34,6 +35,9 @@ import (
 type peerFailure struct {
 	code   codes.Code
 	detail string
+	// errorKind is the structured reason sent in the trailers, when there is
+	// one.
+	errorKind string
 }
 
 // peerCall is one stream the peer was opened with.
@@ -173,6 +177,9 @@ func (p *peer) TranscribeStreaming(
 		case r := <-call.responses:
 			switch v := r.(type) {
 			case peerFailure:
+				if v.errorKind != "" {
+					srv.SetTrailer(metadata.Pairs(errorKindHeader, v.errorKind))
+				}
 				return status.Error(v.code, v.detail)
 			case *rimepb.StreamingTranscriptionResponse:
 				if err := srv.Send(v); err != nil {
@@ -340,6 +347,34 @@ func TestSTTLaterReplyWaitsForTheEarlierFinal(t *testing.T) {
 	}
 }
 
+// A refusal for exhausted credits is told apart from any other denied
+// permission by the structured reason Rime sends with it. It is a quota
+// failure, which leaves the service usable so it recovers once credits are
+// added.
+func TestSTTInsufficientCreditsIsAQuotaFailure(t *testing.T) {
+	p, newClient := peerServer(t)
+	r := runSTTWith(t, STTConfig{APIKey: "local-peer"}, newClient)
+	r.waitConnected(t)
+	call := startSpeech(t, r, p)
+	call.responses <- peerFailure{
+		code: codes.PermissionDenied, detail: "No credits", errorKind: kindInsufficientCredits,
+	}
+	ef := r.waitErrors(t, 1)[0]
+	if ef.Category != errs.Quota {
+		t.Errorf("category = %v, want %v", ef.Category, errs.Quota)
+	}
+	if re := asRimeError(ef.Err); re == nil || re.kind != kindBilling {
+		t.Errorf("error = %v, want a billing failure", ef.Err)
+	}
+	if !strings.Contains(ef.Error, "RimeBillingError") {
+		t.Errorf("message = %q, want the billing failure named", ef.Error)
+	}
+	if !r.c.svc.Usable() {
+		t.Error("a refusal for exhausted credits left the service unusable")
+	}
+	waitClosed(t, "the call never closed", call.closed)
+}
+
 // Ported from upstream (test_grpc_failure_category_and_request_id).
 func TestSTTGRPCFailureCategoryAndRequestID(t *testing.T) {
 	cases := []struct {
@@ -420,13 +455,13 @@ func TestSTTInvalidCompletionReportsAnErrorWithoutAFinal(t *testing.T) {
 // length scales with the rate.
 func TestSTTRateConversionKeepsPaceWithNoDelay(t *testing.T) {
 	for _, rate := range []int{8000, 24000, 48000} {
-		c := newRateConverter(rate, 16000)
+		c := rimepcm.NewRateConverter(rate, 16000)
 		var in []byte
 		for range rate / 100 {
 			in = binary.LittleEndian.AppendUint16(in, uint16(0xFC18)) // -1000
 		}
-		out := c.process(in[:len(in)/2])
-		out = append(out, c.process(in[len(in)/2:])...)
+		out := c.Process(in[:len(in)/2])
+		out = append(out, c.Process(in[len(in)/2:])...)
 		if n := len(out) / 2; n < 159 || n > 161 {
 			t.Errorf("%d Hz: %d samples out, want 10 ms at 16 kHz", rate, n)
 		}
