@@ -59,7 +59,7 @@ Pick any per category; each is a small `Config` + constructor.
 - **LLM**: Anthropic (direct + Bedrock), OpenAI (chat + Responses), Google Gemini (direct + Vertex), Groq, Together, Fireworks, DeepSeek,
   Cerebras, Perplexity, OpenRouter, xAI, Ollama, NVIDIA, Mistral, Nebius, SambaNova, Qwen, Azure OpenAI.
 - **TTS**: ElevenLabs, Cartesia, Rime, Kokoro, Piper, Pocket TTS, Deepgram, OpenAI, Azure, Google Cloud, Fish, MiniMax, xAI, NVIDIA, Soniox, AssemblyAI, HeyGen, Zoom AI.
-- **Speech-to-speech**: OpenAI Realtime (direct + Azure), Gemini Live (direct + Vertex), AWS Nova Sonic, xAI Realtime.
+- **Speech-to-speech**: OpenAI Realtime (direct + Azure), Gemini Live (direct + Vertex), AWS Nova Sonic, xAI Realtime, Rime Prism.
 - **Memory**: mem0.
 
 ## Usage
