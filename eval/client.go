@@ -1211,6 +1211,11 @@ func (c *Client) newTransport() *ClientTransport {
 		// turning away a session over its concurrency limit.
 		c.refuse(FailureClosedBeforeReady, closeDescription(tr.CloseError()))
 		c.stream.BotEnded()
+		// The persona has nobody left to answer, so the sink marks the bot's
+		// last turn complete in its place.
+		if c.persona != nil {
+			c.persona.HangUp()
+		}
 		c.stream.Append(map[string]any{keyType: EventBotEnded})
 	})
 	return tr

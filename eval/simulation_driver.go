@@ -25,10 +25,17 @@ const (
 	// reply that made the call has gone out to the bot.
 	EventEndCall = "end_call"
 	// ClosingReplyWait is how long the run waits, after the persona hangs up on
-	// its own last line, for the bot's reply to it. A flow makes its final tool
-	// calls in that turn, and a caller who hangs up mid-sentence is not what
-	// the simulation tests.
+	// its own last line, for the bot's reply to it. The wait runs only while
+	// neither side is speaking, by the bot's reports, and starts over when one
+	// stops: the persona's last line plays out after the call is made, and the
+	// bot's reply can be long. A flow makes its final tool calls in that turn,
+	// and a caller who hangs up mid-sentence is not what the simulation tests.
 	ClosingReplyWait = 15 * time.Second
+	// BotEndedWait is how long the run waits, after the bot hangs up, for what
+	// it said last to close into a turn. The harness hears the bot stop only in
+	// the silence that follows, and the turn model may wait out its 3 s silence
+	// fallback.
+	BotEndedWait = 5 * time.Second
 )
 
 // The failure kinds of a measured metric.
@@ -119,6 +126,8 @@ type SimulationDriver struct {
 	// read.
 	conversation *Conversation
 	observed     int
+	// closingReplyWait is ClosingReplyWait, or what a test shortens it to.
+	closingReplyWait time.Duration
 }
 
 // newSimulationDriver builds the driver of simulation. persona is the simulated
@@ -146,6 +155,8 @@ func newSimulationDriver(
 		persona:      persona,
 		botSaid:      botSaid,
 		conversation: NewConversation(),
+
+		closingReplyWait: ClosingReplyWait,
 	}
 }
 
@@ -182,6 +193,8 @@ func (d *SimulationDriver) run(ctx context.Context) ([]AssertionFailure, error) 
 	// Set when the persona hangs up on its own last line: the run then waits
 	// for the bot's reply to it, or this long, before ending.
 	var closingEnds time.Time
+	// Whether the bot hears the persona speaking, by its own reports.
+	botHearsPersona := false
 	for d.endedBy == "" {
 		wait := minTime(deadline, d.stream.LastActivity().Add(maxSilence))
 		if !closingEnds.IsZero() {
@@ -219,7 +232,16 @@ func (d *SimulationDriver) run(ctx context.Context) ([]AssertionFailure, error) 
 				d.endedBy = SimulationEndedByEndCall
 			} else {
 				d.trace.Log("persona: hung up; waiting for the bot's closing turn")
-				closingEnds = time.Now().Add(ClosingReplyWait)
+				closingEnds = d.closingReplyDeadline(botHearsPersona)
+			}
+		case EventUserStartedSpeaking, EventUserStoppedSpeaking:
+			botHearsPersona = event[keyType] == EventUserStartedSpeaking
+			if !closingEnds.IsZero() {
+				closingEnds = d.closingReplyDeadline(botHearsPersona)
+			}
+		case EventBotStartedSpeaking, EventBotStoppedSpeaking:
+			if !closingEnds.IsZero() {
+				closingEnds = d.closingReplyDeadline(botHearsPersona)
 			}
 		case EventBotEnded:
 			d.endedBy = SimulationEndedByBot
@@ -250,6 +272,9 @@ func (d *SimulationDriver) run(ctx context.Context) ([]AssertionFailure, error) 
 	d.client.HangUp()
 	d.durationS = pytext.Round(time.Since(started).Seconds(), 3)
 	d.trace.Log(fmt.Sprintf("persona: ended by %s after %d turn(s)", d.endedBy, d.turns))
+	if d.endedBy == SimulationEndedByBot {
+		d.reportLastWords(ctx)
+	}
 	// Whatever the bot said last closes the conversation.
 	d.observeNewEvents()
 	d.conversation.EndBotTurn()
@@ -378,6 +403,27 @@ func (d *SimulationDriver) ToolCalls() []string {
 		}
 	}
 	return lines
+}
+
+// closingReplyDeadline is when the closing reply wait runs out: never while
+// either side is speaking.
+func (d *SimulationDriver) closingReplyDeadline(botHearsPersona bool) time.Time {
+	if botHearsPersona || d.stream.BotSpeaking() {
+		return forever
+	}
+	return time.Now().Add(d.closingReplyWait)
+}
+
+// reportLastWords waits for what the bot said before hanging up to close into
+// a turn, and reports it.
+func (d *SimulationDriver) reportLastWords(ctx context.Context) {
+	d.stream.WaitBotTranscribed(ctx, BotEndedWait)
+	events := d.stream.EventsSeen()
+	for _, event := range events[min(d.observed, len(events)):] {
+		if text, _ := event[keyText].(string); event[keyType] == d.botSaid && text != "" {
+			d.report("bot", text)
+		}
+	}
 }
 
 // report emits one line of the conversation, or its end, as progress.

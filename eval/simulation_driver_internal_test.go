@@ -694,6 +694,37 @@ func TestSimulationDriverTheBotHangingUpEndsTheRun(t *testing.T) {
 	}
 }
 
+func TestSimulationDriverTheBotsLastWordsBeforeHangingUpAreJudged(t *testing.T) {
+	r := newSimulationRun(testSimulation(func(s *SimulationScenario) { s.BotAudio = true }),
+		newFakeConversationJudge([]string{"yes"}))
+	r.play(t, func() {
+		r.stream.BotTurnStarted()
+		// The bot hangs up as it stops speaking, before the harness has closed
+		// its last words into a turn.
+		r.say(map[string]any{"type": EventBotEnded})
+		time.Sleep(100 * time.Millisecond)
+		r.stream.BotTurnStopped("Have a wonderful day!")
+	})
+	res := r.result(nil)
+	if res.EndedBy != SimulationEndedByBot {
+		t.Fatalf("ended by %s", res.EndedBy)
+	}
+	if last := res.Messages[len(res.Messages)-1]; !reflect.DeepEqual(last,
+		map[string]any{"role": "assistant", "content": "Have a wonderful day!"}) {
+		t.Fatalf("last line = %v", last)
+	}
+	// The live conversation shows them too, before the run's end.
+	records := r.records()
+	if len(records) < 2 {
+		t.Fatalf("records = %+v", records)
+	}
+	said, ended := records[len(records)-2], records[len(records)-1]
+	if said.Status != "bot" || said.Text != "Have a wonderful day!" || ended.Status != "ended" ||
+		ended.Text != SimulationEndedByBot {
+		t.Fatalf("last records = %+v, %+v", said, ended)
+	}
+}
+
 func TestSimulationDriverTheBotsToolCallsAreTheJudgesEvidence(t *testing.T) {
 	judge := newFakeConversationJudge([]string{"yes"})
 	r := newSimulationRun(testSimulation(), judge)
@@ -986,6 +1017,62 @@ func TestClosingTurnAHangUpOnTheLastAllowedTurnWaitsForTheBotsReply(t *testing.T
 	}
 	if last := res.Messages[len(res.Messages)-1]; !reflect.DeepEqual(last,
 		map[string]any{"role": "assistant", "content": "Goodbye!"}) {
+		t.Fatalf("last line = %v", last)
+	}
+}
+
+func TestClosingTurnTheWaitForTheBotsReplyCountsFromWhenItHeardTheLineEnd(t *testing.T) {
+	r := newSimulationRun(testSimulation(), newFakeConversationJudge([]string{"yes"}))
+	r.driver.closingReplyWait = 500 * time.Millisecond
+	r.play(t, func() {
+		r.say(map[string]any{"type": "llm_response", "text": "Is that all correct?"})
+		r.say(map[string]any{"type": EventUserStartedSpeaking})
+		r.say(map[string]any{"type": EventPersonaTurn, "text": "Yes, thanks, goodbye."})
+		r.endCall(t, true, "done")
+		// The line plays to the bot for longer than the wait itself.
+		time.Sleep(700 * time.Millisecond)
+		r.say(map[string]any{"type": EventUserStoppedSpeaking})
+		time.Sleep(300 * time.Millisecond)
+		r.say(map[string]any{"type": "llm_response", "text": "Goodbye!"})
+	})
+	res := r.result(nil)
+	if res.EndedBy != SimulationEndedByEndCall {
+		t.Fatalf("ended by %s", res.EndedBy)
+	}
+	if last := res.Messages[len(res.Messages)-1]; !reflect.DeepEqual(last,
+		map[string]any{"role": "assistant", "content": "Goodbye!"}) {
+		t.Fatalf("last line = %v", last)
+	}
+}
+
+func TestClosingTurnALongClosingReplyHoldsTheWaitUntilTheBotStops(t *testing.T) {
+	r := newSimulationRun(testSimulation(), newFakeConversationJudge([]string{"yes"}))
+	r.driver.closingReplyWait = 500 * time.Millisecond
+	botReport := func(msgType string) {
+		event := r.stream.RTVIMessageToEvent(rawMessage(t, msgType, nil))
+		if event == nil {
+			t.Errorf("%s maps to no event", msgType)
+			return
+		}
+		r.say(event)
+	}
+	r.play(t, func() {
+		r.say(map[string]any{"type": "llm_response", "text": "Is that all correct?"})
+		r.say(map[string]any{"type": EventPersonaTurn, "text": "Yes, goodbye."})
+		r.endCall(t, true, "done")
+		botReport(rtvi.TypeBotStartedSpeaking)
+		// The bot's reply goes on for longer than the wait itself.
+		time.Sleep(700 * time.Millisecond)
+		botReport(rtvi.TypeBotStoppedSpeaking)
+		time.Sleep(200 * time.Millisecond)
+		r.say(map[string]any{"type": "llm_response", "text": "Goodbye, safe travels!"})
+	})
+	res := r.result(nil)
+	if res.EndedBy != SimulationEndedByEndCall {
+		t.Fatalf("ended by %s", res.EndedBy)
+	}
+	if last := res.Messages[len(res.Messages)-1]; !reflect.DeepEqual(last,
+		map[string]any{"role": "assistant", "content": "Goodbye, safe travels!"}) {
 		t.Fatalf("last line = %v", last)
 	}
 }
