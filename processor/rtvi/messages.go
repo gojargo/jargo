@@ -7,6 +7,9 @@
 // Android clients. Messages are JSON objects of the form
 // {"label":"rtvi-ai","type":...,"id":...,"data":...} exchanged over the WebRTC
 // data channel.
+//
+// The protocol's machine-readable specification, an AsyncAPI document for each
+// protocol version, ships in the spec subpackage.
 package rtvi
 
 import (

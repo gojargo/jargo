@@ -139,6 +139,25 @@ every server message to its pipeline as the raw message it is, an
 `InputTransportMessageFrame` pushed downstream, so whatever reads them there
 passes over the ones it does not know.
 
+### The specification
+
+The protocol is described in a form a program can read: an
+[AsyncAPI 3.0](https://www.asyncapi.com/docs/reference/specification/v3.0.0)
+document for each protocol version, shipped in
+[`processor/rtvi/spec`](../../processor/rtvi/spec) as
+`<version>/rtvi.asyncapi.json` and readable from Go with `spec.Document`. It lists
+every message a client sends and the server sends, with each field's schema and
+description, an example, the observer setting that turns the message on, the
+lowest client version that receives it, and the rules the server follows across
+messages. A client library can generate its protocol code from it.
+
+The server is tested against each document it serves: every message it sends
+must match its schema, and it must accept every client message the document
+describes. A few messages the documents describe are not implemented yet. The
+server never sends `ui-command`, `ui-job-group`, `system-log` or the deprecated
+`llm-function-call`, and answers a client sending `send-file`, `ui-event`,
+`ui-snapshot` or `ui-cancel-job-group` with an `error-response`.
+
 ### Messages of your own
 
 `client-message` carries whatever the protocol has no message for. It arrives as
