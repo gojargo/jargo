@@ -594,7 +594,8 @@ type ResponseEnded struct {
 	SettingsRevision *int
 	// Response names the reply.
 	Response ResponseRef
-	// Status is "completed", "cancelled", "failed" or "unknown".
+	// Status is "completed", "failed", "unknown", or the wire's word for a
+	// canceled reply, spelled with a double l.
 	Status string
 	// Reason says why the reply ended that way, when the server does.
 	Reason string

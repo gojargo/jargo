@@ -123,7 +123,7 @@ type Service struct {
 	opening          bool
 	convo            *frames.LLMContext
 	// prismInstructions and prismTools are what Prism last accepted.
-	prismInstructions  string
+	prismInstructions  *string
 	prismTools         []toolDefinition
 	history            *ledger
 	transcripts        map[string]string
@@ -508,11 +508,26 @@ func (s *Service) snapshot() *Settings {
 }
 
 // prismView is the instructions and the tools Prism should hold. The
-// instructions are the whole system instruction the base composes, and the
-// tools include the ones the service implements itself, such as cancel tools.
-func (s *Service) prismView() (string, []toolDefinition, error) {
-	tools, err := s.sdkTools(s.snapshot())
-	return s.SystemInstruction(), tools, err
+// instructions are the whole system instruction the base composes, nil when
+// there is none and none was given, and the tools include the ones the service
+// implements itself, such as cancel tools.
+func (s *Service) prismView() (*string, []toolDefinition, error) {
+	live := s.snapshot()
+	tools, err := s.sdkTools(live)
+	instructions := s.SystemInstruction()
+	if _, given := live.SystemInstruction.Value(); instructions == "" && !given {
+		return nil, tools, err
+	}
+	return &instructions, tools, err
+}
+
+// sameInstructions reports whether two instructions are the same, nil
+// included.
+func sameInstructions(a, b *string) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
 }
 
 // openingTurnDetection is the turn settings the conversation opens with: the
@@ -557,7 +572,7 @@ func (s *Service) connectOptions() (connectOptions, error) {
 	options := connectOptions{
 		apiKey:            s.cfg.APIKey,
 		endpoint:          s.cfg.Endpoint,
-		voice:             live.Voice.Or(""),
+		voice:             live.Voice.Ptr(),
 		instructions:      instructions,
 		tools:             tools,
 		interruptOnSpeech: live.InterruptOnSpeech.Or(true),
@@ -658,16 +673,9 @@ func (s *Service) runOperation(op operation) {
 // settings and the reply, in that order.
 func (s *Service) operate(op operation, written func()) error {
 	if op.toolChoice != nil {
-		choice := *op.toolChoice
-		if choice != frames.ToolChoiceAuto && choice != frames.ToolChoiceNone && choice != "" {
-			return settingsError("Prism supports automatic or disabled tool selection")
+		if err := s.selectTools(*op.toolChoice); err != nil {
+			return err
 		}
-		if choice == "" {
-			choice = frames.ToolChoiceAuto
-		}
-		s.mu.Lock()
-		s.toolChoice = choice
-		s.mu.Unlock()
 	}
 	if len(op.messages) > 0 || op.tool != nil {
 		err := s.write(op)
@@ -697,6 +705,21 @@ func (s *Service) operate(op operation, written func()) error {
 	if op.runLLM {
 		s.startReply(op)
 	}
+	return nil
+}
+
+// selectTools takes the tool selection: automatic or disabled, empty meaning
+// automatic.
+func (s *Service) selectTools(choice frames.ToolChoice) error {
+	if choice != frames.ToolChoiceAuto && choice != frames.ToolChoiceNone && choice != "" {
+		return settingsError("Prism supports automatic or disabled tool selection")
+	}
+	if choice == "" {
+		choice = frames.ToolChoiceAuto
+	}
+	s.mu.Lock()
+	s.toolChoice = choice
+	s.mu.Unlock()
 	return nil
 }
 
@@ -883,8 +906,7 @@ func (s *Service) lockedReply(
 	s.mu.Unlock()
 	s.StartTTFBMetrics()
 	if !disableTools {
-		_, err := s.requestReply(ctx, call, instruction, parent)
-		return err
+		return s.requestReply(ctx, call, instruction, parent)
 	}
 	return s.replyWithoutTools(ctx, call, instruction, parent)
 }
@@ -898,8 +920,8 @@ func (s *Service) replyWithoutTools(
 	if err != nil {
 		return err
 	}
-	if err := s.conversation.settingsLock.acquire(ctx); err != nil {
-		return err
+	if lockErr := s.conversation.settingsLock.acquire(ctx); lockErr != nil {
+		return lockErr
 	}
 	defer s.conversation.settingsLock.release()
 	s.mu.Lock()
@@ -924,8 +946,7 @@ func (s *Service) replyWithoutTools(
 	s.mu.Lock()
 	s.conversation.suppress(info)
 	s.mu.Unlock()
-	_, err = s.requestReply(ctx, call, instruction, parent)
-	return err
+	return s.requestReply(ctx, call, instruction, parent)
 }
 
 // restoreTools puts the tools back after a reply that ran without them. A
@@ -948,7 +969,7 @@ func (s *Service) restoreTools(sess *session) {
 // the request once it has settled.
 func (s *Service) requestReply(
 	ctx context.Context, call *ToolCallRef, instruction *string, parent *ResponseRef,
-) (ResponseRef, error) {
+) error {
 	s.mu.Lock()
 	s.requestPending = true
 	s.mu.Unlock()
@@ -981,21 +1002,18 @@ func continuationUnavailable(err error) bool {
 // otherwise asks for a reply, reporting the call's result when one is named.
 func (s *Service) createReply(
 	ctx context.Context, call *ToolCallRef, instruction *string, parent *ResponseRef,
-) (ResponseRef, error) {
+) error {
 	sess, err := s.sess()
 	if err != nil {
-		return ResponseRef{}, err
+		return err
 	}
 	if parent != nil {
-		ref, err := sess.continueReply(ctx, *parent)
-		if err == nil {
-			err = s.createdReply(ctx, sess, ref)
+		ref, continueErr := sess.continueReply(ctx, *parent)
+		if continueErr == nil {
+			continueErr = s.createdReply(ctx, sess, ref)
 		}
-		if err == nil {
-			return ref, nil
-		}
-		if !continuationUnavailable(err) {
-			return ResponseRef{}, err
+		if continueErr == nil || !continuationUnavailable(continueErr) {
+			return continueErr
 		}
 	}
 	if call != nil && instruction == nil {
@@ -1004,9 +1022,9 @@ func (s *Service) createReply(
 	}
 	ref, err := sess.requestReply(ctx, instruction, call)
 	if err != nil {
-		return ResponseRef{}, err
+		return err
 	}
-	return ref, s.createdReply(ctx, sess, ref)
+	return s.createdReply(ctx, sess, ref)
 }
 
 // createdReply waits for the reply's start to be handled, and cancels a reply
@@ -1156,16 +1174,16 @@ func (s *Service) syncTools(toolsChanged bool) {
 // differs from what it holds. It reports what changed, what Prism should now
 // hold, and whether anything was sent.
 func (s *Service) updateSession(sess *session, delta *Settings) (
-	changed settings.Changed, instructions string, tools []toolDefinition, updated bool, err error,
+	changed settings.Changed, instructions *string, tools []toolDefinition, updated bool, err error,
 ) {
 	changed, err = s.ApplySettingsUpdate(s.lifeCtx, frames.NewLLMUpdateSettingsFrame(delta))
 	if err != nil {
-		return changed, "", nil, false, err
+		return changed, nil, nil, false, err
 	}
 	s.syncTools(changed.Has(settingTools))
 	instructions, tools, err = s.prismView()
 	if err != nil {
-		return changed, "", nil, false, err
+		return changed, nil, nil, false, err
 	}
 	live := s.snapshot()
 	patch := sessionPatch{}
@@ -1182,8 +1200,12 @@ func (s *Service) updateSession(sess *session, delta *Settings) (
 		patch.speed = live.Speed.Ptr()
 	}
 	s.mu.Lock()
-	if instructions != s.prismInstructions {
-		patch.instructions = &instructions
+	if !sameInstructions(instructions, s.prismInstructions) {
+		text := ""
+		if instructions != nil {
+			text = *instructions
+		}
+		patch.instructions = &text
 	}
 	if !reflect.DeepEqual(tools, s.prismTools) {
 		patch.tools = &tools
@@ -1192,9 +1214,9 @@ func (s *Service) updateSession(sess *session, delta *Settings) (
 	if names := slices.DeleteFunc(slices.Clone(interruptionRules), func(name string) bool {
 		return !changed.Has(name)
 	}); len(names) > 0 {
-		rules, err := interruptionRulesOf(live, names)
-		if err != nil {
-			return changed, "", nil, false, err
+		rules, rulesErr := interruptionRulesOf(live, names)
+		if rulesErr != nil {
+			return changed, nil, nil, false, rulesErr
 		}
 		patch.turnDetection = &rules
 	}
@@ -1277,21 +1299,9 @@ func (s *Service) sendAudio(audio frames.AudioRawData) error {
 	if channels > 2 || (!standardRate(rate) && channels > 1) {
 		pcm, channels = downmix(pcm, channels), 1
 	}
-	if s.convertedInputRate != 0 && rate != s.convertedInputRate {
-		if err := s.flushResampler(sess); err != nil {
-			return err
-		}
-	}
-	if !standardRate(rate) {
-		if s.inputResampler == nil {
-			resampler, err := resample.New(rate, rimepcm.WireRate, 1)
-			if err != nil {
-				return err
-			}
-			s.inputResampler = resampler
-		}
-		s.convertedInputRate = rate
-		pcm, rate = s.inputResampler.Process(pcm), rimepcm.WireRate
+	pcm, rate, err = s.convertRate(sess, pcm, rate)
+	if err != nil {
+		return err
 	}
 	size := maxAudioChunk - maxAudioChunk%(channels*2)
 	for offset := 0; offset < len(pcm); offset += size {
@@ -1304,6 +1314,29 @@ func (s *Service) sendAudio(audio frames.AudioRawData) error {
 		}
 	}
 	return nil
+}
+
+// convertRate resamples mono audio at a rate Prism does not take to 16 kHz,
+// sending what the resampler held at the previous rate first when the rate
+// changed. It returns the audio and its rate.
+func (s *Service) convertRate(sess *session, pcm []byte, rate int) ([]byte, int, error) {
+	if s.convertedInputRate != 0 && rate != s.convertedInputRate {
+		if err := s.flushResampler(sess); err != nil {
+			return nil, 0, err
+		}
+	}
+	if standardRate(rate) {
+		return pcm, rate, nil
+	}
+	if s.inputResampler == nil {
+		resampler, err := resample.New(rate, rimepcm.WireRate, 1)
+		if err != nil {
+			return nil, 0, err
+		}
+		s.inputResampler = resampler
+	}
+	s.convertedInputRate = rate
+	return s.inputResampler.Process(pcm), rimepcm.WireRate, nil
 }
 
 // flushResampler sends the audio the resampler still holds, and lets it go.
@@ -1687,8 +1720,8 @@ func (s *Service) handleResponseEnded(payload ResponseEnded) error {
 	for _, out := range outputs {
 		s.endOutput(out)
 	}
-	if usage := payload.Usage; usage != nil && s.UsageMetricsEnabled() {
-		_ = s.PushTokenUsage(s.lifeCtx, frames.LLMTokenUsage{
+	if usage := payload.Usage; usage != nil {
+		_ = s.StartLLMUsageMetrics(s.lifeCtx, frames.LLMTokenUsage{
 			PromptTokens:     int64(usage.InputTokens),
 			CompletionTokens: int64(usage.OutputTokens),
 			TotalTokens:      int64(usage.TotalTokens),
@@ -1767,21 +1800,8 @@ func (s *Service) interrupt(ctx context.Context, playing *output) error {
 		return nil
 	}
 	for _, value := range stopping {
-		s.mu.Lock()
-		value.stopped = true
-		ended := value.ended
-		outputs := make([]*output, 0, len(value.outputOrder))
-		for _, id := range value.outputOrder {
-			outputs = append(outputs, value.outputs[id])
-		}
-		s.mu.Unlock()
-		if !ended {
-			if err := sess.cancel(ctx, value.ref); err != nil {
-				return err
-			}
-		}
-		for _, out := range outputs {
-			s.endOutput(out)
+		if err := s.stopResponse(ctx, sess, value); err != nil {
+			return err
 		}
 	}
 	// The transports return neither the identity of what they play nor a
@@ -1799,6 +1819,28 @@ func (s *Service) interrupt(ctx context.Context, playing *output) error {
 		return nil
 	}
 	return sess.reportInterrupted(ctx, position)
+}
+
+// stopResponse stops a reply: it is canceled unless it has ended, and its
+// speech is closed.
+func (s *Service) stopResponse(ctx context.Context, sess *session, value *response) error {
+	s.mu.Lock()
+	value.stopped = true
+	ended := value.ended
+	outputs := make([]*output, 0, len(value.outputOrder))
+	for _, id := range value.outputOrder {
+		outputs = append(outputs, value.outputs[id])
+	}
+	s.mu.Unlock()
+	if !ended {
+		if err := sess.cancel(ctx, value.ref); err != nil {
+			return err
+		}
+	}
+	for _, out := range outputs {
+		s.endOutput(out)
+	}
+	return nil
 }
 
 // settlePlayback sends the receipts of the discarded replies that have ended,
@@ -2062,25 +2104,33 @@ func (s *Service) reportLateResult(ctx context.Context, t *tool) error {
 // operationError reports a failed operation. One the conversation survives is
 // reported as an error; any other ends the conversation.
 func (s *Service) operationError(err error) {
-	recoverable := false
-	if update, ok := errors.AsType[*HistoryUpdateError](err); ok {
-		recoverable = update.Recoverable()
-	} else if _, ok := errors.AsType[*SettingsError](err); ok {
-		recoverable = true
-	} else if _, ok := errors.AsType[*AdmissionTimeoutError](err); ok {
-		recoverable = true
-	} else if failure, ok := errors.AsType[*Error](err); ok {
-		recoverable = failure.Kind == KindInput
-	} else if refusal, ok := errors.AsType[*FaultError](err); ok {
-		recoverable = refusal.Fault.Scope == scopeEvent
-	} else if errors.Is(err, settings.ErrType) || errors.Is(err, settings.ErrNotSettings) {
-		recoverable = true
-	}
-	if !recoverable {
+	if !recoverable(err) {
 		s.fail(err)
 		return
 	}
 	s.PushError(s.lifeCtx, err.Error(), err, false)
+}
+
+// recoverable reports whether the conversation survives a failed operation: a
+// history write known to have been refused in whole or in part, a value the
+// service or Prism refused, or a reply Prism did not admit in time.
+func recoverable(err error) bool {
+	if update, ok := errors.AsType[*HistoryUpdateError](err); ok {
+		return update.Recoverable()
+	}
+	if _, ok := errors.AsType[*SettingsError](err); ok {
+		return true
+	}
+	if _, ok := errors.AsType[*AdmissionTimeoutError](err); ok {
+		return true
+	}
+	if failure, ok := errors.AsType[*Error](err); ok {
+		return failure.Kind == KindInput
+	}
+	if refusal, ok := errors.AsType[*FaultError](err); ok {
+		return refusal.Fault.Scope == scopeEvent
+	}
+	return errors.Is(err, settings.ErrType) || errors.Is(err, settings.ErrNotSettings)
 }
 
 // fail ends the conversation: the bot is interrupted, and the service is left
@@ -2097,11 +2147,15 @@ func (s *Service) fail(err error) {
 	s.PushError(s.lifeCtx, err.Error(), err, false, processor.ForceTreatAsPermanent())
 }
 
-// drained reports whether nothing is left for a graceful stop to wait for.
+// queuesDrained reports whether the operations and the audio queued have all
+// been done.
+func (s *Service) queuesDrained() bool {
+	return s.controlsPending.Load() == 0 && s.audioPending.Load() == 0
+}
+
+// drained reports whether nothing is left for a graceful stop to wait for: the
+// requests asked for have settled and every reply has ended.
 func (s *Service) drained() bool {
-	if s.controlsPending.Load() > 0 || s.audioPending.Load() > 0 {
-		return false
-	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.requests > 0 {
@@ -2121,15 +2175,39 @@ func (s *Service) stop() {
 	s.mu.Lock()
 	opened := s.opening
 	s.mu.Unlock()
-	deadline := time.Now().Add(s.shutdownTimeout)
-	for opened && !s.drained() {
-		if time.Now().After(deadline) {
-			slog.Warn("prism shutdown drain deadline expired", "service", s.Name())
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
+	if opened && !s.drain(time.Now().Add(s.shutdownTimeout)) {
+		slog.Warn("prism shutdown drain deadline expired", "service", s.Name())
 	}
 	s.close()
+}
+
+// drain waits until deadline for the operations and the audio queued to be
+// done, sends the audio the resampler still holds, then waits for the requests
+// to settle and every reply to end. It reports whether everything drained.
+func (s *Service) drain(deadline time.Time) bool {
+	wait := func(done func() bool) bool {
+		for !done() {
+			if time.Now().After(deadline) {
+				return false
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		return true
+	}
+	if !wait(s.queuesDrained) {
+		return false
+	}
+	// The audio loop is idle, so the audio the resampler holds is the stop's to
+	// send.
+	s.mu.Lock()
+	sess := s.session
+	s.mu.Unlock()
+	if sess != nil && s.usable() {
+		if err := s.flushResampler(sess); err != nil {
+			slog.Warn("prism: sending the last input audio failed", "service", s.Name(), "err", err)
+		}
+	}
+	return wait(s.drained)
 }
 
 // close cancels the work the service owns, without waiting for playback to

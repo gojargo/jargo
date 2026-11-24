@@ -40,15 +40,17 @@ func TestPromptClearAndFillerSurvivesToolHandoff(t *testing.T) {
 	h := converse(t, harnessOptions{config: func(c *Config) {
 		c.Settings.SystemInstruction = settings.Set("Original")
 		c.Settings.Tools = toolset(tool)
-		c.Settings.ToolFillers = settings.Set(map[string]Filler{"lookup": {Type: "text", Text: ptr("Checking")}})
+		c.Settings.ToolFillers = settings.Set(map[string]Filler{"lookup": {Type: "text", Text: new("Checking")}})
 	}})
-	h.queue(update(instruction("")), frames.NewLLMSetToolsFrame([]frames.Tool{}), frames.NewLLMSetToolsFrame([]frames.Tool{tool}))
+	h.queue(
+		update(instruction("")), frames.NewLLMSetToolsFrame([]frames.Tool{}), frames.NewLLMSetToolsFrame([]frames.Tool{tool}),
+	)
 	until(t, "the updates", func() bool { return len(h.peer.sent(kindSessionUpdate)) == 4 })
 	if got := h.peer.setting("instructions"); got != "" {
 		t.Errorf("instructions = %q", got)
 	}
 	tools, _ := h.peer.setting(keyTools).([]any)
-	if len(tools) == 0 || tools[0].(object)["prism_filler"].(object)["text"] != "Checking" {
+	if len(tools) == 0 || at(tools[0], "prism_filler", "text") != "Checking" {
 		t.Errorf("tools = %v, want the filler", tools)
 	}
 }
@@ -158,7 +160,7 @@ func TestStartupHTTPRefusalPolicy(t *testing.T) {
 				return 0, nil
 			}
 			svc := newService(p, func(c *Config) {
-				c.Startup = StartupParams{RetryInterval: ptr(time.Duration(0)), TotalTimeout: 2 * time.Second}
+				c.Startup = StartupParams{RetryInterval: new(time.Duration(0)), TotalTimeout: 2 * time.Second}
 			})
 			svc.shutdownTimeout = 100 * time.Millisecond
 			up := runService(t, svc, 150*time.Millisecond, frames.NewLLMContextFrame(frames.NewLLMContext("")))
@@ -177,7 +179,7 @@ func TestStartupHTTPRefusalPolicy(t *testing.T) {
 }
 
 func TestUsageOnceForTerminalResponseWithRawDiagnostics(t *testing.T) {
-	for _, status := range []string{"completed", "cancelled"} {
+	for _, status := range []string{"completed", "cancelled"} { //nolint:misspell // the wire's spelling
 		t.Run(status, func(t *testing.T) {
 			var raw func() []ResponseEnded
 			h := converse(t, harnessOptions{
@@ -228,12 +230,13 @@ func TestProgressThenFinalRespectsReplyPolicy(t *testing.T) {
 }
 
 func testProgressThenFinal(t *testing.T, finalRun, progressRun bool) {
+	t.Helper()
 	calls := &counter{}
 	release := make(chan struct{})
 	handler := func(ctx context.Context, p llm.FunctionCallParams) error {
 		calls.add()
 		if err := p.Result(ctx, `"Working"`, &frames.FunctionCallResultProperties{
-			IsFinal: ptr(false), RunLLM: ptr(progressRun),
+			IsFinal: new(false), RunLLM: new(progressRun),
 		}); err != nil {
 			return err
 		}
@@ -242,7 +245,7 @@ func testProgressThenFinal(t *testing.T, finalRun, progressRun bool) {
 		case <-ctx.Done():
 			return ctx.Err()
 		}
-		return p.Result(ctx, `"Finished"`, &frames.FunctionCallResultProperties{RunLLM: ptr(finalRun)})
+		return p.Result(ctx, `"Finished"`, &frames.FunctionCallResultProperties{RunLLM: new(finalRun)})
 	}
 	h := converse(t, harnessOptions{config: withTools(lookup("lookup", handler))})
 	t.Cleanup(func() {
@@ -282,7 +285,7 @@ func testProgressThenFinal(t *testing.T, finalRun, progressRun bool) {
 		// The progress reply superseded the tool round, so the result is
 		// reported.
 		request := h.peer.nextReply()
-		if request["response"].(object)["prism_call_id"] != "lookup-1" {
+		if at(request, "response", "prism_call_id") != "lookup-1" {
 			t.Errorf("request = %v", request["response"])
 		}
 		h.answer(request, "Final recorded", 480)
@@ -316,12 +319,15 @@ func testProgressThenFinal(t *testing.T, finalRun, progressRun bool) {
 	}
 }
 
+// errSynthetic is the failure of a tool that fails.
+var errSynthetic = errors.New("synthetic failure")
+
 func TestToolFailureSettlesOnceWithoutRepeatExecution(t *testing.T) {
 	t.Run("exception", func(t *testing.T) {
 		calls := &counter{}
 		handler := func(context.Context, llm.FunctionCallParams) error {
 			calls.add()
-			return errors.New("Synthetic failure")
+			return errSynthetic
 		}
 		h := converse(t, harnessOptions{config: withTools(lookup("lookup", handler))})
 		h.svc.RegisterFunction("lookup", handler, llm.WithCancelOnInterruption(false))
@@ -338,7 +344,7 @@ func TestToolFailureSettlesOnceWithoutRepeatExecution(t *testing.T) {
 		handler := func(ctx context.Context, p llm.FunctionCallParams) error {
 			calls.add()
 			if err := p.Result(ctx, `"Working"`, &frames.FunctionCallResultProperties{
-				IsFinal: ptr(false), RunLLM: ptr(false),
+				IsFinal: new(false), RunLLM: new(false),
 			}); err != nil {
 				return err
 			}
@@ -364,11 +370,11 @@ func TestToolFailureSettlesOnceWithoutRepeatExecution(t *testing.T) {
 				outputs = append(outputs, item["output"])
 			}
 		}
-		if !slices.Equal(outputs, []any{"CANCELLED"}) {
+		if !slices.Equal(outputs, []any{frames.ToolResultCanceled}) {
 			t.Errorf("outputs = %v", outputs)
 		}
 		settled := asyncPayload(t, items[len(items)-1])
-		if result, _ := settled["result"].(string); !strings.HasPrefix(result, "CANCELLED: this tool call was cancelled") {
+		if result, _ := settled["result"].(string); !strings.HasPrefix(result, frames.ToolResultCanceled+": this tool call was cancelled") { //nolint:misspell,lll // the message's spelling
 			t.Errorf("settled = %v", settled)
 		}
 		if calls.count() != 1 || !h.usable() {
@@ -442,7 +448,7 @@ func TestProtectedResponseLimitFailsWithoutEviction(t *testing.T) {
 }
 
 func TestStartupRetryExhaustionAndDiagnostics(t *testing.T) {
-	for _, retryAfter := range []*string{ptr("0"), ptr("0.02"), ptr("bad"), nil} {
+	for _, retryAfter := range []*string{new("0"), new("0.02"), new("bad"), nil} {
 		name := "none"
 		if retryAfter != nil {
 			name = *retryAfter
@@ -452,7 +458,7 @@ func TestStartupRetryExhaustionAndDiagnostics(t *testing.T) {
 			p.refuseUpgrade = func(int) (int, *string) { return 503, retryAfter }
 			svc := newService(p, func(c *Config) {
 				c.Startup = StartupParams{
-					MaxRetries: ptr(1), RetryInterval: ptr(10 * time.Millisecond), TotalTimeout: 400 * time.Millisecond,
+					MaxRetries: new(1), RetryInterval: new(10 * time.Millisecond), TotalTimeout: 400 * time.Millisecond,
 				}
 			})
 			svc.shutdownTimeout = 100 * time.Millisecond
@@ -527,4 +533,3 @@ func TestSuppressionRestoreFailureIsTerminal(t *testing.T) {
 		t.Errorf("tools = %v, want none", h.peer.setting(keyTools))
 	}
 }
-

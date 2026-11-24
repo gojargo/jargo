@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -341,7 +342,17 @@ func (s *session) checkLocked() error {
 }
 
 // responseLocked is the state of the response a reference names.
-func (s *session) responseLocked(sessionID, responseID, callID string) (*responseState, error) {
+func (s *session) responseLocked(sessionID, responseID string) (*responseState, error) {
+	return s.lookupLocked(sessionID, responseID, "", false)
+}
+
+// callLocked is the state of the response a tool call reference names, which
+// has to know the call.
+func (s *session) callLocked(call ToolCallRef) (*responseState, error) {
+	return s.lookupLocked(call.SessionID, call.ResponseID, call.CallID, true)
+}
+
+func (s *session) lookupLocked(sessionID, responseID, callID string, isCall bool) (*responseState, error) {
 	if err := s.checkLocked(); err != nil {
 		return nil, err
 	}
@@ -355,7 +366,7 @@ func (s *session) responseLocked(sessionID, responseID, callID string) (*respons
 	if !ok {
 		return nil, inputError("Unknown or expired response reference")
 	}
-	if callID != "" {
+	if isCall {
 		if _, ok := response.calls[callID]; !ok {
 			return nil, inputError("Unknown tool call reference")
 		}
@@ -409,7 +420,7 @@ func (s *session) pruneResponses() error {
 func (s *session) holdResponse(ref ResponseRef) (*responseHold, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	state, err := s.responseLocked(ref.SessionID, ref.ResponseID, "")
+	state, err := s.responseLocked(ref.SessionID, ref.ResponseID)
 	if err != nil {
 		return nil, err
 	}
@@ -564,19 +575,39 @@ func (s *session) abandonResponse(ref ResponseRef) {
 	s.spawn(func() { _ = s.cancel(context.Background(), ref) })
 }
 
-// spawn runs work the session owns in the background.
+// spawn runs work the session owns in the background. Work spawned once the
+// session has closed is not run.
 func (s *session) spawn(work func()) {
 	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
 	s.tasks++
+	// Counted under the lock that close takes first, so the count never grows
+	// while close waits on it.
+	s.background.Add(1)
 	s.mu.Unlock()
-	s.background.Go(func() {
+	go func() {
+		defer s.background.Done()
 		defer func() {
 			s.mu.Lock()
 			s.tasks--
 			s.mu.Unlock()
 		}()
 		work()
-	})
+	}()
+}
+
+// updatedInterruption is the interruption on speech a session update sets,
+// nil when it sets none.
+func updatedInterruption(body map[string]any) *bool {
+	settings, _ := body[keySession].(map[string]any)
+	turn, _ := settings[keyTurn].(map[string]any)
+	if interrupt, ok := turn["interrupt_response"].(bool); ok {
+		return &interrupt
+	}
+	return nil
 }
 
 // newPending registers a request that is about to be sent.
@@ -584,13 +615,7 @@ func (s *session) newPending(req *request, body map[string]any, target string) (
 	eventID := "evt_" + strings.ReplaceAll(uuid.NewString(), "-", "")
 	p := &pendingRequest{req: req, target: target, done: make(chan struct{})}
 	if req.kind == kindSessionUpdate {
-		if settings, ok := body[keySession].(map[string]any); ok {
-			if turn, ok := settings[keyTurn].(map[string]any); ok {
-				if interrupt, ok := turn["interrupt_response"].(bool); ok {
-					p.interruptOnSpeech = &interrupt
-				}
-			}
-		}
+		p.interruptOnSpeech = updatedInterruption(body)
 	}
 	item, _ := body[keyItem].(map[string]any)
 	if req.history {
@@ -626,9 +651,7 @@ func (s *session) runRequest(
 	timer := time.NewTimer(s.timeouts.Request)
 	defer timer.Stop()
 	message := map[string]any{keyType: req.kind, keyEventID: eventID}
-	for key, value := range body {
-		message[key] = value
-	}
+	maps.Copy(message, body)
 	if err := s.send(message, abandoned, submitted); err != nil {
 		return nil, err
 	}
@@ -830,18 +853,6 @@ func (s *session) update(ctx context.Context, patch sessionPatch) (SessionInfo, 
 	return *updated.info, nil
 }
 
-// sendText starts a typed user turn, and returns when its reply is created.
-func (s *session) sendText(ctx context.Context, text string) (ResponseRef, error) {
-	if err := nonblank(text); err != nil {
-		return ResponseRef{}, err
-	}
-	metadata, err := requestMetadata(nil, map[string]string{keyCause: "user_text"})
-	if err != nil {
-		return ResponseRef{}, err
-	}
-	return s.create(ctx, map[string]any{"prism_input_text": text, keyMetadata: metadata}, reqText)
-}
-
 // requestReply asks Prism to reply without the user speaking, following
 // instruction when one is given and reporting the result of call when one is
 // named.
@@ -859,7 +870,7 @@ func (s *session) requestReply(ctx context.Context, instruction *string, call *T
 	}
 	if call != nil {
 		s.mu.Lock()
-		response, err := s.responseLocked(call.SessionID, call.ResponseID, call.CallID)
+		response, err := s.callLocked(*call)
 		recorded := err == nil && response.calls[call.CallID] != nil
 		s.mu.Unlock()
 		if err != nil {
@@ -871,26 +882,6 @@ func (s *session) requestReply(ctx context.Context, instruction *string, call *T
 		body["prism_call_id"] = call.CallID
 	}
 	return s.create(ctx, body, reqCreate)
-}
-
-// history reads the items the next reply would see, in the server's order.
-func (s *session) history(ctx context.Context) ([]historyItem, error) {
-	ack, err := s.request(ctx, reqGetHistory, map[string]any{}, "", nil)
-	if err != nil {
-		return nil, err
-	}
-	listed, _ := ack.(historyListed)
-	return listed.items, nil
-}
-
-// deleteItem hides an item from future replies. A call and its result are
-// hidden together.
-func (s *session) deleteItem(ctx context.Context, itemID string) error {
-	if _, err := historyID(itemID); err != nil {
-		return inputError("item_id must be a nonempty string")
-	}
-	_, err := s.request(ctx, reqDeleteItem, map[string]any{keyItemID: itemID}, itemID, nil)
-	return err
 }
 
 // createItem adds an item to the end of the history without starting a reply,
@@ -925,37 +916,36 @@ func (s *session) createItem(ctx context.Context, item historyItem) (string, err
 	return createdID, nil
 }
 
-// addMessage adds a user or assistant message to the end of the history.
-func (s *session) addMessage(ctx context.Context, role, text string) (string, error) {
-	if role != "user" && role != "assistant" {
-		return "", inputError("History role must be user or assistant")
-	}
-	if err := nonblank(text); err != nil {
-		return "", err
-	}
-	return s.createItem(ctx, historyItem{kind: itemMessage, role: role, text: text})
-}
-
 // submitToolResult records the result of a tool call. It runs to a known
 // outcome whatever becomes of its caller, and a result recorded once cannot
 // change.
 func (s *session) submitToolResult(call ToolCallRef, output string) error {
 	s.mu.Lock()
-	_, err := s.responseLocked(call.SessionID, call.ResponseID, call.CallID)
+	_, err := s.callLocked(call)
 	if err == nil && s.tasks >= sessionLimit {
 		err = resourceLimitError("Too many pending realtime operations")
+	}
+	if err == nil {
+		// The submission is a pending operation of its own, beside the request
+		// it makes.
+		s.tasks++
 	}
 	s.mu.Unlock()
 	if err != nil {
 		return err
 	}
+	defer func() {
+		s.mu.Lock()
+		s.tasks--
+		s.mu.Unlock()
+	}()
 	ctx := context.Background()
 	_ = s.toolLock.acquire(ctx)
 	defer s.toolLock.release()
 
 	digest := digestOf(output)
 	s.mu.Lock()
-	response, err := s.responseLocked(call.SessionID, call.ResponseID, call.CallID)
+	response, err := s.callLocked(call)
 	var recorded *string
 	if err == nil {
 		recorded = response.calls[call.CallID]
@@ -998,12 +988,17 @@ func (s *session) continueReply(ctx context.Context, parent ResponseRef) (Respon
 	if err != nil {
 		return ResponseRef{}, err
 	}
+	s.mu.Lock()
+	response, err := s.responseLocked(parent.SessionID, parent.ResponseID)
+	s.mu.Unlock()
+	if err != nil {
+		return ResponseRef{}, err
+	}
 	deadline, cancel := context.WithTimeout(ctx, s.timeouts.Ready)
 	defer cancel()
-	var response *responseState
 	for {
 		s.mu.Lock()
-		response, err = s.responseLocked(parent.SessionID, parent.ResponseID, "")
+		err = s.checkLocked()
 		ready := false
 		if err == nil {
 			ready, err = s.continuableLocked(parent, response)
@@ -1064,12 +1059,12 @@ func (s *session) continuableLocked(parent ResponseRef, response *responseState)
 // does not mean it was canceled: its end says what became of it.
 func (s *session) cancel(ctx context.Context, response ResponseRef) error {
 	s.mu.Lock()
-	state, err := s.responseLocked(response.SessionID, response.ResponseID, "")
+	state, err := s.responseLocked(response.SessionID, response.ResponseID)
 	s.mu.Unlock()
 	if err != nil {
 		return err
 	}
-	if err := state.cancelLock.acquire(ctx); err != nil {
+	if err = state.cancelLock.acquire(ctx); err != nil {
 		return err
 	}
 	defer state.cancelLock.release()
@@ -1088,20 +1083,6 @@ func (s *session) cancel(ctx context.Context, response ResponseRef) error {
 func (s *session) setResponseMetadata(ctx context.Context, labels map[string]string) error {
 	body := map[string]any{keySession: map[string]any{keyLabels: responseMetadata(labels)}}
 	_, err := s.request(ctx, reqUpdate, body, "", nil)
-	return err
-}
-
-// clearAudio drops the audio sent that Prism has not committed to a turn.
-func (s *session) clearAudio(ctx context.Context) error {
-	if err := s.audioLock.acquire(ctx); err != nil {
-		return err
-	}
-	defer s.audioLock.release()
-	if err := s.clearLock.acquire(ctx); err != nil {
-		return err
-	}
-	defer s.clearLock.release()
-	_, err := s.request(ctx, reqClear, map[string]any{}, "", nil)
 	return err
 }
 
@@ -1152,7 +1133,7 @@ func (s *session) reportInterrupted(ctx context.Context, report playbackInterrup
 		return err
 	}
 	s.mu.Lock()
-	state, err := s.responseLocked(report.output.Response.SessionID, report.output.Response.ResponseID, "")
+	state, err := s.responseLocked(report.output.Response.SessionID, report.output.Response.ResponseID)
 	if err == nil && !state.outputs[report.output] {
 		err = inputError("Unknown output reference")
 	}
@@ -1160,7 +1141,7 @@ func (s *session) reportInterrupted(ctx context.Context, report playbackInterrup
 	if err != nil {
 		return err
 	}
-	if err := s.truncateLock.acquire(ctx); err != nil {
+	if err = s.truncateLock.acquire(ctx); err != nil {
 		return err
 	}
 	defer s.truncateLock.release()
@@ -1179,7 +1160,7 @@ func (s *session) reportFinished(ctx context.Context, report playbackFinished) e
 		return err
 	}
 	s.mu.Lock()
-	state, err := s.responseLocked(report.response.SessionID, report.response.ResponseID, "")
+	state, err := s.responseLocked(report.response.SessionID, report.response.ResponseID)
 	s.mu.Unlock()
 	if err != nil {
 		return err
@@ -1266,13 +1247,14 @@ func (s *session) failLocked(failure error) {
 	}
 	s.queue = append(s.queue, nil)
 	s.wakeConsumer()
-	s.background.Go(func() { _ = s.conn.CloseNow() })
+	// The closing handshake, which the connection bounds.
+	s.background.Go(func() { _ = s.conn.Close(websocket.StatusNormalClosure, "") })
 }
 
 // read takes the server's events until the connection ends.
 func (s *session) read() {
 	defer close(s.readerDone)
-	defer func() { _ = s.conn.CloseNow() }()
+	defer func() { _ = s.conn.Close(websocket.StatusNormalClosure, "") }()
 	for {
 		kind, data, err := s.conn.Read(context.Background())
 		if err != nil {
@@ -1323,24 +1305,38 @@ func (s *session) checkEchoLocked(payload any, echo string) error {
 	if !ok {
 		return nil
 	}
-	created, isCreated := payload.(itemCreated)
-	result, isResult := payload.(toolResultCreated)
+	_, isCreated := payload.(itemCreated)
 	if !isCreated || !p.req.allowsItemCreated {
 		if err := p.req.check(payload); err != nil {
 			return err
 		}
 	}
-	if p.requiresItemID {
-		itemID := created.itemID
-		if isResult {
-			itemID = result.itemID
-		}
-		if (!isCreated && !isResult) || itemID == "" || (p.expectedItemID != "" && p.expectedItemID != itemID) {
-			return streamError("History acknowledgment names an invalid item")
-		}
+	if err := checkHistoryAck(p, payload); err != nil {
+		return err
 	}
-	if isResult && p.target != result.callID {
+	if result, isResult := payload.(toolResultCreated); isResult && p.target != result.callID {
 		return streamError("Tool result acknowledgment names another call")
+	}
+	return nil
+}
+
+// checkHistoryAck refuses the acknowledgment of a history write that does not
+// name the item written.
+func checkHistoryAck(p *pendingRequest, payload any) error {
+	if !p.requiresItemID {
+		return nil
+	}
+	var itemID string
+	switch ack := payload.(type) {
+	case itemCreated:
+		itemID = ack.itemID
+	case toolResultCreated:
+		itemID = ack.itemID
+	default:
+		return streamError("History acknowledgment names an invalid item")
+	}
+	if itemID == "" || (p.expectedItemID != "" && p.expectedItemID != itemID) {
+		return streamError("History acknowledgment names an invalid item")
 	}
 	return nil
 }
@@ -1391,11 +1387,7 @@ func (s *session) applyLocked(event *serverEvent) (EventPayload, error) {
 	case toolResultCreated:
 		return nil, s.toolResultCreatedLocked(payload, echo)
 	case itemCreated:
-		if p, ok := s.pending[echo]; ok && p.req.allowsItemCreated {
-			p.itemID = payload.itemID
-			return nil, nil //nolint:nilnil // nothing to hand on
-		}
-		return nil, s.settleLocked(echo, payload)
+		return nil, s.itemCreatedLocked(payload, echo)
 	case audioCleared:
 		return nil, s.audioClearedLocked(payload)
 	case ItemTruncated:
@@ -1405,6 +1397,17 @@ func (s *session) applyLocked(event *serverEvent) (EventPayload, error) {
 	default:
 		return s.applyConversationLocked(event)
 	}
+}
+
+// itemCreatedLocked takes the acknowledgment of a history item: the item of a
+// typed turn, which comes before the reply that settles its request, or a
+// history write's.
+func (s *session) itemCreatedLocked(payload itemCreated, echo string) error {
+	if p, ok := s.pending[echo]; ok && p.req.allowsItemCreated {
+		p.itemID = payload.itemID
+		return nil
+	}
+	return s.settleLocked(echo, payload)
 }
 
 // applyConversationLocked takes the events of the conversation itself: the

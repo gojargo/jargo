@@ -2,6 +2,7 @@ package realtime
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 
 	"github.com/gojargo/jargo/adapter"
@@ -82,7 +83,7 @@ func (b *historyBuilder) add(m frames.Message) error {
 	if m.Role == frames.RoleDeveloper {
 		role = string(frames.RoleSystem)
 	}
-	if role != "user" && role != "assistant" && role != "system" {
+	if !slices.Contains(historyRoles, role) {
 		return settingsError("Prism does not support history role %q", role)
 	}
 	text, err := messageText(m)

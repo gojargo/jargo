@@ -181,7 +181,7 @@ func validateSettings(s *Settings) error {
 		return settingsError("Prism speed must be a number from 0.85 to 1.3")
 	}
 	if truncation, ok := s.Truncation.Value(); ok {
-		if err := truncation.validate(); err != nil {
+		if err = truncation.validate(); err != nil {
 			return settingsError("%s", err.Error())
 		}
 	}

@@ -67,7 +67,7 @@ func TestStopOfAnEarlierOutputKeepsTheNextOneTruncatable(t *testing.T) {
 			if report["item_id"] != "message-"+second {
 				t.Errorf("truncated %v, want the second output", report["item_id"])
 			}
-			if position := report["audio_end_ms"].(float64); position < 0 || position > 100 {
+			if position := number(report["audio_end_ms"]); position < 0 || position > 100 {
 				t.Errorf("position = %v", position)
 			}
 			until(t, "the requests to settle", func() bool { return h.requestsPending() == 0 })
@@ -103,7 +103,7 @@ func TestQueuedOutputPlaybackIsTimedFromTheEarlierStop(t *testing.T) {
 	if report["item_id"] != "message-"+second {
 		t.Errorf("truncated %v, want the second output", report["item_id"])
 	}
-	if position := report["audio_end_ms"].(float64); position >= 300 {
+	if position := number(report["audio_end_ms"]); position >= 300 {
 		t.Errorf("position = %v, want it timed from the stop", position)
 	}
 	if h.failed() {

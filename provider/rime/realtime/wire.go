@@ -2,9 +2,15 @@ package realtime
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"unicode/utf8"
 )
+
+// historyRoles are the roles of the messages a history holds.
+//
+//nolint:gochecknoglobals // a fixed list
+var historyRoles = []string{"user", "assistant", "system"}
 
 // policyLimit bounds the interruption policy changes kept until a reply
 // selects its settings revision.
@@ -120,7 +126,7 @@ func itemSettings(item historyItem) (map[string]any, error) {
 	}
 	switch item.kind {
 	case itemMessage:
-		if item.role != "user" && item.role != "assistant" && item.role != "system" {
+		if !slices.Contains(historyRoles, item.role) {
 			return nil, inputError("history role must be user, assistant, or system")
 		}
 		value[keyRole], value[keyText] = item.role, item.text
@@ -141,17 +147,6 @@ func itemSettings(item historyItem) (map[string]any, error) {
 		if text, ok := field.(string); ok && !utf8.ValidString(text) {
 			return nil, inputError("history item fields must be valid UTF-8")
 		}
-	}
-	return value, nil
-}
-
-// historyID validates the identity of a history item.
-func historyID(value string) (string, error) {
-	if value == "" {
-		return "", inputError("history ID must be a nonempty string")
-	}
-	if !utf8.ValidString(value) {
-		return "", inputError("history ID must be valid UTF-8")
 	}
 	return value, nil
 }
@@ -217,8 +212,7 @@ func (p *interruptionPolicies) resolve(revision *int) (bool, error) {
 	if revision == nil || len(p.changes) == 0 {
 		return p.current, nil
 	}
-	for i := len(p.changes) - 1; i >= 0; i-- {
-		change := p.changes[i]
+	for _, change := range slices.Backward(p.changes) {
 		if change.firstRevision <= *revision {
 			if change.interrupt == nil {
 				return false, resourceLimitError("Reply interruption policy revision is unknown")

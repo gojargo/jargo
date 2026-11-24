@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
+	"math"
 	"net/http"
 	"net/url"
 	"slices"
@@ -30,8 +32,8 @@ const (
 type connectOptions struct {
 	apiKey   string
 	endpoint string
-	// voice and instructions are sent when they are not empty.
-	voice, instructions string
+	// voice and instructions are sent when they are given.
+	voice, instructions *string
 	tools               []toolDefinition
 	interruptOnSpeech   bool
 	turnDetection       *TurnDetection
@@ -55,7 +57,11 @@ func retryAfter(values []string, now time.Time) *time.Duration {
 		if err != nil {
 			return nil
 		}
-		delay := time.Duration(seconds * float64(time.Second))
+		// A delay too long to represent waits past any deadline.
+		delay := time.Duration(math.MaxInt64)
+		if seconds < float64(math.MaxInt64)/float64(time.Second) {
+			delay = time.Duration(seconds * float64(time.Second))
+		}
 		return &delay
 	}
 	date, ok := httpDate(value, now)
@@ -219,9 +225,7 @@ func (o connectOptions) openingSettings() (map[string]any, error) {
 		if err != nil {
 			return nil, err
 		}
-		for key, value := range rules {
-			turn[key] = value
-		}
+		maps.Copy(turn, rules)
 	}
 	if o.responseMetadata != nil {
 		settings[keyLabels] = responseMetadata(o.responseMetadata)
@@ -229,14 +233,14 @@ func (o connectOptions) openingSettings() (map[string]any, error) {
 	if o.requestID != "" && !printableASCII(o.requestID) {
 		return nil, inputError("request_id must be nonblank printable ASCII")
 	}
-	for name, value := range map[string]string{"voice": o.voice, "instructions": o.instructions} {
-		if value == "" {
+	for name, value := range map[string]*string{"voice": o.voice, "instructions": o.instructions} {
+		if value == nil {
 			continue
 		}
-		if strings.TrimSpace(value) == "" {
+		if strings.TrimSpace(*value) == "" {
 			return nil, inputError(name + " must be nonblank")
 		}
-		settings[name] = value
+		settings[name] = *value
 	}
 	return settings, nil
 }
@@ -273,6 +277,8 @@ func connect(ctx context.Context, o connectOptions) (*session, error) {
 	if err != nil {
 		return nil, dialError(ctx, dialCtx, err)
 	}
+	// Each write is bounded by the request timeout instead.
+	conn.SetSendTimeout(0)
 	opened := newSession(conn, o.timeouts)
 	if err := opened.initialize(ctx, settings); err != nil {
 		opened.close()
@@ -352,6 +358,22 @@ func (p StartupParams) totalTimeout() time.Duration {
 //nolint:gochecknoglobals // a fixed set
 var retryableStatuses = []int{408, 429, 500, 502, 503, 504}
 
+// retryDelay is how long to wait before trying again after an attempt failed
+// with err, and whether to: only an HTTP refusal that may not repeat is tried
+// again, as many times as the policy allows.
+func retryDelay(policy StartupParams, attempt int, err error) (time.Duration, bool) {
+	refusal, ok := errors.AsType[*Error](err)
+	if !ok || (refusal.Kind != KindUnavailable && refusal.Kind != KindResourceLimit) ||
+		attempt == policy.maxRetries() || !slices.Contains(retryableStatuses, refusal.StatusCode) {
+		return 0, false
+	}
+	delay := policy.retryInterval()
+	if refusal.RetryAfter != nil {
+		delay = max(delay, *refusal.RetryAfter)
+	}
+	return delay, true
+}
+
 // connectWithRetry opens a conversation, trying again after a refusal that
 // may not repeat. An established conversation is never replayed.
 func connectWithRetry(ctx context.Context, policy StartupParams, o connectOptions) (*session, error) {
@@ -371,16 +393,8 @@ func connectWithRetry(ctx context.Context, policy StartupParams, o connectOption
 		if expired && errors.Is(err, context.DeadlineExceeded) {
 			return nil, newError(KindTimeout, "Prism startup attempt timed out")
 		}
-		refusal, ok := errors.AsType[*Error](err)
-		if !ok || (refusal.Kind != KindUnavailable && refusal.Kind != KindResourceLimit) ||
-			attempt == policy.maxRetries() || !slices.Contains(retryableStatuses, refusal.StatusCode) {
-			return nil, err
-		}
-		delay := policy.retryInterval()
-		if refusal.RetryAfter != nil {
-			delay = max(delay, *refusal.RetryAfter)
-		}
-		if delay >= time.Until(deadline) {
+		delay, retry := retryDelay(policy, attempt, err)
+		if !retry || delay >= time.Until(deadline) {
 			return nil, err
 		}
 		select {

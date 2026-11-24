@@ -126,7 +126,7 @@ type IdleTimeoutError struct {
 
 // Error implements error.
 func (e *IdleTimeoutError) Error() string {
-	seconds := strconv.FormatFloat(e.IdleTimeout.Seconds(), 'g', -1, 64)
+	seconds := strconv.FormatFloat(e.IdleTimeout.Seconds(), 'g', 6, 64)
 	return "Realtime session idle for " + seconds + " seconds"
 }
 

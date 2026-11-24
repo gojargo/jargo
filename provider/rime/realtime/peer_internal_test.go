@@ -254,7 +254,7 @@ func (p *peer) handleRequest(event object) {
 	case kindItemCreate:
 		p.historySerial++
 		item := object{"id": fmt.Sprintf("history-%d", p.historySerial)}
-		maps.Copy(item, event["item"].(object))
+		maps.Copy(item, asObject(event["item"]))
 		p.insertLocked(item, event["previous_item_id"])
 		p.mu.Unlock()
 		p.emit("conversation.item.created", object{"prism_request_event_id": event["event_id"], "item": item})
@@ -283,7 +283,7 @@ func (p *peer) handleRequest(event object) {
 		p.emit("prism.typed_input.ready", nil)
 	case kindResponseStop:
 		p.mu.Unlock()
-		p.end(event["response_id"].(string), "cancelled", true, nil)
+		p.end(text(event["response_id"]), "cancelled", true, nil) //nolint:misspell // the wire's spelling
 	case kindItemTruncate:
 		p.mu.Unlock()
 		p.emit("conversation.item.truncated", object{
@@ -350,7 +350,7 @@ func (p *peer) start(request object, inputIDs []string) string {
 		response[keyRevision] = p.revision
 	}
 	if request != nil {
-		response["metadata"] = request["response"].(object)["metadata"]
+		response["metadata"] = at(request, "response", "metadata")
 	}
 	if inputIDs != nil {
 		response["prism_input_item_ids"] = inputIDs
@@ -481,7 +481,7 @@ func (p *peer) createdTexts() []string {
 func (p *peer) createdItems() []object {
 	var out []object
 	for _, event := range p.sent(kindItemCreate) {
-		out = append(out, event["item"].(object))
+		out = append(out, asObject(event["item"]))
 	}
 	return out
 }
@@ -497,7 +497,7 @@ func (p *peer) toolNames() []string {
 	tools, _ := p.setting(keyTools).([]any)
 	names := []string{}
 	for _, tool := range tools {
-		names = append(names, tool.(object)["function"].(object)["name"].(string))
+		names = append(names, text(at(tool, "function", "name")))
 	}
 	return names
 }
@@ -608,6 +608,7 @@ func (o *testOutput) written() int {
 
 // holdAudio keeps the bot speaking until the returned function is called.
 func (o *testOutput) holdAudio(t *testing.T) func() {
+	t.Helper()
 	release := make(chan struct{})
 	var once sync.Once
 	open := func() { once.Do(func() { close(release) }) }
@@ -626,6 +627,7 @@ func (o *testOutput) holdAudio(t *testing.T) func() {
 // gateWrites holds each of the first count writes until its release is called,
 // and reports when each starts.
 func (o *testOutput) gateWrites(t *testing.T, count int) (writing []chan struct{}, release []func()) {
+	t.Helper()
 	gates := make([]chan struct{}, count)
 	for i := range count {
 		writing = append(writing, make(chan struct{}))

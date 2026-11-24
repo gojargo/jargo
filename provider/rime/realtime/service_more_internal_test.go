@@ -290,9 +290,9 @@ func lookup(name string, handler llm.FunctionCallHandler) frames.Tool {
 // asyncLookup is a tool that outlives the reply that called it.
 func asyncLookup(name string, cancellable bool) frames.Tool {
 	tool := lookup(name, nil)
-	tool.CancelOnInterruption = ptr(false)
+	tool.CancelOnInterruption = new(false)
 	if cancellable {
-		tool.CancellableByLLM = ptr(true)
+		tool.CancellableByLLM = new(true)
 	}
 	return tool
 }
@@ -301,7 +301,9 @@ func toolset(tools ...frames.Tool) settings.Opt[frames.ToolsSchema] {
 	return settings.Set(frames.ToolsSchema{Standard: tools})
 }
 
-func update(delta *Settings) *frames.LLMUpdateSettingsFrame { return frames.NewLLMUpdateSettingsFrame(delta) }
+func update(delta *Settings) *frames.LLMUpdateSettingsFrame {
+	return frames.NewLLMUpdateSettingsFrame(delta)
+}
 
 func instruction(text string) *Settings {
 	delta := &Settings{}
@@ -309,24 +311,52 @@ func instruction(text string) *Settings {
 	return delta
 }
 
-func ptr[T any](v T) *T { return &v }
-
 // replyCause is the cause a reply request names.
 func replyCause(request object) any {
-	return request["response"].(object)["metadata"].(object)["prism_cause"]
+	return at(request, "response", "metadata", "prism_cause")
+}
+
+// at reads a value nested in objects, nil where a key is missing.
+func at(value any, keys ...string) any {
+	for _, key := range keys {
+		o, ok := value.(object)
+		if !ok {
+			return nil
+		}
+		value = o[key]
+	}
+	return value
+}
+
+// asObject is value as an object, nil when it is not one.
+func asObject(value any) object {
+	o, _ := value.(object)
+	return o
+}
+
+// text is value as a string, empty when it is not one.
+func text(value any) string {
+	s, _ := value.(string)
+	return s
+}
+
+// number is value as a JSON number, zero when it is not one.
+func number(value any) float64 {
+	f, _ := value.(float64)
+	return f
 }
 
 // lastUpdate is the session settings of the last update sent.
 func (p *peer) lastUpdate() object {
 	sent := p.sent(kindSessionUpdate)
-	return sent[len(sent)-1]["session"].(object)
+	return asObject(sent[len(sent)-1]["session"])
 }
 
 func TestSettingsToolsFillersTruncationAndMetadataUpdate(t *testing.T) {
 	h := converse(t, harnessOptions{})
 	delta := instruction("Billing support")
 	delta.Tools = toolset(lookup("lookup", nil))
-	delta.ToolFillers = settings.Set(map[string]Filler{"lookup": {Type: "text", Text: ptr("Checking")}})
+	delta.ToolFillers = settings.Set(map[string]Filler{"lookup": {Type: "text", Text: new("Checking")}})
 	delta.Truncation = settings.Set(TruncationAuto())
 	delta.ResponseMetadata = settings.Set(map[string]string{"department": "billing"})
 	h.queue(update(delta))
@@ -341,7 +371,7 @@ func TestSettingsToolsFillersTruncationAndMetadataUpdate(t *testing.T) {
 		t.Error("the tool's handler is not registered")
 	}
 	tools, _ := h.peer.setting(keyTools).([]any)
-	if len(tools) == 0 || tools[0].(object)["prism_filler"].(object)["text"] != "Checking" {
+	if len(tools) == 0 || at(tools[0], "prism_filler", "text") != "Checking" {
 		t.Errorf("tools = %v, want the filler", tools)
 	}
 	if got := h.peer.setting("truncation"); got != "auto" {
@@ -362,8 +392,8 @@ func TestSpeedAndInterruptionRulesOpenAndUpdate(t *testing.T) {
 		c.Settings.InterruptMinWords = settings.Set(2)
 		c.Settings.AcknowledgmentPhrases = settings.Set([]string{"uh huh"})
 	}})
-	opening := h.peer.sent(kindSessionUpdate)[0]["session"].(object)
-	turn := opening[keyTurn].(object)
+	opening := asObject(h.peer.sent(kindSessionUpdate)[0]["session"])
+	turn := asObject(opening[keyTurn])
 	if opening["speed"] != 1.1 || turn[keyInterruptMin] != 2.0 || fmt.Sprint(turn[keyAckPhrases]) != "[uh huh]" {
 		t.Errorf("opening = %v", opening)
 	}
@@ -410,9 +440,9 @@ func TestSpeedAndInterruptionRulesOpenAndUpdate(t *testing.T) {
 
 func TestOpeningTurnDetectionRulesJoinTheSettings(t *testing.T) {
 	h := converse(t, harnessOptions{config: func(c *Config) {
-		c.TurnDetection = &TurnDetection{Eagerness: "low", TurnDetectionUpdate: TurnDetectionUpdate{InterruptMinWords: ptr(3)}}
+		c.TurnDetection = &TurnDetection{Eagerness: "low", InterruptMinWords: new(3)}
 	}})
-	turn := h.peer.sent(kindSessionUpdate)[0]["session"].(object)[keyTurn].(object)
+	turn := asObject(at(h.peer.sent(kindSessionUpdate)[0], "session", keyTurn))
 	if turn[keyEagerness] != "low" || turn[keyInterruptMin] != 3.0 {
 		t.Errorf("turn detection = %v", turn)
 	}
@@ -424,7 +454,7 @@ func TestOpeningTurnDetectionRulesJoinTheSettings(t *testing.T) {
 func TestInterruptionRuleSetTwiceIsRejected(t *testing.T) {
 	cfg := Config{
 		APIKey:        "key",
-		TurnDetection: &TurnDetection{TurnDetectionUpdate: TurnDetectionUpdate{InterruptMinWords: ptr(3)}},
+		TurnDetection: &TurnDetection{InterruptMinWords: new(3)},
 		Settings:      Settings{InterruptMinWords: settings.Set(2)},
 	}
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "interrupt_min_words") {
@@ -520,7 +550,8 @@ func TestToolsUpdateSendsCancelToolsAndTheirGuidance(t *testing.T) {
 	h := converse(t, harnessOptions{config: func(c *Config) { c.Settings.SystemInstruction = settings.Set("Support") }})
 	h.queue(frames.NewLLMSetToolsFrame([]frames.Tool{asyncLookup("stoppable_lookup", true)}))
 	until(t, "the tool advertised", func() bool { return slices.Contains(h.peer.toolNames(), "stoppable_lookup") })
-	if names := h.peer.toolNames(); !slices.Equal(names, []string{"stoppable_lookup", llm.CancelToolName("stoppable_lookup")}) {
+	want := []string{"stoppable_lookup", llm.CancelToolName("stoppable_lookup")}
+	if names := h.peer.toolNames(); !slices.Equal(names, want) {
 		t.Errorf("tools = %v", names)
 	}
 	text, _ := h.peer.setting("instructions").(string)
@@ -721,7 +752,7 @@ func TestInterruptionCancelsReplyAndSendsEstimatedPosition(t *testing.T) {
 	h.queue(frames.NewInterruptionFrame())
 	until(t, "a truncation", func() bool { return len(h.peer.sent(kindItemTruncate)) > 0 })
 	truncations := h.peer.sent(kindItemTruncate)
-	if position := truncations[len(truncations)-1]["audio_end_ms"].(float64); position < 0 || position > 1000 {
+	if position := number(truncations[len(truncations)-1]["audio_end_ms"]); position < 0 || position > 1000 {
 		t.Errorf("position = %v", position)
 	}
 	cancels := h.peer.sent(kindResponseStop)
@@ -762,7 +793,7 @@ func observe[T EventPayload](s *Service) func() []T {
 }
 
 func TestRetainedTextEventIsForwardedWithoutReplacingContext(t *testing.T) {
-	for _, kept := range []*string{nil, ptr(""), ptr("Retained words")} {
+	for _, kept := range []*string{nil, new(""), new("Retained words")} {
 		t.Run(fmt.Sprint(kept != nil), func(t *testing.T) {
 			var observed func() []ItemTruncated
 			h := converse(t, harnessOptions{setup: func(s *Service) { observed = observe[ItemTruncated](s) }})
@@ -911,7 +942,9 @@ func TestMissingRequestAcknowledgmentFailsWithoutReplay(t *testing.T) {
 
 func TestTextOnlyOutputSurvivesRestorationOfOutputSettings(t *testing.T) {
 	h := converse(t, harnessOptions{})
-	h.queue(frames.NewLLMConfigureOutputFrame(true), appendUser("Text only", true), frames.NewLLMConfigureOutputFrame(false))
+	h.queue(
+		frames.NewLLMConfigureOutputFrame(true), appendUser("Text only", true), frames.NewLLMConfigureOutputFrame(false),
+	)
 	h.answer(nil, "Text reply", 960)
 	until(t, "the reply", func() bool { return h.hasMessage(frames.RoleAssistant, "Text reply") })
 	if h.output.written() > 0 {
@@ -986,7 +1019,7 @@ func TestRemovedToolUsesStandardMissingHandler(t *testing.T) {
 
 func TestToolResultEncodingMatchesNormalContextAggregation(t *testing.T) {
 	// The results as a handler gives them: JSON text, or nothing at all.
-	results := []*string{ptr(`"done"`), ptr(`""`), nil, ptr("false"), ptr("0"), ptr("{}"), ptr(`{"status": "paid"}`)}
+	results := []*string{new(`"done"`), new(`""`), nil, new("false"), new("0"), new("{}"), new(`{"status": "paid"}`)}
 	for _, result := range results {
 		name := "none"
 		if result != nil {

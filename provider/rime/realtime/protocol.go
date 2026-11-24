@@ -208,15 +208,11 @@ func (r *request) check(ack any) error {
 //nolint:gochecknoglobals // the fixed table of request kinds
 var (
 	reqUpdate        = &request{kind: kindSessionUpdate, result: ackSessionUpdated}
-	reqGetHistory    = &request{kind: kindHistoryGet, result: ackHistoryListed}
-	reqDeleteItem    = &request{kind: kindItemDelete, result: ackItemDeleted}
 	reqToolResult    = &request{kind: kindItemCreate, result: ackToolResultCreated}
 	reqHistoryItem   = &request{kind: kindItemCreate, result: ackItemCreated, history: true}
 	reqHistoryResult = &request{kind: kindItemCreate, result: ackToolResultCreated, history: true}
 	reqCreate        = &request{kind: kindResponseNew, result: ackResponseStarted}
-	reqText          = &request{kind: kindResponseNew, result: ackResponseStarted, allowsItemCreated: true}
 	reqCancel        = &request{kind: kindResponseStop, result: ackResponseEnded}
-	reqClear         = &request{kind: kindAudioClear, result: ackAudioCleared}
 	reqTruncate      = &request{kind: kindItemTruncate, result: ackItemTruncated}
 )
 
@@ -602,6 +598,11 @@ func (r *reader) arguments(value any) (map[string]any, string) {
 // samples.
 func (r *reader) audio(value any) []byte {
 	encoded := r.str(value, keyDelta)
+	if strings.ContainsAny(encoded, "\r\n") {
+		// The decoder skips line breaks, which canonical base64 has none of.
+		r.fail("audio.delta")
+		return nil
+	}
 	data, err := base64.StdEncoding.Strict().DecodeString(encoded)
 	if err != nil || len(data)%2 != 0 {
 		r.fail("audio.delta")
@@ -633,7 +634,7 @@ func listedItem(value any) (historyItem, error) {
 	switch object[keyType] {
 	case itemMessage:
 		item.kind, item.role = itemMessage, field(keyRole)
-		if failure == nil && !slices.Contains([]string{"user", "assistant", "system"}, item.role) {
+		if failure == nil && !slices.Contains(historyRoles, item.role) {
 			failure = streamError("Invalid history role")
 		}
 		item.text = field(keyText)
@@ -670,6 +671,14 @@ func decode(binary bool, raw []byte, sessionID *string) (*serverEvent, error) {
 		return nil, nil //nolint:nilnil // an event the client has no use for
 	}
 	payload := decoder(r, event)
+	if r.err != nil {
+		return nil, r.err
+	}
+	if payload == nil {
+		// An output item that is not a message, left before its envelope is
+		// read.
+		return nil, nil //nolint:nilnil // an event the client has no use for
+	}
 	out := &serverEvent{
 		serverTimeMS: r.boundedInteger(event, "server_time_ms", 0, maxSafeInteger),
 		requestID:    r.optString(event["prism_request_event_id"], "prism_request_event_id"),
@@ -680,9 +689,6 @@ func decode(binary bool, raw []byte, sessionID *string) (*serverEvent, error) {
 	}
 	if r.err != nil {
 		return nil, r.err
-	}
-	if payload == nil {
-		return nil, nil //nolint:nilnil // an output item that is not a message
 	}
 	return out, nil
 }
@@ -904,7 +910,7 @@ func decodeResponseCreated(r *reader, event map[string]any) any {
 	switch ids := response["prism_input_item_ids"].(type) {
 	case nil:
 		if metadata["prism_input_item_id"] != nil {
-			out.InputItemIDs = []string{out.InputItemID}
+			out.InputItemIDs = []string{r.id(out.InputItemID, "prism_input_item_ids")}
 		}
 	case []any:
 		for _, id := range ids {
@@ -956,15 +962,13 @@ func decodeResponseDone(r *reader, event map[string]any) any {
 		status = scopeUnknown
 	}
 	return responseEnded{
-		ResponseEnded: ResponseEnded{
-			SettingsRevision: r.revision(response, "response."+keyRevision),
-			Truncation:       r.responseTruncation(response),
-			Usage:            r.responseUsage(response),
-			Response:         r.ref(response[keyID]),
-			Status:           status,
-			Reason:           r.optString(details["reason"], "reason"),
-		},
-		drainToken: r.optString(metadata["prism_drain_token"], "prism_drain_token"),
+		SettingsRevision: r.revision(response, "response."+keyRevision),
+		Truncation:       r.responseTruncation(response),
+		Usage:            r.responseUsage(response),
+		Response:         r.ref(response[keyID]),
+		Status:           status,
+		Reason:           r.optString(details["reason"], "reason"),
+		drainToken:       r.optString(metadata["prism_drain_token"], "prism_drain_token"),
 	}
 }
 

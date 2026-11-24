@@ -113,7 +113,7 @@ func TestLateTranscriptIsFlushedBeforeTheAssistantRecord(t *testing.T) {
 func asyncPayload(t *testing.T, item object) map[string]any {
 	t.Helper()
 	var payload map[string]any
-	if err := json.Unmarshal([]byte(item["text"].(string)), &payload); err != nil {
+	if err := json.Unmarshal([]byte(text(item["text"])), &payload); err != nil {
 		t.Fatalf("item %v carries no envelope: %v", item, err)
 	}
 	return payload
@@ -122,7 +122,7 @@ func asyncPayload(t *testing.T, item object) map[string]any {
 func TestSilentProgressKeepsTheCallOpenUntilTheFinalResult(t *testing.T) {
 	handler := func(ctx context.Context, p llm.FunctionCallParams) error {
 		if err := p.Result(ctx, `"Working"`, &frames.FunctionCallResultProperties{
-			IsFinal: ptr(false), RunLLM: ptr(false),
+			IsFinal: new(false), RunLLM: new(false),
 		}); err != nil {
 			return err
 		}
@@ -194,7 +194,7 @@ func TestToolResultWaitsForTheBotToStopSpeaking(t *testing.T) {
 
 func TestToolResultFramesKeepTheirReplyPolicy(t *testing.T) {
 	handler := func(ctx context.Context, p llm.FunctionCallParams) error {
-		return p.Result(ctx, `{"status": "paid"}`, &frames.FunctionCallResultProperties{RunLLM: ptr(false)})
+		return p.Result(ctx, `{"status": "paid"}`, &frames.FunctionCallResultProperties{RunLLM: new(false)})
 	}
 	h := converse(t, harnessOptions{config: withTools(lookup("lookup", handler))})
 	parent := h.peer.start(nil, nil)
@@ -291,7 +291,7 @@ func TestAsyncResultAfterItsRoundClosedIsReported(t *testing.T) {
 				t.Errorf("outputs = %v", outputs)
 			}
 			if movedOn {
-				if replyCause(request) != "proactive" || request["response"].(object)["prism_call_id"] != "call-1" {
+				if replyCause(request) != "proactive" || at(request, "response", "prism_call_id") != "call-1" {
 					t.Errorf("request = %v, want a report of the call", request["response"])
 				}
 			} else if replyCause(request) != "tool_continuation" {
@@ -330,7 +330,7 @@ func TestLateResultReportSurvivesAnInterruption(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	open()
 	request := h.peer.nextReply()
-	if request["response"].(object)["prism_call_id"] != "call-1" {
+	if at(request, "response", "prism_call_id") != "call-1" {
 		t.Errorf("request = %v", request["response"])
 	}
 	report := h.peer.start(request, nil)
@@ -353,7 +353,7 @@ func TestRefusedLateResultReportIsRequestedOnceMore(t *testing.T) {
 	until(t, "the report asked again", func() bool { return len(h.peer.sent(kindResponseNew)) == 3 })
 	sent := h.peer.sent(kindResponseNew)
 	retry := sent[len(sent)-1]
-	if retry["response"].(object)["prism_call_id"] != "call-1" {
+	if at(retry, "response", "prism_call_id") != "call-1" {
 		t.Errorf("retry = %v", retry["response"])
 	}
 	h.answer(h.peer.nextReply(), "Hello", 480)
@@ -419,8 +419,10 @@ func TestFailedStartupClosesSessionButLeavesTheEndpointUsable(t *testing.T) {
 	if svc.Usable() || len(errorFrames(up)) == 0 {
 		t.Errorf("usable = %v, errors = %v, want a failed service", svc.Usable(), errorFrames(up))
 	}
-	options := connectOptions{apiKey: "local-peer", endpoint: p.endpoint(), interruptOnSpeech: true,
-		timeouts: Timeouts{}.withDefaults()}
+	options := connectOptions{
+		apiKey: "local-peer", endpoint: p.endpoint(), interruptOnSpeech: true,
+		timeouts: Timeouts{}.withDefaults(),
+	}
 	sess, err := connect(t.Context(), options)
 	if err != nil {
 		t.Fatalf("connect() = %v", err)
@@ -439,8 +441,12 @@ func TestCompletedToolHistoryImportDoesNotExecuteTools(t *testing.T) {
 	}
 	convo := frames.NewLLMContext("")
 	convo.SetMessages([]frames.Message{
-		{Role: frames.RoleAssistant, ToolCalls: []frames.ToolCall{{ID: "imported-call", Name: "lookup", Args: json.RawMessage("{}")}}},
-		{Role: frames.RoleUser, ToolResults: []frames.ToolResult{{ID: "imported-call", Name: "lookup", Content: "Completed result"}}},
+		{Role: frames.RoleAssistant, ToolCalls: []frames.ToolCall{
+			{ID: "imported-call", Name: "lookup", Args: json.RawMessage("{}")},
+		}},
+		{Role: frames.RoleUser, ToolResults: []frames.ToolResult{
+			{ID: "imported-call", Name: "lookup", Content: "Completed result"},
+		}},
 	})
 	convo.SetTools([]frames.Tool{lookup("lookup", handler)})
 	h := converse(t, harnessOptions{convo: convo})

@@ -11,8 +11,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/gojargo/jargo/provider/rime/internal/rimepcm"
 	"github.com/gojargo/jargo/provider/rime/internal/rimepb"
+	"github.com/gojargo/jargo/provider/rime/internal/rimepcm"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/connectivity"
