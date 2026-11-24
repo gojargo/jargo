@@ -518,10 +518,10 @@ func (c *fluxConnector) Metadata() stt.Metadata {
 	m.SupportsTTFS = &noTTFS
 	external := turns.ExternalStrategiesConfig{EnableInterruptions: c.cfg.ShouldInterrupt}
 	m.UserTurnStrategies = turns.ExternalStrategies(external)
-	if c.EagerEndOfTurn() {
-		m.UserTurnStrategies = turns.EagerStrategies(turns.EagerStrategiesConfig{
-			ExternalStrategiesConfig: external,
-		})
+	if eager := turns.EagerUserTurnStrategies(c.EagerEndOfTurn(), turns.EagerStrategiesConfig{
+		ExternalStrategiesConfig: external,
+	}); eager != nil {
+		m.UserTurnStrategies = *eager
 	}
 	return m
 }

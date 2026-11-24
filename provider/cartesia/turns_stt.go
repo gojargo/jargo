@@ -376,8 +376,9 @@ func (c *turnsConnector) Metadata() stt.Metadata {
 	noTTFS := false
 	external := turns.ExternalStrategiesConfig{EnableInterruptions: c.cfg.ShouldInterrupt}
 	strategies := turns.ExternalStrategies(external)
-	if c.EagerEndOfTurn() {
-		strategies = turns.EagerStrategies(turns.EagerStrategiesConfig{ExternalStrategiesConfig: external})
+	eagerCfg := turns.EagerStrategiesConfig{ExternalStrategiesConfig: external}
+	if eager := turns.EagerUserTurnStrategies(c.EagerEndOfTurn(), eagerCfg); eager != nil {
+		strategies = *eager
 	}
 	return stt.Metadata{
 		UserTurnStrategies: strategies,

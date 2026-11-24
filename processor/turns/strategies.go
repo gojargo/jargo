@@ -235,6 +235,22 @@ func EagerStrategies(cfg EagerStrategiesConfig) UserTurnStrategies {
 	}
 }
 
+// EagerUserTurnStrategies builds the turn strategies that answer a service's
+// predicted ends of turn, for a service that can be configured to predict them.
+//
+// They leave turn detection to the service and answer a predicted end of turn
+// while the turn is still open. It returns nil while eager end of turn is off,
+// leaving the recommendation to the service: one that emits its own turn
+// boundaries recommends ExternalStrategies, and one that can also run on the
+// pipeline's own turn detection recommends nothing.
+func EagerUserTurnStrategies(enableEagerEndOfTurn bool, cfg EagerStrategiesConfig) *UserTurnStrategies {
+	if !enableEagerEndOfTurn {
+		return nil
+	}
+	strategies := EagerStrategies(cfg)
+	return &strategies
+}
+
 // ApplyRealtimeServiceMode strips the transcript dependence from these chains,
 // for a pipeline whose conversation is driven by a speech-to-speech service.
 //
