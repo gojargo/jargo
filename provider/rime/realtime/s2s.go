@@ -345,14 +345,14 @@ func (s *Service) handleMessagesAppend(f *frames.LLMMessagesAppendFrame) {
 		s.mu.Unlock()
 		return
 	}
-	s.mu.Unlock()
-	s.enqueue(operation{messages: slices.Clone(f.Messages), answerable: true})
-	s.mu.Lock()
+	// Counted before the write is queued, which the control loop may do at
+	// once.
 	s.writesUnwritten++
 	s.replyOwed = true
 	// The output settings apply to the reply as of the append.
 	s.owedAudioResponse = !s.skipTTS
 	s.mu.Unlock()
+	s.enqueue(operation{messages: slices.Clone(f.Messages), answerable: true})
 }
 
 func (s *Service) handleInputAudio(audio frames.AudioRawData) {
@@ -1929,18 +1929,19 @@ func (s *Service) handleFunctionCallOutcome(
 	}
 	t.progress = t.progress || !final
 	s.mu.Unlock()
+	if !report {
+		// Counted before the write is queued, which the control loop may do
+		// at once.
+		s.mu.Lock()
+		s.writesUnwritten++
+		s.replyOwed = true
+		s.owedAudioResponse = !s.skipTTS
+		if value, ok := s.conversation.responses[t.event.Call.ResponseID]; ok {
+			s.owedAudioResponse = value.audioResponse
+		}
+		s.mu.Unlock()
+	}
 	s.enqueue(op)
-	if report {
-		return
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.writesUnwritten++
-	s.replyOwed = true
-	s.owedAudioResponse = !s.skipTTS
-	if value, ok := s.conversation.responses[t.event.Call.ResponseID]; ok {
-		s.owedAudioResponse = value.audioResponse
-	}
 }
 
 // resultText is a tool's result as it is written, the completion marker when
