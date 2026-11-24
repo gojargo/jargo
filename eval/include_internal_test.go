@@ -21,7 +21,7 @@ func loadIncluded(t *testing.T, files map[string]string, top string) any {
 			t.Fatal(err)
 		}
 	}
-	node, err := loadNode(filepath.Join(dir, top), includeDepth)
+	node, err := loadNode(filepath.Join(dir, top))
 	if err != nil {
 		t.Fatal(err)
 	}

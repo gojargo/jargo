@@ -382,7 +382,7 @@ func TestLoadIncludeCycleRejected(t *testing.T) {
 
 	if _, err := eval.LoadFile(filepath.Join(dir, "loop.yaml")); err == nil {
 		t.Fatal("expected an error for the include cycle")
-	} else if !strings.Contains(err.Error(), "nested too deep") {
+	} else if !strings.Contains(err.Error(), "!include cycle") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
