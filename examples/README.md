@@ -183,6 +183,9 @@ too, for the user aggregator's default turn strategies.
 | [`realtime-gemini-live-vertex`](realtime/realtime-gemini-live-vertex) | Gemini Live through Vertex AI, with tools configured on the service. | Google Cloud |
 | [`realtime-aws-nova-sonic`](realtime/realtime-aws-nova-sonic) | Amazon Nova Sonic, with a tool, session continuation and transcript logging. | AWS |
 | [`realtime-aws-nova-sonic-async-tool`](realtime/realtime-aws-nova-sonic-async-tool) | Amazon Nova Sonic, with a slow tool that runs while the conversation goes on. | AWS |
+| [`realtime-rime`](realtime/realtime-rime) | Rime's Prism, with server turn detection, tools and transcript logging. | Rime |
+| [`realtime-rime-async-tool`](realtime/realtime-rime-async-tool) | Rime's Prism, with a slow tool that reports an intermediate result and runs while the conversation goes on. | Rime |
+| [`realtime-rime-billing-handoff`](realtime/realtime-rime-billing-handoff) | Rime's Prism handing the call off to billing support mid-conversation: a settings update swaps the instructions, tools and tool fillers. | Rime |
 
 ## Features
 

@@ -1,0 +1,191 @@
+// Command realtime-rime-async-tool is a voice agent on Rime's Prism, a
+// speech-to-speech model, whose tool is asynchronous.
+//
+// The get_current_weather tool is not canceled when the user interrupts, and
+// simulates a slow API call. It reports an intermediate result right away,
+// which Prism takes in without starting a reply, then the final result after
+// ten seconds. While the call is in flight the conversation continues, and
+// Prism shares the final result when it arrives.
+//
+//	RIME_API_KEY=… go run ./examples/realtime/realtime-rime-async-tool
+//
+// RIME_REALTIME_ENDPOINT, when set, overrides the Prism endpoint.
+//
+// Then open http://localhost:7860, connect, and ask about the weather.
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"log/slog"
+	"os"
+	"time"
+
+	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/pipeline"
+	"github.com/gojargo/jargo/processor/aggregators"
+	"github.com/gojargo/jargo/provider/rime/realtime"
+	"github.com/gojargo/jargo/runner"
+	"github.com/gojargo/jargo/service/llm"
+	"github.com/gojargo/jargo/service/settings"
+	"github.com/gojargo/jargo/transport"
+	"github.com/gojargo/jargo/transport/wsserver"
+	"github.com/gojargo/jargo/transport/wsserver/evalws"
+	"github.com/gojargo/jargo/utils/events"
+	"github.com/gojargo/jargo/workers"
+)
+
+// weatherDelay is how long the simulated weather API takes to answer.
+const weatherDelay = 10 * time.Second
+
+// getCurrentWeather gets the current weather. It simulates a long-running API
+// call, to show that the conversation continues while the tool is in flight.
+func getCurrentWeather(ctx context.Context, params llm.FunctionCallParams) error {
+	var args struct {
+		Location string `json:"location"`
+		Format   string `json:"format"`
+	}
+	_ = json.Unmarshal(params.Arguments, &args)
+
+	// An intermediate result is recorded without starting a reply.
+	checking, err := json.Marshal(map[string]any{"status": "checking", "location": args.Location})
+	if err != nil {
+		return err
+	}
+	if err = params.Result(ctx, string(checking), &frames.FunctionCallResultProperties{
+		IsFinal: new(false),
+		RunLLM:  new(false),
+	}); err != nil {
+		return err
+	}
+
+	select {
+	case <-time.After(weatherDelay):
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	temperature := 24
+	if args.Format == "fahrenheit" {
+		temperature = 75
+	}
+	result, err := json.Marshal(map[string]any{
+		"conditions":  "nice",
+		"temperature": temperature,
+		"location":    args.Location,
+		"format":      args.Format,
+		"timestamp":   time.Now().Format("20060102_150405"),
+	})
+	if err != nil {
+		return err
+	}
+	return params.Result(ctx, string(result), nil)
+}
+
+// tools describes the function to the model, carrying its handler. It is not
+// canceled when the user interrupts, which makes its calls asynchronous.
+func tools() []frames.Tool {
+	return []frames.Tool{{
+		Name:        "get_current_weather",
+		Description: "Get the current weather.",
+		Parameters: json.RawMessage(`{
+			"type": "object",
+			"properties": {
+				"location": {
+					"type": "string",
+					"description": "The city and state, e.g. \"San Francisco, CA\"."
+				},
+				"format": {
+					"type": "string",
+					"description": "The temperature unit to use. Must be either \"celsius\" or \"fahrenheit\". ` +
+			`Infer this from the user's location."
+				}
+			},
+			"required": ["location", "format"]
+		}`),
+		Handler:              llm.FunctionCallHandler(getCurrentWeather),
+		CancelOnInterruption: new(false),
+	}}
+}
+
+// transportParams builds each transport's parameters when that transport is
+// the one a session arrives on.
+//
+//nolint:gochecknoglobals // the transports' parameters, built per session
+var transportParams = runner.TransportParams{
+	Eval:    func() evalws.TransportParams { return evalws.TransportParams{Params: wsserver.DefaultParams()} },
+	LiveKit: transport.DefaultParams,
+	Twilio:  func() runner.WebSocketParams { return runner.WebSocketParams{Params: wsserver.DefaultParams()} },
+	WebRTC:  transport.DefaultParams,
+}
+
+const systemInstruction = "You are a friendly assistant. The user and you will engage in a spoken " +
+	"dialog exchanging the transcripts of a natural real-time conversation. " +
+	"Keep your responses short, generally two or three sentences for chatty " +
+	"scenarios. When the user asks for the weather, call get_current_weather. " +
+	"While you wait for the result, keep chatting with the user. When the " +
+	"result arrives, share it with the user naturally."
+
+// outputSampleRate is the rate Prism speaks at, which the output transport
+// runs at.
+const outputSampleRate = 24000
+
+func runBot(ctx context.Context, t transport.Transport, args runner.Arguments) error {
+	slog.Info("Starting bot")
+
+	s2s := realtime.New(realtime.Config{
+		APIKey:   os.Getenv("RIME_API_KEY"),
+		Endpoint: os.Getenv("RIME_REALTIME_ENDPOINT"),
+		Settings: realtime.Settings{SystemInstruction: settings.Set(systemInstruction)},
+	})
+
+	convo := frames.NewLLMContext("")
+	convo.SetTools(tools())
+	agg := aggregators.New(convo)
+
+	p := pipeline.New(
+		t.Input(),
+		agg.User(),
+		s2s,
+		t.Output(),
+		agg.Assistant(),
+	)
+
+	worker := pipeline.NewWorker(p, pipeline.WorkerConfig{
+		Params: pipeline.Params{
+			EnableMetrics:      true,
+			EnableUsageMetrics: true,
+			AudioOutSampleRate: outputSampleRate,
+		},
+		IdleTimeout:             args.Base().PipelineIdleTimeout,
+		ProcessorUnusablePolicy: pipeline.UnusableEnd,
+	})
+
+	handleSigint := args.Base().HandleSigint
+	r := workers.NewRunner(workers.RunnerConfig{HandleInterrupt: &handleSigint})
+	r.AddWorkers(ctx, worker)
+
+	events.On(t.Events(), transport.EventClientConnected, func(context.Context, any) {
+		slog.Info("Client connected")
+		convo.AddMessage(frames.Message{Role: frames.RoleDeveloper, Text: "Please introduce yourself to the user."})
+		worker.QueueFrames([]frames.Frame{frames.NewLLMRunFrame()})
+	})
+
+	events.On(t.Events(), transport.EventClientDisconnected, func(ctx context.Context, _ any) {
+		slog.Info("Client disconnected")
+		r.Cancel(ctx, "client disconnected")
+	})
+
+	return r.Run(ctx, workers.RunOptions{})
+}
+
+func bot(ctx context.Context, args runner.Arguments) error {
+	t, err := runner.CreateTransport(ctx, args, transportParams)
+	if err != nil {
+		return err
+	}
+	return runBot(ctx, t, args)
+}
+
+func main() {
+	runner.Main(bot)
+}
