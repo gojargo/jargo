@@ -2,9 +2,9 @@
 // channel: a JSON message format and a processor that completes the client
 // handshake and reports pipeline events to the client.
 //
-// RTVI (Real-Time Voice Interface) is the protocol the Pipecat client SDKs
-// speak, so a jargo server interoperates with existing RTVI web, iOS and
-// Android clients. Messages are JSON objects of the form
+// RTVI (Real-Time Voice Interface) is the protocol the RTVI client SDKs speak,
+// so a jargo server interoperates with existing RTVI web, iOS and Android
+// clients. Messages are JSON objects of the form
 // {"label":"rtvi-ai","type":...,"id":...,"data":...} exchanged over the WebRTC
 // data channel.
 //
