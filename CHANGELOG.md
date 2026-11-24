@@ -205,6 +205,20 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `spec.Versions`, `spec.Document`, `spec.Released` and `spec.ContractSHA256`
   read them, and the conformance tests check the server's messages and its
   handling of client messages against them.
+- **Rime Prism speech-to-speech.** `realtime.New` in `provider/rime/realtime`
+  holds a Rime Prism conversation over one WebSocket, with tools (including
+  intermediate results), runtime settings updates such as handoffs, Prism tool
+  fillers, speech speed, interruption rules (a minimum word count, interrupting
+  phrases, and acknowledgment phrases that do not interrupt), token usage
+  metrics, and optional audio discard (`PlaybackDiscard`). To ask for a reply
+  mid-conversation, push an `LLMMessagesAppendFrame` with `RunLLM` set. The
+  examples `realtime-rime`, `realtime-rime-async-tool` and
+  `realtime-rime-billing-handoff` show it.
+- **A service can apply its own settings updates.** A generator implementing
+  `llm.SettingsUpdateDeferrer` receives every `LLMUpdateSettingsFrame` meant
+  for it and applies it later with `llm.Base.ApplySettingsUpdate`;
+  `Base.SettingsState` and `Base.RestoreSettingsState` put the settings back
+  when the provider refuses an update.
 
 ### Changed
 
@@ -279,6 +293,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   The bot-turn aggregator uses `turns.FilterIncompleteUserTurnStrategies`, so
   the bot's turn ends once the persona's LLM marks it complete rather than at
   the end of each sentence. Scripted runs keep the default strategies.
+- **Rime STT reports exhausted credits as a quota error and stays usable**, so
+  it recovers once credits are added.
 
 ### Deprecated
 
