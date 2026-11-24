@@ -73,6 +73,15 @@ func TestUnaskedConfirmationIsIgnored(t *testing.T) {
 	}
 }
 
+// pushedFrame is the frame a push event carries.
+func pushedFrame(args []any) frames.Frame {
+	if len(args) == 0 {
+		return nil
+	}
+	f, _ := args[0].(frames.Frame)
+	return f
+}
+
 // pushedFrames records what s pushes, below its own PushFrame, so the handling
 // of a finalize there still runs.
 func pushedFrames(s *StreamService) func() []frames.Frame {

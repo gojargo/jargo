@@ -27,6 +27,13 @@ func TestProviderName(t *testing.T) {
 		{"BedrockLLM", "LLM", "aws.bedrock"},
 		{"XAILLM", "LLM", "x_ai"},
 		{"MistralLLM", "LLM", "mistral_ai"},
+		// The realtime services, which name no kind.
+		{"OpenAIRealtime", "LLM", "openai"},
+		{"AzureRealtime", "LLM", "azure.ai.openai"},
+		{"GeminiLive", "LLM", "gcp.gemini"},
+		{"GoogleVertexLive", "LLM", "gcp.vertex_ai"},
+		{"NovaSonic", "LLM", "aws.bedrock"},
+		{"XAIRealtime", "LLM", "x_ai"},
 	}
 	for _, c := range cases {
 		if got := tracing.ProviderName(c.service, c.kind); got != c.want {
@@ -130,14 +137,16 @@ func TestSetSTTAttributesOptionalCounts(t *testing.T) {
 }
 
 // TestSetGeminiLiveAttributes checks the shape of a Gemini Live operation span:
-// the provider is fixed, the operation is named twice (once under the standard
-// key and once under the service one), and the toolset is summarized.
+// the provider follows the service, the operation is named twice (once under
+// the standard key and once under the service one), and the toolset is
+// summarized.
 func TestSetGeminiLiveAttributes(t *testing.T) {
 	isInput := true
 	attrs := stringAttrs(t, func(ctx context.Context) {
 		tracing.SetGeminiLiveAttributes(spanOf(ctx), tracing.GeminiLiveAttributes{
+			Service:           "GeminiLive",
 			Model:             "gemini-live-2.5",
-			Operation:         "llm_response",
+			Operation:         "llm_setup",
 			VoiceID:           "Charon",
 			Modalities:        "AUDIO",
 			Tools:             []string{"book_table", "", "cancel"},
@@ -155,8 +164,8 @@ func TestSetGeminiLiveAttributes(t *testing.T) {
 	want := map[string]string{
 		"gen_ai.provider.name":           "gcp.gemini",
 		"gen_ai.request.model":           "gemini-live-2.5",
-		"gen_ai.operation.name":          "llm_response",
-		"service.operation":              "llm_response",
+		"gen_ai.operation.name":          "llm_setup",
+		"service.operation":              "llm_setup",
 		"voice_id":                       "Charon",
 		"modalities":                     "AUDIO",
 		"transcript":                     "a coffee please",
@@ -177,35 +186,31 @@ func TestSetGeminiLiveAttributes(t *testing.T) {
 }
 
 // TestSetOpenAIRealtimeAttributes checks the shape of a Realtime operation span,
-// including the function calls a turn requested and the session's grouped
+// including the provider its service gives it and the session's grouped
 // turn-detection configuration.
 func TestSetOpenAIRealtimeAttributes(t *testing.T) {
 	attrs := stringAttrs(t, func(ctx context.Context) {
 		tracing.SetOpenAIRealtimeAttributes(spanOf(ctx), tracing.OpenAIRealtimeAttributes{
-			Model:         "gpt-realtime",
-			Operation:     "llm_response",
-			FunctionCalls: []string{"book_table", "send_confirmation"},
+			Service:   "AzureRealtime",
+			Model:     "gpt-realtime",
+			Operation: "llm_setup",
 			SessionProperties: map[string]any{
 				"voice":          "alloy",
 				"turn_detection": map[string]any{"type": "server_vad", "threshold": 0.5},
 			},
-			Extra: map[string]any{"response.status": "completed", "response.output_items": 3},
+			Extra: map[string]any{"instructions": "Be brief."},
 		})
 	})
 
 	want := map[string]string{
-		"gen_ai.provider.name":             "openai",
+		"gen_ai.provider.name":             "azure.ai.openai",
 		"gen_ai.request.model":             "gpt-realtime",
-		"gen_ai.operation.name":            "llm_response",
-		"service.operation":                "llm_response",
-		"function_calls.count":             "2",
-		"function_calls.first_name":        "book_table",
-		"function_calls.all_names":         "book_table,send_confirmation",
+		"gen_ai.operation.name":            "llm_setup",
+		"service.operation":                "llm_setup",
 		"session.voice":                    "alloy",
 		"session.turn_detection.type":      "server_vad",
 		"session.turn_detection.threshold": "0.5",
-		"response.status":                  "completed",
-		"response.output_items":            "3",
+		"instructions":                     "Be brief.",
 	}
 	for k, v := range want {
 		if attrs[k] != v {

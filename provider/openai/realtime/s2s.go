@@ -24,10 +24,7 @@ import (
 	"github.com/gojargo/jargo/processor/turns"
 	"github.com/gojargo/jargo/provider/openai/realtime/events"
 	"github.com/gojargo/jargo/service/llm"
-	"github.com/gojargo/jargo/service/settings"
-	"github.com/gojargo/jargo/service/stt"
 	"github.com/gojargo/jargo/service/wsutil"
-	"github.com/gojargo/jargo/telemetry/tracing"
 )
 
 // Service is the Realtime speech-to-speech processor.
@@ -201,17 +198,12 @@ func NewWithConnector(name string, conn Connector, cfg Config) *Service {
 	}
 	// A model service, so it keeps the tool registry and the machinery that runs
 	// what the model calls. It generates continuously rather than being run by a
-	// conversation arriving, which is what the option says.
-	s.Base = llm.New(name, s, llm.WithContinuousGeneration())
+	// conversation arriving, which is what the first option says. Its replies
+	// and function calls are traced from the frames it pushes.
+	s.Base = llm.New(name, s, llm.WithContinuousGeneration(), llm.WithRealtimeTracing())
 	s.SetModel(cfg.Model)
 	s.SetSystemInstruction(cfg.Instructions)
 	s.audioPaused.Store(cfg.StartAudioPaused)
-	// The user's speech, as the session transcribes it, is traced like a
-	// transcription service's.
-	stt.TraceTranscripts(s.Base.Base.Base, func() tracing.STTAttributes {
-		given, _ := settings.Given(s.live)
-		return tracing.STTAttributes{Service: s.TypeName(), Model: s.model(), Settings: given}
-	})
 	s.Events().Register(EventConversationItemCreated, false)
 	s.Events().Register(EventConversationItemUpdated, false)
 	return s
@@ -607,8 +599,6 @@ func (s *Service) handleFunctionCallCancel(ctx context.Context, f *frames.Functi
 // session with the conversation, and configures it again now that the
 // conversation's instruction and tools are known.
 func (s *Service) createResponse(ctx context.Context) {
-	ctx, end := s.traceRequest(ctx)
-	defer end()
 	s.mu.Lock()
 	if !s.sessionReady {
 		s.runWhenReady = true
@@ -1331,16 +1321,14 @@ func (s *Service) runToolCall(ctx context.Context, ev *events.ServerEvent) {
 	}
 }
 
-// reportUsage records the completed turn and the token accounting it was billed
-// on. The accounting arrives with the response it belongs to, so the span
-// covering that response is opened here and the usage recorded against it.
+// reportUsage reports the token accounting the completed response was billed
+// on. It arrives with the response it belongs to and is reported before the
+// response is closed.
 func (s *Service) reportUsage(ctx context.Context, ev *events.ServerEvent) {
-	spanCtx, end := s.traceResponse(ctx, ev.Response)
-	defer end()
-	if ev.Response == nil || ev.Response.Usage == nil || !s.UsageMetricsEnabled() {
+	if ev.Response == nil || ev.Response.Usage == nil {
 		return
 	}
-	_ = s.PushTokenUsage(spanCtx, tokenUsage(ev.Response.Usage))
+	_ = s.StartLLMUsageMetrics(ctx, tokenUsage(ev.Response.Usage))
 }
 
 // CanGenerateMetrics reports that this service times the conversation and reports

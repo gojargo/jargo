@@ -116,7 +116,7 @@ func New(cfg Config) *Service {
 	// A model service, so it keeps the tool registry and the machinery that runs
 	// what the model calls. It generates continuously rather than being run by a
 	// conversation arriving, which is what the option says.
-	s.Base = llm.New("XAIRealtime", s, llm.WithContinuousGeneration())
+	s.Base = llm.New("XAIRealtime", s, llm.WithContinuousGeneration(), llm.WithRealtimeTracing())
 	s.SetModel(cfg.Model)
 	return s
 }
@@ -1212,12 +1212,9 @@ func (s *Service) finishResponse(ctx context.Context, ev serverEvent) {
 }
 
 // reportUsage forwards the token accounting on a response.done event to metrics
-// and telemetry, when usage metrics are enabled. xAI reports it at the top level
+// and telemetry. xAI reports it at the top level
 // on some responses and inside the response object on others.
 func (s *Service) reportUsage(ctx context.Context, ev serverEvent) {
-	if !s.UsageMetricsEnabled() {
-		return
-	}
 	u := ev.Usage
 	if u == nil && ev.Response != nil {
 		u = ev.Response.Usage
@@ -1225,7 +1222,7 @@ func (s *Service) reportUsage(ctx context.Context, ev serverEvent) {
 	if u == nil || u.TotalTokens == 0 {
 		return
 	}
-	_ = s.PushTokenUsage(ctx, u.tokenUsage())
+	_ = s.StartLLMUsageMetrics(ctx, u.tokenUsage())
 }
 
 // CanGenerateMetrics reports that this service times the conversation and reports

@@ -24,9 +24,7 @@ import (
 	"github.com/gojargo/jargo/provider/google/gemini"
 	"github.com/gojargo/jargo/service/llm"
 	"github.com/gojargo/jargo/service/settings"
-	"github.com/gojargo/jargo/service/stt"
 	"github.com/gojargo/jargo/service/wsutil"
-	"github.com/gojargo/jargo/telemetry/tracing"
 	textutil "github.com/gojargo/jargo/utils/text"
 	"github.com/google/uuid"
 )
@@ -100,12 +98,6 @@ type Service struct {
 	// botText is the text the model has answered with so far, in the text
 	// modality; a response with none was spoken. Guarded by mu.
 	botText string
-	// spokenText is the transcript of what the model has said so far in the
-	// turn, which the turn's span reports. Guarded by mu.
-	spokenText string
-	// heldMessage is the message that completed a held turn, which closes it
-	// when the hold ends. Guarded by mu.
-	heldMessage *serverMessage
 	// searchText is the answer so far, which a web search it drew on is
 	// reported against, and grounding the search the model reported during the
 	// turn, reported when the turn completes. Guarded by mu.
@@ -263,19 +255,14 @@ func NewWithConnector(name string, conn Connector, cfg Config) *Service {
 	}
 	// A model service, so it keeps the tool registry and the machinery that runs
 	// what the model calls. It generates continuously rather than being run by a
-	// conversation arriving, which is what the option says.
-	s.Base = llm.New(name, s, llm.WithContinuousGeneration())
+	// conversation arriving, which is what the first option says. Its replies
+	// and function calls are traced from the frames it pushes.
+	s.Base = llm.New(name, s, llm.WithContinuousGeneration(), llm.WithRealtimeTracing())
 	s.SetModel(cfg.Model)
 	// The configured instruction is the base prompt the base composes the
 	// instruction the session is set up with from.
 	s.SetSystemInstruction(cfg.Instructions)
 	s.audioPaused.Store(cfg.StartAudioPaused)
-	// The user's speech, as the session transcribes it, is traced like a
-	// transcription service's.
-	stt.TraceTranscripts(s.Base.Base.Base, func() tracing.STTAttributes {
-		given, _ := settings.Given(s.live)
-		return tracing.STTAttributes{Service: s.TypeName(), Model: s.model(), Settings: given}
-	})
 	return s
 }
 
@@ -1162,7 +1149,6 @@ func (s *Service) sendToolResult(ctx context.Context, toolCallID, result string)
 // draw on if the conversation turns that way.
 func (s *Service) sendToolResultAs(ctx context.Context, toolCallID, name, result string, final, spoken bool) {
 	payload := geminiadapter.FunctionResponseDict(result)
-	s.traceToolResult(ctx, toolCallID, name, payload)
 	slog.DebugContext(ctx, "sending a tool result to the live session",
 		"service", s.Name(), "tool_call_id", toolCallID, "function", name)
 	response := map[string]any{
@@ -1269,7 +1255,6 @@ func (s *Service) runToolCalls(ctx context.Context, tc *toolCall) {
 	if tc == nil || len(tc.FunctionCalls) == 0 {
 		return
 	}
-	s.traceToolCall(ctx, tc.FunctionCalls)
 	s.mu.Lock()
 	convo := s.convo
 	s.mu.Unlock()
@@ -1724,26 +1709,25 @@ func (s *Service) handleServerContent(ctx context.Context, msg serverMessage, id
 	if msg.UsageMetadata == nil {
 		slog.WarnContext(ctx, "the turn completed without usage metadata", "service", s.Name())
 	}
+	// Usage goes first, so the reply it belongs to is still open when it is
+	// reported.
+	if msg.UsageMetadata != nil {
+		s.handleUsage(ctx, msg)
+	}
 	if statusKnown && !idle {
 		// The model is reasoning in the background, so this closes one chunk of
 		// output and not the reply.
-		s.holdTurn(ctx, &msg)
+		s.holdTurn(ctx)
 	} else {
 		// This one ends the reply, so it stands in for anything still held.
 		s.discardHeldTurn()
-		s.handleTurnComplete(ctx, &msg)
-	}
-	if msg.UsageMetadata != nil {
-		s.handleUsage(ctx, msg)
+		s.handleTurnComplete(ctx)
 	}
 }
 
 // handleUsage reports the accounting that arrives with the turn it belongs to.
-// The turn's span records it too, from the message that completed the turn.
 func (s *Service) handleUsage(ctx context.Context, msg serverMessage) {
-	if s.UsageMetricsEnabled() {
-		_ = s.PushTokenUsage(ctx, msg.UsageMetadata.tokenUsage())
-	}
+	_ = s.StartLLMUsageMetrics(ctx, msg.UsageMetadata.tokenUsage())
 }
 
 // handleInterruption drops what the interruption makes moot: a held turn, a
@@ -1845,15 +1829,13 @@ func (s *Service) handleModelTurn(ctx context.Context, parts []part, grounding *
 
 // handleTurnComplete closes the model's response: a spoken one with a
 // TTSStoppedFrame as well.
-func (s *Service) handleTurnComplete(ctx context.Context, msg *serverMessage) {
+func (s *Service) handleTurnComplete(ctx context.Context) {
 	s.mu.Lock()
-	text, spoken := s.botText, s.spokenText
-	s.botText, s.spokenText = "", ""
+	text := s.botText
+	s.botText = ""
 	grounding, searchText := s.grounding, s.searchText
 	s.grounding, s.searchText = nil, ""
 	s.mu.Unlock()
-	end := s.traceResponse(ctx, msg, text, spoken)
-	defer end()
 	if grounding != nil {
 		s.pushGrounding(ctx, grounding, searchText)
 	}
@@ -2024,7 +2006,6 @@ func (s *Service) handleOutputTranscription(ctx context.Context, text string, gr
 	if grounding != nil {
 		s.grounding = grounding
 	}
-	s.spokenText += text
 	s.mu.Unlock()
 	s.startResponse(ctx, true)
 	llmText := frames.NewLLMTextFrame(text)
@@ -2045,10 +2026,9 @@ const heldTurnTimeout = 30 * time.Second
 
 // holdTurn keeps the bot's turn open past a completed generation, because the
 // model is still reasoning in the background and has more to say.
-func (s *Service) holdTurn(ctx context.Context, msg *serverMessage) {
+func (s *Service) holdTurn(ctx context.Context) {
 	s.mu.Lock()
 	s.turnHeld = true
-	s.heldMessage = msg
 	s.mu.Unlock()
 	s.restartHeldTurnWatchdog(ctx)
 	slog.DebugContext(ctx, "holding the bot's turn open while the model is still working",
@@ -2085,14 +2065,14 @@ func (s *Service) stopHeldTurnWatchdogLocked() {
 // fires closes the turn once between them.
 func (s *Service) completeHeldTurn(ctx context.Context) {
 	s.mu.Lock()
-	held, msg := s.turnHeld, s.heldMessage
-	s.turnHeld, s.heldMessage = false, nil
+	held := s.turnHeld
+	s.turnHeld = false
 	s.stopHeldTurnWatchdogLocked()
 	s.mu.Unlock()
 	if !held {
 		return
 	}
-	s.handleTurnComplete(ctx, msg)
+	s.handleTurnComplete(ctx)
 }
 
 // discardHeldTurn drops a held turn without closing it, for an interruption,
@@ -2101,7 +2081,6 @@ func (s *Service) discardHeldTurn() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.turnHeld = false
-	s.heldMessage = nil
 	s.stopHeldTurnWatchdogLocked()
 }
 

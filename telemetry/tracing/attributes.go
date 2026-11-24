@@ -17,14 +17,21 @@ import (
 var providerNames = map[string]string{
 	// AWS
 	"BedrockLLM": "aws.bedrock",
+	"NovaSonic":  "aws.bedrock",
 	// Azure
 	"AzureOpenAILLM": "azure.ai.openai",
+	"AzureRealtime":  "azure.ai.openai",
 	// Google
-	"GoogleLLM":       "gcp.gemini",
-	"GoogleVertexLLM": "gcp.vertex_ai",
+	"GoogleLLM":        "gcp.gemini",
+	"GoogleVertexLLM":  "gcp.vertex_ai",
+	"GeminiLive":       "gcp.gemini",
+	"GoogleVertexLive": "gcp.vertex_ai",
+	// OpenAI
+	"OpenAIRealtime": "openai",
 	// Others
-	"XAILLM":     "x_ai",
-	"MistralLLM": "mistral_ai",
+	"XAILLM":      "x_ai",
+	"XAIRealtime": "x_ai",
+	"MistralLLM":  "mistral_ai",
 }
 
 // ProviderName is the gen_ai.provider.name value for a service, derived from
@@ -334,9 +341,13 @@ func toolNames(tools []string) (string, bool) {
 
 // GeminiLiveAttributes describes one operation of a Gemini Live session.
 type GeminiLiveAttributes struct {
+	// Service is the session's service name, which the provider name is
+	// derived from.
+	Service string
 	// Model is the model identifier the session runs against.
 	Model string
-	// Operation names what the span covers (setup, a response, a tool call).
+	// Operation names what the span covers. The session's setup is the one
+	// operation recorded this way.
 	Operation string
 	// VoiceID is the voice the model speaks in. Empty leaves the attribute off.
 	VoiceID string
@@ -370,7 +381,7 @@ type GeminiLiveAttributes struct {
 // SetGeminiLiveAttributes records one Gemini Live operation on its span.
 func SetGeminiLiveAttributes(span trace.Span, a GeminiLiveAttributes) {
 	std := []attribute.KeyValue{
-		attribute.String("gen_ai.provider.name", "gcp.gemini"),
+		attribute.String("gen_ai.provider.name", ProviderName(a.Service, "LLM")),
 		attribute.String("gen_ai.request.model", a.Model),
 		attribute.String("gen_ai.operation.name", a.Operation),
 		attribute.String("service.operation", a.Operation),
@@ -412,9 +423,13 @@ func SetGeminiLiveAttributes(span trace.Span, a GeminiLiveAttributes) {
 
 // OpenAIRealtimeAttributes describes one operation of an OpenAI Realtime session.
 type OpenAIRealtimeAttributes struct {
+	// Service is the session's service name, which the provider name is
+	// derived from.
+	Service string
 	// Model is the model identifier the session runs against.
 	Model string
-	// Operation names what the span covers (setup, a request, a response).
+	// Operation names what the span covers. The session's setup is the one
+	// operation recorded this way.
 	Operation string
 	// SessionProperties are the session configuration, recorded under session.*.
 	// A grouped property is expanded one level.
@@ -424,16 +439,10 @@ type OpenAIRealtimeAttributes struct {
 	// TranscriptIsInput reports whether the transcript is the user's speech
 	// rather than the model's. Nil leaves the attribute off.
 	TranscriptIsInput *bool
-	// ContextMessages is the serialized conversation sent to the model, recorded
-	// as the span's input. Empty leaves the attribute off.
-	ContextMessages string
 	// Tools are the names of the tools offered, one entry per tool.
 	Tools []string
 	// ToolsSerialized is the full tool definitions. Empty leaves them off.
 	ToolsSerialized string
-	// FunctionCalls are the names of the calls the model requested, in the order
-	// it requested them.
-	FunctionCalls []string
 	// AudioDataSize is the size of the audio payload in bytes. Nil leaves the
 	// attribute off.
 	AudioDataSize *int
@@ -444,7 +453,7 @@ type OpenAIRealtimeAttributes struct {
 // SetOpenAIRealtimeAttributes records one Realtime operation on its span.
 func SetOpenAIRealtimeAttributes(span trace.Span, a OpenAIRealtimeAttributes) {
 	std := []attribute.KeyValue{
-		attribute.String("gen_ai.provider.name", "openai"),
+		attribute.String("gen_ai.provider.name", ProviderName(a.Service, "LLM")),
 		attribute.String("gen_ai.request.model", a.Model),
 		attribute.String("gen_ai.operation.name", a.Operation),
 		attribute.String("service.operation", a.Operation),
@@ -454,9 +463,6 @@ func SetOpenAIRealtimeAttributes(span trace.Span, a OpenAIRealtimeAttributes) {
 		if a.TranscriptIsInput != nil {
 			std = append(std, attribute.Bool("transcript.is_input", *a.TranscriptIsInput))
 		}
-	}
-	if a.ContextMessages != "" {
-		std = append(std, attribute.String("input", a.ContextMessages))
 	}
 	if a.AudioDataSize != nil {
 		std = append(std, attribute.Int("audio.data_size_bytes", *a.AudioDataSize))
@@ -471,15 +477,6 @@ func SetOpenAIRealtimeAttributes(span trace.Span, a OpenAIRealtimeAttributes) {
 	}
 	if a.ToolsSerialized != "" {
 		std = append(std, attribute.String("tools.definitions", a.ToolsSerialized))
-	}
-	if len(a.FunctionCalls) > 0 {
-		std = append(std, attribute.Int("function_calls.count", len(a.FunctionCalls)))
-		if first := a.FunctionCalls[0]; first != "" {
-			std = append(std, attribute.String("function_calls.first_name", first))
-		}
-		if names, ok := toolNames(a.FunctionCalls); ok {
-			std = append(std, attribute.String("function_calls.all_names", names))
-		}
 	}
 	setStaged(span, std, nested("session.", a.SessionProperties), prefixed("", a.Extra))
 }

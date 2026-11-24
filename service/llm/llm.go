@@ -401,6 +401,10 @@ type Base struct {
 	// continuousGeneration says the service generates on its own rather than
 	// being run by a conversation arriving. See WithContinuousGeneration.
 	continuousGeneration bool
+	// realtime traces the replies and function calls of a realtime service
+	// from the frames it pushes. Nil unless the service asked for it. See
+	// WithRealtimeTracing.
+	realtime *realtimeTracer
 	// warnedNoTurnFrames keeps the report that a realtime service emits no turn
 	// frames to one.
 	warnedNoTurnFrames atomic.Bool
@@ -666,7 +670,14 @@ func (b *Base) Cleanup(ctx context.Context) error {
 	// for, so nothing is mid-call against a connection being closed.
 	b.runToolCleanups(ctx)
 	b.cleanupExtensions(ctx)
-	return b.Base.Cleanup(ctx)
+	if err := b.Base.Cleanup(ctx); err != nil {
+		return err
+	}
+	// A reply or a function call still being traced is closed with the service.
+	if b.realtime != nil && b.TracingEnabled() {
+		b.realtime.cleanup()
+	}
+	return nil
 }
 
 // SetModel records the model id the service generates with, reported as the
@@ -1367,11 +1378,19 @@ func (b *Base) processIncoming(ctx context.Context, f frames.Frame, dir processo
 // An output gate, when one is set, may drop the frame before any of this. Past
 // the extensions, the frames of a response are stamped with the output
 // configuration in effect and the frame goes past the speculation gate.
+//
+// On a traced realtime service the frame is read once it has been pushed, which
+// is what its llm_response and llm_tool_call spans follow.
 func (b *Base) PushFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
 	if b.outputGate != nil && !b.outputGate.AllowPush(f) {
+		b.traceRealtimeFrame(f, dir)
 		return nil
 	}
-	return b.pushThroughExtensions(ctx, f, dir, b.Extensions())
+	if err := b.pushThroughExtensions(ctx, f, dir, b.Extensions()); err != nil {
+		return err
+	}
+	b.traceRealtimeFrame(f, dir)
+	return nil
 }
 
 // gateProcess runs one frame past the speculation gate, returning what it

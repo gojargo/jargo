@@ -141,7 +141,7 @@ func New(cfg Config) *Service {
 	// A model service, so it keeps the tool registry and the machinery that runs
 	// what the model calls. It generates continuously rather than being run by a
 	// conversation arriving, which is what the option says.
-	s.Base = llm.New("NovaSonic", s, llm.WithContinuousGeneration())
+	s.Base = llm.New("NovaSonic", s, llm.WithContinuousGeneration(), llm.WithRealtimeTracing())
 	s.SetModel(cfg.Model)
 	return s
 }
@@ -1111,7 +1111,7 @@ func (s *Service) handleUsage(ctx context.Context, raw json.RawMessage) error {
 	if prompt == 0 && completion == 0 {
 		return nil
 	}
-	_ = s.PushTokenUsage(ctx, frames.LLMTokenUsage{
+	_ = s.StartLLMUsageMetrics(ctx, frames.LLMTokenUsage{
 		PromptTokens:      prompt,
 		CompletionTokens:  completion,
 		TotalTokens:       prompt + completion,
