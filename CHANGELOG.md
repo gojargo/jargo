@@ -197,6 +197,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   predicted end of turn while eager end of turn is on, and returns nil
   otherwise, leaving the recommendation to the service. Deepgram Flux and
   Cartesia turns use it.
+- **The RTVI protocol specification ships with jargo.** `processor/rtvi/spec`
+  embeds an AsyncAPI 3.0 document for each protocol version (2.3.0 and 2.4.0)
+  listing every message a client and the server send, each field's schema, an
+  example, the observer setting that turns it on, the lowest client version
+  that receives it, and the rules the server follows across messages.
+  `spec.Versions`, `spec.Document`, `spec.Released` and `spec.ContractSHA256`
+  read them, and the conformance tests check the server's messages and its
+  handling of client messages against them.
 
 ### Changed
 
