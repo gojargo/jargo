@@ -188,6 +188,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   function calls from the frames it pushes, so a service needs no tracing code
   of its own. **`llm.Base.StartLLMUsageMetrics`** reports a usage, pushing the
   metrics frame when usage metrics are on.
+- **Flows examples configured from YAML.** `examples/flows/yaml` holds
+  `hello_world`, `food_ordering`, `restaurant_reservation` and
+  `podcast_interview`, each a `flow.yaml` joined to the tools in its
+  `handlers.go`, with session facts such as the restaurant name filled into the
+  prompts from the manager's state.
+- **`turns.EagerUserTurnStrategies`** builds the strategies that answer a
+  predicted end of turn while eager end of turn is on, and returns nil
+  otherwise, leaving the recommendation to the service. Deepgram Flux and
+  Cartesia turns use it.
 
 ### Changed
 
@@ -246,6 +255,22 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - **A YAML `!include` that forms a cycle, or a file that includes itself, is an
   error naming the chain**, in eval scenarios and flow configs alike. The fixed
   include depth limit is gone.
+- **Breaking: the RTVI client keeps the bot's messages raw.**
+  `rtviclient.Serializer.Deserialize` returns every RTVI message from the bot,
+  `bot-ready` and unknown types included, as an `InputTransportMessageFrame`
+  instead of turning it into pipeline frames, so the bot's reports keep their
+  order and are never taken for the client's own speech or transcripts.
+  `RTVITransport`'s input is the new `wsclient.RTVIInputTransport`, which
+  pushes them downstream only; `wsclient.InputDriver` requires
+  `PushMessageFrame`. In `eval`, `EventStream.RTVIMessageToEvent` replaces
+  `FrameToEvent`, `FunctionCallCancelFrame` and `NewFunctionCallCancelFrame`
+  are removed, and `ClientInputTransport` embeds `wsclient.RTVIInputTransport`.
+  Handlers of `wsclient.EventBotReady` now run inline in the read loop, before
+  the bot's next message, and must return quickly.
+- **In an audio simulation the persona waits for the bot to finish its reply.**
+  The bot-turn aggregator uses `turns.FilterIncompleteUserTurnStrategies`, so
+  the bot's turn ends once the persona's LLM marks it complete rather than at
+  the end of each sentence. Scripted runs keep the default strategies.
 
 ### Deprecated
 
@@ -280,6 +305,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - **The `stt` spans of Gemini Live and OpenAI Realtime no longer outlast their
   `turn` span** carrying `stt.incomplete=true`: speech-to-speech services emit
   no `stt` spans any more.
+- **A scripted turn no longer times out when the user interrupts the bot.** An
+  interruption dropped the queue of unread events, including the user's turn
+  starting that the bot reports just ahead of `bot-interrupted`; it now drops
+  only the bot's unfinished response.
+- **The judge hears the bot's whole goodbye in audio simulations.** When the
+  bot closes the connection, the driver waits up to `BotEndedWait` (5 s) for
+  the bot's last words to close into a turn. When the persona hangs up, the
+  wait for the bot's closing reply (`ClosingReplyWait`) runs only while neither
+  side is speaking, and starts over when one stops.
 
 ## [0.7.0] - 2026-11-20
 
