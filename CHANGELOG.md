@@ -162,6 +162,32 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   timeout, and an error names the request's `x-zm-trackingid`.
   `eval.ZoomClassifier`, registered as `evals.judges.zoom_classifier`, judges
   evals with it.
+- **Flows can be described as data.** A `flows.FlowConfig` holds a conversation
+  flow with no code in it: the nodes, what each one says, the tools each offers
+  and where each tool leads. Load one with `FlowConfigFromFile`,
+  `FlowConfigFromYAML`, `FlowConfigFromJSON` or `FlowConfigFromMap`; it is
+  validated on load (the initial node exists, every transition names a node,
+  tool names are unique, every action is well formed). `flows.NewFlow(config,
+  handlers...)` joins it to the application's `flows.Handlers`, the
+  `NodeFunction`s and `ActionHandler`s the config names, and hands ready-made
+  nodes to the manager through `Flow.InitialNode`, `Flow.Node` and
+  `Flow.GlobalFunctions`. Every reference the handlers do not satisfy is
+  reported at once in a `*flows.FlowReferenceError`. A tool returns
+  `TransitionInYAML` and the config's `transition_to` decides the next node, by
+  name or by a field of the tool's result; a `transition_only` function needs
+  no code at all. `flows/flow_config.schema.json` describes the format for
+  editors.
+- **Subflows.** A set of nodes written once under a config's `flows` is run by
+  any node that names it as its `flow`, with `return_to` saying where the
+  subflow's `return` leads. A subflow's nodes are built once for each node that
+  runs it, named `<node>.<subflow node>`, and report the running node as their
+  `Parent`.
+- **`utils/yamlutil`**, the YAML loader with `!include` that the eval scenarios
+  and the flow configs share.
+- **`llm.WithRealtimeTracing`** traces a speech-to-speech service's replies and
+  function calls from the frames it pushes, so a service needs no tracing code
+  of its own. **`llm.Base.StartLLMUsageMetrics`** reports a usage, pushing the
+  metrics frame when usage metrics are on.
 
 ### Changed
 
@@ -198,6 +224,28 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   (seeded from `Config.Version`) and a local `speaker_format`; changing only
   `speaker_format` no longer reopens the session.
 - **The RTVI protocol version is now 2.4.0.**
+- **BREAKING: speech-to-speech services emit different tracing spans**, and
+  `llm_response` has a new meaning: it covers a whole reply instead of one
+  message handler. Applies to OpenAI Realtime, Azure Realtime, Gemini Live
+  (also on Vertex AI), Nova Sonic and xAI Realtime; the last two were not
+  traced before. `llm_response` is one span per reply, inside the `turn` span,
+  from the end of the user's speech to the end of the reply (or the user's
+  speech onset when interrupted), with `input`, `output`, the modalities,
+  `gen_ai.output.type`, the TTFB, token usage including the audio breakdown,
+  and `llm.interrupted`. `llm_tool_call` is one span per function call with
+  `gen_ai.operation.name=execute_tool` and the `gen_ai.tool.*` attributes,
+  which replace Gemini Live's `tool.*` ones. The `stt` spans of these services,
+  OpenAI Realtime's `llm_request` and Gemini Live's `llm_tool_result` are
+  removed; `llm_setup` stays, and Gemini Live's now records the service's
+  tools. `stt.TraceTranscripts`, `llm.Base.CurrentTTFB` and
+  `tracing.OpenAIRealtimeAttributes.ContextMessages` and `.FunctionCalls` are
+  removed, and `tracing.GeminiLiveAttributes` and
+  `tracing.OpenAIRealtimeAttributes` gain `Service`, which names the provider.
+- **Nova Sonic pushes its usage metrics only when usage metrics are enabled**,
+  as the other services do.
+- **A YAML `!include` that forms a cycle, or a file that includes itself, is an
+  error naming the chain**, in eval scenarios and flow configs alike. The fixed
+  include depth limit is gone.
 
 ### Deprecated
 
@@ -229,6 +277,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   connect: raw text, backchannels and expression parts were sent as if to the
   oldest client. Until `client-ready`, the server now sends messages as it does
   to a client of its own protocol version.
+- **The `stt` spans of Gemini Live and OpenAI Realtime no longer outlast their
+  `turn` span** carrying `stt.incomplete=true`: speech-to-speech services emit
+  no `stt` spans any more.
 
 ## [0.7.0] - 2026-11-20
 
