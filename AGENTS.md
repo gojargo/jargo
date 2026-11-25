@@ -90,7 +90,11 @@ with the same name collide in user code. So:
   library one (`context`, `errors`).
 - No two public packages with the same name. Code that serves only one provider
   lives in that provider's package or under `internal/`.
-- Package names are short, lower-case and singular, and say what they provide.
+- Package names are short and lower-case, and say what they provide. Prefer
+  the singular, except where the singular is a name users want for their own
+  variables: `workers`, `observers`, `frames` and `processor/aggregators` stay
+  plural so `worker := pipeline.NewWorker(...)` still reads, as the standard
+  library keeps `strings`, `bytes` and `errors`.
 - No stutter: an identifier does not repeat its package name (`llm.Service`, not
   `llm.LLMService`). Frame types are the exception and keep their upstream names
   (`frames.TranscriptionFrame`), since users search for them.
