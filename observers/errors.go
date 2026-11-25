@@ -35,11 +35,6 @@ type ErrorEvent struct {
 
 // ErrorConfig configures an Errors observer.
 type ErrorConfig struct {
-	// MaxFrames is unused.
-	//
-	// Deprecated: the observer is told about each frame once, so it keeps no
-	// window of the frames it has seen.
-	MaxFrames int
 	// Now reads the current time. Nil uses time.Now. Supplying one lets a test
 	// place failures without waiting.
 	Now func() time.Time

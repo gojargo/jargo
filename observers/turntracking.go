@@ -11,11 +11,6 @@ import (
 
 // TurnTrackingConfig configures a TurnTracking observer.
 type TurnTrackingConfig struct {
-	// MaxFrames is unused.
-	//
-	// Deprecated: the observer is told about each frame once, so it keeps no
-	// window of the frames it has seen.
-	MaxFrames int
 	// TurnEndTimeout is how long after the bot stops speaking a turn ends. Nil
 	// uses 2.5s, and zero ends it as soon as the bot stops. The delay lets a turn
 	// survive a brief gap between bot utterances (an HTTP TTS boundary, a

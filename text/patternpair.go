@@ -34,13 +34,6 @@ const (
 // how text is grouped by default, which cannot also name a pattern.
 var ErrReservedTextType = errors.New("text type is reserved")
 
-// ErrReservedAggregationType is the former name of ErrReservedTextType.
-//
-// Deprecated: use ErrReservedTextType.
-//
-//nolint:gochecknoglobals // sentinel error
-var ErrReservedAggregationType = ErrReservedTextType
-
 // PatternHandler is called with each completed match of the pattern it was
 // registered for.
 type PatternHandler func(match Aggregation)

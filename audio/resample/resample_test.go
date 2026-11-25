@@ -186,56 +186,6 @@ func peak(pcm []byte) int {
 	return most
 }
 
-func TestQualityStrings(t *testing.T) {
-	for q, want := range map[resample.Quality]string{
-		resample.QualityVHQ: "VHQ",
-		resample.QualityHQ:  "HQ",
-		resample.QualityMQ:  "MQ",
-		resample.QualityLQ:  "LQ",
-		resample.QualityQQ:  "QQ",
-	} {
-		if got := q.String(); got != want {
-			t.Errorf("Quality(%d).String() = %q, want %q", q, got, want)
-		}
-	}
-	// The zero value is the default, and the default is the highest quality.
-	if resample.Quality(0) != resample.QualityVHQ {
-		t.Error("the zero Quality should be VHQ")
-	}
-}
-
-// TestEveryQualityConverts guards the mapping onto each build's converter set:
-// every recipe has to produce audio at roughly the right rate, whichever
-// backend is compiled in.
-func TestEveryQualityConverts(t *testing.T) {
-	for _, q := range []resample.Quality{
-		resample.QualityVHQ, resample.QualityHQ, resample.QualityMQ,
-		resample.QualityLQ, resample.QualityQQ,
-	} {
-		t.Run(q.String(), func(t *testing.T) {
-			r, err := resample.NewWithConfig(48000, 16000, 1, resample.Config{Quality: q})
-			if err != nil {
-				t.Fatalf("NewWithConfig: %v", err)
-			}
-			defer r.Close()
-			got := len(streamFramesBytes(r, sine(440, 48000, 4800), 10)) / 2
-			if want := 16000; got < want*9/10 || got > want*11/10 {
-				t.Errorf("got %d frames for one second of audio, want about %d", got, want)
-			}
-		})
-	}
-}
-
-// streamFramesBytes runs the same buffer through r n times and returns every
-// byte it produced.
-func streamFramesBytes(r *resample.Resampler, buf []byte, n int) []byte {
-	var out []byte
-	for range n {
-		out = append(out, r.Process(buf)...)
-	}
-	return out
-}
-
 // TestStreamingLosesNoAudio guards the accounting in Process. A stream
 // resampler holds a filter length of audio in flight at all times, so its output
 // always trails the rate ratio by that much, but the gap must stay bounded: if

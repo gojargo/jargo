@@ -225,9 +225,8 @@ type Starter interface {
 // reaches the pipeline in the order it was generated. See audiocontext.go.
 type Base struct {
 	*service.Base
-	syn     Synthesizer
-	meta    Metadata
-	filters []ttstext.Filter //nolint:staticcheck // the deprecated filters still run
+	syn  Synthesizer
+	meta Metadata
 	// transforms reshape a unit for the provider after the filters have
 	// normalized it. See TextTransform.
 	transforms []TextTransformer
@@ -483,10 +482,6 @@ type TextTransformer struct {
 	// TextType names the units this transform applies to. Use
 	// frames.AnyTextType for every unit, whatever its type.
 	TextType frames.TextType
-	// AggregatedBy is the former name of TextType, read when TextType is empty.
-	//
-	// Deprecated: use TextType.
-	AggregatedBy frames.TextType
 	// Transform is the reshaping itself.
 	Transform TextTransform
 
@@ -561,30 +556,20 @@ func (b *Base) canApplyPronunciations() bool {
 }
 
 // SetTextTransformers sets the transforms applied to each unit just before the
-// provider is given it, replacing any set before. They run in order, after the
-// text filters, each one seeing what the one before it produced.
+// provider is given it, replacing any set before. They run in order, each one
+// seeing what the one before it produced.
 //
 // Replacing the list is also how a transform is withdrawn: Go function values
 // cannot be compared, so there is no removing one by naming it.
 func (b *Base) SetTextTransformers(ts ...TextTransformer) {
 	b.transforms = make([]TextTransformer, len(ts))
-	for i, t := range ts {
-		b.transforms[i] = t.withTextType()
-	}
+	copy(b.transforms, ts)
 }
 
 // AddTextTransformer appends one transform to those already set, for a caller
 // registering them as it builds the service rather than all at once.
 func (b *Base) AddTextTransformer(t TextTransformer) {
-	b.transforms = append(b.transforms, t.withTextType())
-}
-
-// withTextType fills TextType from the deprecated AggregatedBy when it is empty.
-func (t TextTransformer) withTextType() TextTransformer {
-	if t.TextType == "" {
-		t.TextType = t.AggregatedBy //nolint:staticcheck // the deprecated field is honored
-	}
-	return t
+	b.transforms = append(b.transforms, t)
 }
 
 // transformText applies the transforms whose type matches how this unit was
@@ -629,34 +614,9 @@ func (b *Base) SetSkipTextTypes(types ...frames.TextType) {
 	b.skipTypes = types
 }
 
-// SetSkipAggregatorTypes is the former name of SetSkipTextTypes.
-//
-// Deprecated: use SetSkipTextTypes.
-func (b *Base) SetSkipAggregatorTypes(types ...frames.TextType) {
-	b.SetSkipTextTypes(types...)
-}
-
 // skipsSynthesis reports whether units grouped this way are passed on unspoken.
 func (b *Base) skipsSynthesis(t frames.TextType) bool {
 	return slices.Contains(b.skipTypes, t)
-}
-
-// SetTextFilters sets the text-normalization filters applied to each sentence
-// just before synthesis, a text.MarkdownFilter that strips Markdown structure
-// being the case. Filters run in order.
-//
-// A filter changes the text itself. To reshape a unit for the provider alone,
-// leaving the conversation's record of it untouched, register a transform with
-// SetTextTransformers instead: a text.VoiceFormatter goes there.
-// Call this before the pipeline starts; the filter set is not safe to change
-// while it is running.
-//
-// Deprecated: use SetTextTransformers instead, with text.StripMarkdown in place
-// of text.MarkdownFilter. A transform registered with
-// (*aggregators.LLMText).SetTextTransformers rewrites the context as well as
-// the speech.
-func (b *Base) SetTextFilters(filters ...ttstext.Filter) {
-	b.filters = filters
 }
 
 // Setup opens the synthesizer's connection, for a synthesizer that dials one.
@@ -1031,14 +991,6 @@ func (b *Base) handleTurnEnd(ctx context.Context, f frames.Frame, dir processor.
 	// The turn's context is done, so the whitespace opening the next one is its
 	// own to drop again.
 	b.setSentNonWhitespace(false)
-	// A filter's state belongs to one reply, so it is cleared as an
-	// interruption clears it: a code block one reply left open must not mute
-	// the next.
-	for _, f := range b.filters {
-		if i, ok := f.(ttstext.InterruptibleFilter); ok { //nolint:staticcheck // the deprecated filters still run
-			i.HandleInterruption()
-		}
-	}
 	b.onTurnContextCompleted(ctx)
 	if isEnd {
 		return b.PushFrame(ctx, f, dir)
@@ -1161,11 +1113,6 @@ func (b *Base) handleInterruption(ctx context.Context) {
 	b.skippedAggregator.HandleInterruption()
 	if b.exprFormatter != nil {
 		b.exprFormatter.Reset()
-	}
-	for _, f := range b.filters {
-		if i, ok := f.(ttstext.InterruptibleFilter); ok { //nolint:staticcheck // the deprecated filters still run
-			i.HandleInterruption()
-		}
 	}
 	// Interruptible contexts are dropped, along with their place in the
 	// sequencer and the turn they were spoken on. Uninterruptible speech carries
@@ -1599,16 +1546,7 @@ func (b *Base) reportProcessing(ctx context.Context, processing time.Duration) {
 // filters, then the transforms, then the last shaping the provider needs. It
 // reports false when nothing is left to say or a transform failed.
 func (b *Base) transformUnit(ctx context.Context, text string, by frames.TextType) (string, bool) {
-	filtered := text
-	for _, f := range b.filters {
-		// A stateful filter is told the interruption is over just before it is
-		// asked for text again, which is the point it can resume from.
-		if i, ok := f.(ttstext.InterruptibleFilter); ok { //nolint:staticcheck // the deprecated filters still run
-			i.ResetInterruption()
-		}
-		filtered = f.Filter(filtered)
-	}
-	transformed, ok := b.transformText(ctx, filtered, by)
+	transformed, ok := b.transformText(ctx, text, by)
 	if !ok || !b.keepsFilteredText(transformed, b.isStreamingTokens()) {
 		return "", false
 	}

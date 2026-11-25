@@ -81,9 +81,6 @@ func (p *LLMText) SetTextTransformers(ts ...tts.TextTransformer) {
 
 // AddTextTransformer appends one transform to those already set.
 func (p *LLMText) AddTextTransformer(t tts.TextTransformer) {
-	if t.TextType == "" {
-		t.TextType = t.AggregatedBy //nolint:staticcheck // the deprecated field is honored
-	}
 	p.transforms = append(p.transforms, t)
 }
 

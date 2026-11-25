@@ -156,31 +156,6 @@ func TestCancellableByLLMIsIgnoredOnASynchronousTool(t *testing.T) {
 	}
 }
 
-func TestTheDeprecatedFlagCoversEveryAsyncTool(t *testing.T) {
-	gen := &advertisingGen{}
-	svc := llm.New("FakeLLM", gen, llm.WithAsyncToolCancellation())
-
-	svc.RegisterFunction("get_current_weather", noop, llm.WithCancelOnInterruption(false))
-	syncTools(svc)
-
-	want := []string{llm.CancelToolName("get_current_weather")}
-	if got := advertised(gen); !slices.Equal(got, want) {
-		t.Errorf("advertised %v, want %v", got, want)
-	}
-}
-
-func TestTheDeprecatedFlagNeedsAnAsyncTool(t *testing.T) {
-	gen := &advertisingGen{}
-	svc := llm.New("FakeLLM", gen, llm.WithAsyncToolCancellation())
-
-	svc.RegisterFunction("lookup", noop)
-	syncTools(svc)
-
-	if got := advertised(gen); len(got) != 0 {
-		t.Errorf("advertised %v, want nothing", got)
-	}
-}
-
 func TestTheGuidanceIsComposedOnce(t *testing.T) {
 	// Several cancellable tools share one block of guidance; repeating it is
 	// nothing but tokens, and reads to a model as emphasis nobody meant.

@@ -392,10 +392,6 @@ type Base struct {
 	// warnNoAdapter reports once that an extension's built-in tools were asked
 	// for on a service with no adapter to put them on.
 	warnNoAdapter sync.Once
-	// asyncToolCancellation widens cancellation to every asynchronous tool
-	// rather than the ones that opted in, at registration. Deprecated; see
-	// WithAsyncToolCancellation.
-	asyncToolCancellation bool
 	// callFilter narrows the calls of a response to the ones that run. Nil, the
 	// default, runs every call the model requested.
 	callFilter FunctionCallFilter

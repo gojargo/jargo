@@ -2,8 +2,6 @@ package llm
 
 import (
 	"cmp"
-	"context"
-	"log/slog"
 	"strings"
 	"time"
 
@@ -264,46 +262,3 @@ const (
 	// completionKindNone is a response that carried no marker.
 	completionKindNone = ""
 )
-
-// FilterIncompleteUserTurns reports whether the service reads turn-completion
-// markers: whether the turn-completion extension is attached.
-//
-// Deprecated: use GetExtension[*TurnCompletionExtension].
-func (b *Base) FilterIncompleteUserTurns() bool {
-	_, ok := GetExtension[*TurnCompletionExtension](b)
-	return ok
-}
-
-// SetFilterIncompleteUserTurns attaches the turn-completion extension, built
-// with the configuration the settings hold, or removes the one attached.
-//
-// Deprecated: use turns.FilterIncompleteUserTurnStrategies on the user
-// aggregator, whose stop strategy installs the extension.
-func (b *Base) SetFilterIncompleteUserTurns(on bool) {
-	if err := b.setTurnCompletion(context.Background(), on, b.turnCompletionConfigSetting()); err != nil {
-		slog.Error("switching turn completion failed", "service", b.Name(), "error", err)
-	}
-	b.composeSystemInstruction()
-}
-
-// SetUserTurnCompletionConfig reconfigures the turn-completion extension, when
-// one is attached.
-//
-// Deprecated: pass the configuration to turns.FilterIncompleteUserTurnStrategies.
-func (b *Base) SetUserTurnCompletionConfig(cfg UserTurnCompletionConfig) {
-	if extension, ok := GetExtension[*TurnCompletionExtension](b); ok {
-		extension.SetConfig(cfg)
-		b.composeSystemInstruction()
-	}
-}
-
-// UserTurnCompletionConfig is the configuration of the turn-completion
-// extension attached, or the default one when none is.
-//
-// Deprecated: read it from GetExtension[*TurnCompletionExtension].
-func (b *Base) UserTurnCompletionConfig() UserTurnCompletionConfig {
-	if extension, ok := GetExtension[*TurnCompletionExtension](b); ok {
-		return extension.Config()
-	}
-	return UserTurnCompletionConfig{}
-}

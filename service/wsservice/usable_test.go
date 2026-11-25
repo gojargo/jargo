@@ -23,7 +23,6 @@ type usableService struct {
 	mu        sync.Mutex
 	attempts  int
 	connected bool
-	sent      int
 	reported  []*frames.ErrorFrame
 	permanent []bool
 }
@@ -130,26 +129,5 @@ func TestADroppedConnectionLeavesTheReceiveLoopAlone(t *testing.T) {
 	}
 	if len(s.permanent) != 1 || s.permanent[0] {
 		t.Errorf("reports = %v, want one that is not permanent", s.permanent)
-	}
-}
-
-// TestADroppedConnectionStillReconnectsOnDemand checks that with reconnecting
-// off, a send after a drop still reconnects and goes out.
-func TestADroppedConnectionStillReconnectsOnDemand(t *testing.T) {
-	s := newUsableService(nil)
-	b := fastBase(s, false, 3)
-	b.ReceiveTaskHandler(t.Context(), s.report)
-	//nolint:staticcheck // the deprecated send is what reconnects on demand
-	err := b.SendWithRetry(t.Context(), func() error {
-		s.mu.Lock()
-		s.sent++
-		s.mu.Unlock()
-		return nil
-	}, s.report)
-	if err != nil {
-		t.Fatalf("send: %v", err)
-	}
-	if s.attempts != 1 || s.sent != 1 {
-		t.Errorf("dials = %d, sent = %d, want 1 and 1", s.attempts, s.sent)
 	}
 }

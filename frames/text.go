@@ -471,23 +471,6 @@ const (
 	AnyTextType TextType = "*"
 )
 
-// AggregationType is the former name of TextType.
-//
-// Deprecated: use TextType.
-type AggregationType = TextType
-
-// The former names of the built-in text types.
-const (
-	// Deprecated: use TextTypeSentence.
-	AggregationSentence = TextTypeSentence
-	// Deprecated: use TextTypeToken.
-	AggregationToken = TextTypeToken
-	// Deprecated: use TextTypeWord.
-	AggregationWord = TextTypeWord
-	// Deprecated: use AnyTextType.
-	AnyAggregation = AnyTextType
-)
-
 // AggregatedTextFrame is a run of TextFrames aggregated into one unit for
 // synthesis, carrying what kind of text they make.
 type AggregatedTextFrame struct {

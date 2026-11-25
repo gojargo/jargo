@@ -258,8 +258,8 @@ func (b *Base) maybeTryReconnect(ctx context.Context, message string, err error,
 
 	if !b.reconnectOnError {
 		// reconnectOnError governs this loop alone: a service that turns it off
-		// reconnects on demand in SendWithRetry instead. Reporting the drop as
-		// terminal would close that path too.
+		// decides for itself when to reconnect, so the drop is reported as one it
+		// can recover from rather than as terminal.
 		reportError(ctx, report, frames.NewErrorFrame(message), err, false)
 		return false
 	}
@@ -357,36 +357,6 @@ func (b *Base) reconnectWebsocket(ctx context.Context, attempt int) (bool, error
 		return false, ErrVerification
 	}
 	return true, nil
-}
-
-// SendWithRetry sends and, when that fails, reconnects and sends once more. It
-// returns the failure that stood when there was no connection left to send on,
-// and nil once the message is away.
-//
-// Deprecated: it has no replacement. Send on the websocket directly and leave
-// reconnecting to the receive loop.
-func (b *Base) SendWithRetry(ctx context.Context, send func() error, report ReportError) error {
-	err := b.sendOnce(send)
-	if err == nil {
-		return nil
-	}
-	slog.Error("websocket send failed, will try to reconnect", "err", err)
-
-	if !b.TryReconnect(ctx, report) {
-		slog.Error("websocket send failed; unable to reconnect", "err", err)
-		return err
-	}
-	slog.Info("websocket reconnected, retrying the send")
-	return b.sendOnce(send)
-}
-
-// sendOnce sends, treating a missing connection as the send failure it is so the
-// caller reconnects rather than silently dropping the message.
-func (b *Base) sendOnce(send func() error) error {
-	if !b.handler.Connected() {
-		return ErrNotConnected
-	}
-	return send()
 }
 
 // ReconnectInProgress reports whether the receive loop is redialing. A service

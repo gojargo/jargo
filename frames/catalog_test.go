@@ -506,13 +506,6 @@ func catalog() []catalogEntry {
 			build: func() frames.Frame { return frames.NewUserTurnResponseCancelFrame() },
 		},
 		{
-			// The deprecated name builds the same frame, so it still cancels.
-			label: "UserTurnResponseCancelFrame", cat: system,
-			build: func() frames.Frame {
-				return frames.NewEagerEndOfTurnCancelFrame() //nolint:staticcheck // the deprecated name still works
-			},
-		},
-		{
 			label: "OutputDTMFFrame", cat: control, wantString: "buttons: 7",
 			build: func() frames.Frame { return frames.NewOutputDTMFFrame(frames.KeypadSeven) },
 		},

@@ -375,15 +375,40 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - **Rime STT reports exhausted credits as a quota error and stays usable**, so
   it recovers once credits are added.
 
-### Deprecated
+### Removed
 
-- `settings.LLM.FilterIncompleteUserTurns` and
-  `settings.LLM.UserTurnCompletionConfig`: use
-  `turns.FilterIncompleteUserTurnStrategies`. An update that sets them still
-  installs, removes or reconfigures the turn-completion extension, with a
-  warning. Likewise `Base.FilterIncompleteUserTurns`,
+Every API deprecated in a 0.x release is gone, ahead of 1.0, along with the
+ones upstream schedules for removal in its 2.0. Each entry names the
+replacement.
+
+- **Text filters.** `(*tts.Base).SetTextFilters`, `text.Filter`,
+  `text.InterruptibleFilter`, `text.Transform.Filter` and `text.MarkdownFilter`
+  (with `NewMarkdownFilter`, `MarkdownFilterOptions` and
+  `DefaultMarkdownFilterOptions`): register a `tts.TextTransformer` with
+  `SetTextTransformers`, with `text.StripMarkdown` in place of the Markdown
+  filter.
+- **Former names.** `frames.AggregationType` and its constants
+  (`TextType`, `TextTypeSentence`, ...), `frames.EagerEndOfTurnCancelFrame` and
+  `NewEagerEndOfTurnCancelFrame` (`UserTurnResponseCancelFrame`),
+  `text.ErrReservedAggregationType` (`ErrReservedTextType`),
+  `tts.TextTransformer.AggregatedBy` (`TextType`) and
+  `(*tts.Base).SetSkipAggregatorTypes` (`SetSkipTextTypes`).
+- **Turn completion as a setting.** `settings.LLM.FilterIncompleteUserTurns`,
+  `settings.LLM.UserTurnCompletionConfig`, and `Base.FilterIncompleteUserTurns`,
   `SetFilterIncompleteUserTurns`, `SetUserTurnCompletionConfig` and
-  `UserTurnCompletionConfig`.
+  `UserTurnCompletionConfig`: use `turns.FilterIncompleteUserTurnStrategies`,
+  and read the extension with `GetExtension[*TurnCompletionExtension]`.
+- **`llm.WithAsyncToolCancellation`**: register each tool the model may cancel
+  with `WithCancellableByLLM(true)`.
+- **`(*wsservice.Base).SendWithRetry`**: send on the websocket directly and
+  leave reconnecting to the receive loop.
+- **`resample.Quality`**, `Config.Quality`, `ResampleQuality` and
+  `DefaultClearAfter`: every conversion runs the same filter; use `Resample`,
+  and mark where a stream ends with `Flush` and `Clear`.
+- **`MaxFrames`** on the error, service-metrics, turn-tracking, latency,
+  speaking and function-call observers, which keep no window of frames.
+- **`tts.PauseOptions.WatchdogTimeout`**, which had no effect.
+- **`settings.ErrMismatch`**, which nothing returned any more.
 
 ### Fixed
 

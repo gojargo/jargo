@@ -22,7 +22,6 @@ var (
 	errBroke    = errors.New("something broke")
 	errDialFail = errors.New("fail")
 	errRefused  = errors.New("connection refused")
-	errPipe     = errors.New("broken pipe")
 )
 
 // clock is a stand-in for the wall clock, so a test can say how long a
@@ -499,81 +498,6 @@ func TestReconnectRefusesToRunTwiceAtOnce(t *testing.T) {
 }
 
 // Sending, and the reconnect behind it.
-
-func TestSendWithRetryReconnectsAndSendsAgain(t *testing.T) {
-	t.Parallel()
-
-	h := &handler{}
-	rec := newRecorder()
-	b := newTestBase(t, h, newClock())
-
-	var sends int
-	err := b.SendWithRetry(t.Context(), func() error {
-		sends++
-		if sends == 1 {
-			return errPipe
-		}
-		return nil
-	}, rec.report)
-	if err != nil {
-		t.Fatalf("send failed after a successful reconnect: %v", err)
-	}
-	if sends != 2 {
-		t.Errorf("sent %d times, want 2: the failure and the retry after reconnecting", sends)
-	}
-	if _, connects, _ := h.counts(); connects != 1 {
-		t.Errorf("redialed %d times, want 1", connects)
-	}
-}
-
-func TestSendWithRetryReturnsTheFailureWhenReconnectingFails(t *testing.T) {
-	t.Parallel()
-
-	h := &handler{connect: func(int) error { return errRefused }}
-	rec := newRecorder()
-	b := newTestBase(t, h, newClock())
-
-	want := errPipe
-	var sends int
-	err := b.SendWithRetry(t.Context(), func() error {
-		sends++
-		return want
-	}, rec.report)
-
-	if !errors.Is(err, want) {
-		t.Errorf("got error %v, want the send failure %v", err, want)
-	}
-	if sends != 1 {
-		t.Errorf("sent %d times, want 1: there was no connection to retry on", sends)
-	}
-}
-
-func TestSendWithRetryTreatsNoConnectionAsAFailedSend(t *testing.T) {
-	t.Parallel()
-
-	var live bool
-	h := &handler{
-		live:    func() bool { return live },
-		connect: func(int) error { live = true; return nil },
-	}
-	rec := newRecorder()
-	b := newTestBase(t, h, newClock())
-
-	var sends int
-	err := b.SendWithRetry(t.Context(), func() error {
-		sends++
-		return nil
-	}, rec.report)
-	if err != nil {
-		t.Fatalf("send failed after reconnecting: %v", err)
-	}
-	if sends != 1 {
-		t.Errorf("sent %d times, want 1: the first attempt had no connection to send on", sends)
-	}
-	if _, connects, _ := h.counts(); connects != 1 {
-		t.Errorf("redialed %d times, want 1", connects)
-	}
-}
 
 // A handshake the server refused ends the retrying at once: it will refuse the
 // next dial the same way, so redialing only delays the news. Reporting the first

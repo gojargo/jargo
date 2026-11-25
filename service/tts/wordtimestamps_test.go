@@ -74,12 +74,15 @@ func (s *fakeTimedSynth) RunTTSTimed(
 	return nil
 }
 
-// currencyFilter mimics a voice formatter expanding a written amount into spoken
-// words, so the base must map the spoken words back to the written form.
-type currencyFilter struct{}
-
-func (currencyFilter) Filter(text string) string {
-	return strings.ReplaceAll(text, "$42.50", "forty two dollars and fifty cents")
+// currencyTransform mimics a voice formatter expanding a written amount into
+// spoken words, so the base must map the spoken words back to the written form.
+func currencyTransform() tts.TextTransformer {
+	return tts.TextTransformer{
+		TextType: frames.AnyTextType,
+		Transform: func(_ context.Context, text string, _ frames.TextType) (string, error) {
+			return strings.ReplaceAll(text, "$42.50", "forty two dollars and fifty cents"), nil
+		},
+	}
 }
 
 // wordsFor builds the spoken-word timeline for the expanded balance sentence.
@@ -100,7 +103,7 @@ func wordsFor(rate int) []timedWord {
 func runConversation(t *testing.T, convo *frames.LLMContext, syn tts.Synthesizer, interrupt bool) {
 	t.Helper()
 	base := tts.New("FakeTTS", syn)
-	base.SetTextFilters(currencyFilter{})
+	base.SetTextTransformers(currencyTransform())
 	pair := aggregators.New(convo)
 
 	task := pipeline.NewWorker(pipeline.New(base, pair.Assistant()), pipeline.WorkerConfig{})
@@ -233,7 +236,7 @@ func TestNoTimestampsRecordsFullLLMText(t *testing.T) {
 func TestWordTimestampsCarryPresentationTimestamps(t *testing.T) {
 	syn := &fakeTimedSynth{rate: 24000, words: wordsFor(24000)}
 	base := tts.New("FakeTTS", syn)
-	base.SetTextFilters(currencyFilter{})
+	base.SetTextTransformers(currencyTransform())
 
 	var mu sync.Mutex
 	type stamped struct {

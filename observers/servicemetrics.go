@@ -102,11 +102,6 @@ type ServiceUsageRecord struct {
 
 // ServiceMetricsConfig configures a ServiceMetrics observer.
 type ServiceMetricsConfig struct {
-	// MaxFrames is unused.
-	//
-	// Deprecated: the observer is told about each frame once, so it keeps no
-	// window of the frames it has seen.
-	MaxFrames int
 	// Now reads the current time. Nil uses time.Now. Supplying one lets a test
 	// place records without waiting.
 	Now func() time.Time

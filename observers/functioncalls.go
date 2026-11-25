@@ -75,11 +75,6 @@ type FunctionCallEvent struct {
 
 // FunctionCallConfig configures a FunctionCalls observer.
 type FunctionCallConfig struct {
-	// MaxFrames is unused.
-	//
-	// Deprecated: the observer is told about each frame once, so it keeps no
-	// window of the frames it has seen.
-	MaxFrames int
 	// IncludeArguments reports the arguments a call was made with. Nil leaves it
 	// on: they are small, and they are the reason a call is worth reading at all.
 	IncludeArguments *bool

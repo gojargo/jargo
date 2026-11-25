@@ -166,7 +166,6 @@ func newSettings(cfg Config) *Settings {
 	setOptPtr(&s.FrequencyPenalty, cfg.FrequencyPenalty)
 	setOptPtr(&s.PresencePenalty, cfg.PresencePenalty)
 	setOptPtr(&s.Seed, cfg.Seed)
-	s.FilterIncompleteUserTurns = settings.Set(false) //nolint:staticcheck // the store holds the deprecated setting
 
 	modalities := cfg.Modalities
 	if modalities == "" {

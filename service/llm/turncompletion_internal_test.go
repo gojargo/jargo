@@ -448,101 +448,6 @@ func TestSimultaneousEnableAndSystemInstructionChange(t *testing.T) {
 // The deprecated settings fields still switch the extension on and off, with a
 // warning.
 
-func TestTheFlagAttachesAndDetachesTheExtension(t *testing.T) {
-	svc := plainService("You are a helpful assistant.")
-
-	var on settings.LLM
-	on.FilterIncompleteUserTurns = settings.Set(true) //nolint:staticcheck // the deprecated setting under test
-	if err := updateLLMSettings(t, svc, &on); err != nil {
-		t.Fatal(err)
-	}
-	if extensions := svc.Extensions(); len(extensions) == 0 {
-		t.Fatal("no extension attached")
-	} else if _, ok := extensions[0].(*TurnCompletionExtension); !ok {
-		t.Fatalf("the closest extension is %T, want the turn-completion extension", extensions[0])
-	}
-	if !strings.Contains(svc.SystemInstruction(), UserTurnCompletionInstructions) {
-		t.Error("the protocol was not composed on")
-	}
-
-	var off settings.LLM
-	off.FilterIncompleteUserTurns = settings.Set(false) //nolint:staticcheck // the deprecated setting under test
-	if err := updateLLMSettings(t, svc, &off); err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := GetExtension[*TurnCompletionExtension](svc); ok {
-		t.Error("the turn-completion extension is still attached")
-	}
-	// The base prompt is the single source of truth that composition rebuilds
-	// from; disabling just recomposes without the protocol.
-	if got := svc.SystemInstruction(); got != "You are a helpful assistant." {
-		t.Errorf("SystemInstruction() = %q, want the base prompt restored", got)
-	}
-}
-
-func TestDisableTurnCompletionRestoresNone(t *testing.T) {
-	svc := plainService("")
-
-	var on settings.LLM
-	on.FilterIncompleteUserTurns = settings.Set(true) //nolint:staticcheck // the deprecated setting under test
-	_ = updateLLMSettings(t, svc, &on)
-	if got := svc.SystemInstruction(); got != UserTurnCompletionInstructions {
-		t.Fatal("the protocol alone should be the instruction")
-	}
-	var off settings.LLM
-	off.FilterIncompleteUserTurns = settings.Set(false) //nolint:staticcheck // the deprecated setting under test
-	_ = updateLLMSettings(t, svc, &off)
-
-	if got := svc.SystemInstruction(); got != "" {
-		t.Errorf("SystemInstruction() = %q, want empty again", got)
-	}
-}
-
-func TestTheConfigFieldReconfiguresTheExtension(t *testing.T) {
-	svc := plainService("Base prompt.")
-	extension := enableTurnCompletion(t, svc, UserTurnCompletionConfig{})
-
-	custom := UserTurnCompletionConfig{Instructions: "Custom turn instructions."}
-	var delta settings.LLM
-	delta.UserTurnCompletionConfig = settings.Set[any](custom) //nolint:staticcheck // the deprecated setting under test
-	if err := updateLLMSettings(t, svc, &delta); err != nil {
-		t.Fatal(err)
-	}
-
-	if got := extension.Config(); got != custom {
-		t.Errorf("config = %+v, want the one the update carried", got)
-	}
-	if got := svc.SystemInstruction(); got != "Base prompt.\n\nCustom turn instructions." {
-		t.Errorf("SystemInstruction() = %q, want the custom instructions composed on", got)
-	}
-}
-
-// The deprecated flag installs the extension with the configuration the
-// settings hold, whichever update carried it.
-func TestTheFlagInstallsTheExtensionWithTheConfigTheSettingsHold(t *testing.T) {
-	svc := plainService("")
-	custom := UserTurnCompletionConfig{IncompleteShortTimeout: 3 * time.Second}
-
-	var cfg settings.LLM
-	cfg.UserTurnCompletionConfig = settings.Set[any](custom) //nolint:staticcheck // the deprecated setting under test
-	_ = updateLLMSettings(t, svc, &cfg)
-	if _, ok := GetExtension[*TurnCompletionExtension](svc); ok {
-		t.Fatal("a configuration alone should not attach the extension")
-	}
-
-	var on settings.LLM
-	on.FilterIncompleteUserTurns = settings.Set(true) //nolint:staticcheck // the deprecated setting under test
-	_ = updateLLMSettings(t, svc, &on)
-
-	extension, ok := GetExtension[*TurnCompletionExtension](svc)
-	if !ok {
-		t.Fatal("the flag did not attach the extension")
-	}
-	if got := extension.Config().ShortTimeout(); got != 3*time.Second {
-		t.Errorf("short timeout = %v, want the configured 3s", got)
-	}
-}
-
 // Markers are configurable, and the prompts follow whatever is configured.
 
 func TestDefaultMarkersAreTheFillGradient(t *testing.T) {
@@ -699,18 +604,6 @@ func TestEachInferenceIsReportedOnce(t *testing.T) {
 	}
 }
 
-// A service without the extension reads no markers and reports nothing: the
-// text goes out as the model wrote it.
-func TestNothingIsReadWithoutTheExtension(t *testing.T) {
-	svc := plainService("")
-	if _, ok := GetExtension[*TurnCompletionExtension](svc); ok {
-		t.Fatal("a service should not read markers until the extension is installed")
-	}
-	if svc.FilterIncompleteUserTurns() {
-		t.Error("FilterIncompleteUserTurns() = true without the extension")
-	}
-}
-
 // captureLog collects what is logged at warning level while run runs.
 func captureLog(t *testing.T, run func()) string {
 	t.Helper()
@@ -744,41 +637,6 @@ func TestTheStrategysSettingsUpdateIsSilent(t *testing.T) {
 	}
 	if _, ok := svc.Extensions()[0].(*TurnCompletionExtension); !ok {
 		t.Error("the turn-completion extension is not the closest to the service")
-	}
-}
-
-func TestTheFlagInASettingsUpdateWarnsAndInstallsTheExtension(t *testing.T) {
-	svc := plainService("")
-	var on settings.LLM
-	on.FilterIncompleteUserTurns = settings.Set(true) //nolint:staticcheck // the deprecated setting under test
-
-	logged := captureLog(t, func() { _ = updateLLMSettings(t, svc, &on) })
-
-	if !strings.Contains(logged, "deprecated") {
-		t.Error("setting the deprecated flag did not warn")
-	}
-	if _, ok := GetExtension[*TurnCompletionExtension](svc); !ok {
-		t.Error("the flag did not install the extension")
-	}
-}
-
-// Enabling turn completion composes after an appended guide, once, and
-// disabling restores the base prompt and the guide.
-func TestTurnCompletionComposesAfterTheAppendedGuide(t *testing.T) {
-	svc := plainService("APP")
-	svc.AppendSystemInstruction("GUIDE")
-
-	enableTurnCompletion(t, svc, UserTurnCompletionConfig{})
-	composed := svc.SystemInstruction()
-	if !strings.HasPrefix(composed, "APP\n\nGUIDE\n\n") || strings.Count(composed, "GUIDE") != 1 {
-		t.Errorf("SystemInstruction() = %q, want APP, GUIDE once, then the protocol", composed)
-	}
-
-	var off settings.LLM
-	off.FilterIncompleteUserTurns = settings.Set(false) //nolint:staticcheck // the deprecated setting under test
-	_ = updateLLMSettings(t, svc, &off)
-	if got := svc.SystemInstruction(); got != "APP\n\nGUIDE" {
-		t.Errorf("SystemInstruction() = %q, want APP then GUIDE", got)
 	}
 }
 
@@ -907,4 +765,17 @@ func waitUntil(t *testing.T, msg string, cond func() bool) {
 		time.Sleep(time.Millisecond)
 	}
 	t.Fatal(msg)
+}
+
+// Enabling turn completion composes after an appended guide, once, and
+// disabling restores the base prompt and the guide.
+func TestTurnCompletionComposesAfterTheAppendedGuide(t *testing.T) {
+	svc := plainService("APP")
+	svc.AppendSystemInstruction("GUIDE")
+
+	enableTurnCompletion(t, svc, UserTurnCompletionConfig{})
+	composed := svc.SystemInstruction()
+	if !strings.HasPrefix(composed, "APP\n\nGUIDE\n\n") || strings.Count(composed, "GUIDE") != 1 {
+		t.Errorf("SystemInstruction() = %q, want APP, GUIDE once, then the protocol", composed)
+	}
 }

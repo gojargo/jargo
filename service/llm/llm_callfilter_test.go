@@ -222,10 +222,10 @@ func TestFunctionCallFilterDroppingEverythingAnnouncesNothing(t *testing.T) {
 func TestCancelAsyncToolIsNotAnnounced(t *testing.T) {
 	t.Run("alone", func(t *testing.T) {
 		gen := &filterGen{calls: []frames.ToolCall{call("c1", llm.CancelToolName("watch"))}}
-		svc := llm.New("FakeToolLLM", gen, llm.WithAsyncToolCancellation())
+		svc := llm.New("FakeToolLLM", gen)
 		svc.RegisterFunction("watch", func(ctx context.Context, p llm.FunctionCallParams) error {
 			return p.Result(ctx, "watching", nil)
-		}, llm.WithCancelOnInterruption(false))
+		}, llm.WithCancelOnInterruption(false), llm.WithCancellableByLLM(true))
 
 		w := runTurn(t, svc, "watch")
 
@@ -252,10 +252,10 @@ func TestCancelAsyncToolIsNotAnnounced(t *testing.T) {
 			call("c1", llm.CancelToolName("watch")),
 			call("c2", "watch"),
 		}}
-		svc := llm.New("FakeToolLLM", gen, llm.WithAsyncToolCancellation())
+		svc := llm.New("FakeToolLLM", gen)
 		svc.RegisterFunction("watch", func(ctx context.Context, p llm.FunctionCallParams) error {
 			return p.Result(ctx, "watching", nil)
-		}, llm.WithCancelOnInterruption(false))
+		}, llm.WithCancelOnInterruption(false), llm.WithCancellableByLLM(true))
 
 		w := runTurn(t, svc, "watch")
 

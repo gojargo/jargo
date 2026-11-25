@@ -95,7 +95,6 @@ func defaultSettings() *Settings {
 	s.FrequencyPenalty = settings.Cleared[float64]()
 	s.PresencePenalty = settings.Cleared[float64]()
 	s.Seed = settings.Cleared[int]()
-	s.FilterIncompleteUserTurns = settings.Set(false) //nolint:staticcheck // the store holds the deprecated setting
 	s.UseProviderThinkingDefault = settings.Set(false)
 	s.Tools = settings.Cleared[frames.ToolsSchema]()
 	s.Voice = settings.Cleared[string]()
@@ -170,9 +169,8 @@ func validateSettings(s *Settings) error {
 			return settingsError("Prism does not support setting %s", name)
 		}
 	}
-	//nolint:staticcheck // the store holds the deprecated setting
-	if s.Model.Or("") != modelPrism || s.FilterIncompleteUserTurns.Or(false) {
-		return settingsError("Prism requires its own model and server turn detection")
+	if s.Model.Or("") != modelPrism {
+		return settingsError("Prism requires its own model")
 	}
 	if _, ok := s.InterruptOnSpeech.Value(); !ok {
 		return settingsError("interrupt_on_speech must be a boolean")

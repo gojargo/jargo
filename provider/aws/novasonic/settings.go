@@ -48,8 +48,6 @@ func newSettings(cfg Config) *Settings {
 	s.FrequencyPenalty = settings.Cleared[float64]()
 	s.PresencePenalty = settings.Cleared[float64]()
 	s.Seed = settings.Cleared[int]()
-	s.FilterIncompleteUserTurns = settings.Set(false)    //nolint:staticcheck // the store holds the deprecated setting
-	s.UserTurnCompletionConfig = settings.Cleared[any]() //nolint:staticcheck // the store holds the deprecated setting
 	s.EndpointingSensitivity = settings.Set(cfg.EndpointingSensitivity)
 
 	// The first-generation model takes no endpointing sensitivity.

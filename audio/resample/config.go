@@ -2,54 +2,6 @@ package resample
 
 import "time"
 
-// Quality named a conversion filter, trading audio quality against CPU cost.
-//
-// Deprecated: every conversion now runs the one windowed-sinc filter, flat to
-// 90% of the band with about 90 dB of aliasing rejection, so a Quality has no
-// effect. It will be removed in a future release.
-type Quality int
-
-const (
-	// QualityVHQ is very high quality. It is the zero value, and so the default.
-	QualityVHQ Quality = iota
-	// QualityHQ is high quality: a shorter filter than VHQ, and audibly
-	// transparent for speech.
-	QualityHQ
-	// QualityMQ is medium quality.
-	QualityMQ
-	// QualityLQ is low quality.
-	QualityLQ
-	// QualityQQ is "quick": interpolation rather than a windowed filter, for
-	// paths that care more about cost than about the stopband.
-	QualityQQ
-)
-
-// String returns the recipe name.
-func (q Quality) String() string {
-	switch q {
-	case QualityVHQ:
-		return "VHQ"
-	case QualityHQ:
-		return "HQ"
-	case QualityMQ:
-		return "MQ"
-	case QualityLQ:
-		return "LQ"
-	case QualityQQ:
-		return "QQ"
-	default:
-		return "unknown"
-	}
-}
-
-// DefaultClearAfter was the idle window a Resampler used when its config left
-// ClearAfter at zero.
-//
-// Deprecated: a zero ClearAfter now keeps the filter history across pauses, so
-// nothing uses this window unless it is asked for. Mark where a stream ends
-// with Flush and Clear instead.
-const DefaultClearAfter = 200 * time.Millisecond
-
 // NeverClear is the ClearAfter that turns the idle window off, for a caller that
 // marks the boundaries of a stream itself with Flush and Clear. Any negative
 // duration does the same; this one names the intent.
@@ -57,10 +9,6 @@ const NeverClear = -1 * time.Nanosecond
 
 // Config configures a Resampler.
 type Config struct {
-	// Quality has no effect.
-	//
-	// Deprecated: every conversion runs the same filter.
-	Quality Quality
 	// ClearAfter is how long the resampler may sit idle before its filter
 	// history is discarded. A resampler carries the tail of the audio it last
 	// saw so that a continuous stream converts cleanly across chunk boundaries,

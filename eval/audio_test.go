@@ -187,16 +187,19 @@ turns:
 // unspeakable stands in for a chunk that filters down to nothing, the way a lone
 // period split off an ellipsis does. The TTS base skips a chunk with nothing left
 // to say, so the turn is silent and no text is ever reported as spoken.
-type unspeakable struct{}
-
-func (unspeakable) Filter(string) string { return "" }
+func unspeakable() tts.TextTransformer {
+	return tts.TextTransformer{
+		TextType:  frames.AnyTextType,
+		Transform: func(context.Context, string, frames.TextType) (string, error) { return "", nil },
+	}
+}
 
 // buildSilentBot answers every turn and speaks none of it.
 func buildSilentBot(in, out processor.Processor) *pipeline.Worker {
 	agg := aggregators.New(frames.NewLLMContext("test"))
 	rtviProc := rtvi.NewProcessor()
 	speech := tts.New("fakeTTS", fakeSynth{})
-	speech.SetTextFilters(unspeakable{}) //nolint:staticcheck // the deprecated filters still run
+	speech.SetTextTransformers(unspeakable())
 	return pipeline.NewWorker(pipeline.New(
 		rtviProc, in, newFakeAudioSTT(), agg.User(), newFakeLLM(), speech, out, agg.Assistant(),
 	), pipeline.WorkerConfig{

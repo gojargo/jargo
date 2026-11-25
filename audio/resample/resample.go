@@ -30,13 +30,6 @@ package resample
 // It returns the input unchanged when the rates match, and nil for an empty
 // buffer.
 func Resample(pcm []byte, inRate, outRate, channels int) ([]byte, error) {
-	return ResampleQuality(pcm, inRate, outRate, channels, QualityVHQ)
-}
-
-// ResampleQuality is Resample; the quality has no effect.
-//
-// Deprecated: use Resample. Every conversion runs the same filter.
-func ResampleQuality(pcm []byte, inRate, outRate, channels int, q Quality) ([]byte, error) {
 	if channels < 1 {
 		channels = 1
 	}

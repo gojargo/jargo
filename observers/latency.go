@@ -82,11 +82,6 @@ type LatencyBreakdown struct {
 
 // LatencyConfig configures a UserBotLatency observer.
 type LatencyConfig struct {
-	// MaxFrames is unused.
-	//
-	// Deprecated: the observer is told about each frame once, so it keeps no
-	// window of the frames it has seen.
-	MaxFrames int
 	// MinContribution is the shortest stretch reported in its own right. Nil
 	// uses 5ms. Anything shorter is a frame hop rather than work worth naming,
 	// so it is rolled into the single pipeline contribution. Zero lists every

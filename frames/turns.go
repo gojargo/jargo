@@ -330,20 +330,6 @@ func NewUserTurnResponseCancelFrame() *UserTurnResponseCancelFrame {
 	}
 }
 
-// EagerEndOfTurnCancelFrame is the former name of UserTurnResponseCancelFrame.
-//
-// Deprecated: use UserTurnResponseCancelFrame. It is the same type, so a frame
-// built under the old name still cancels.
-type EagerEndOfTurnCancelFrame = UserTurnResponseCancelFrame
-
-// NewEagerEndOfTurnCancelFrame is the former name of
-// NewUserTurnResponseCancelFrame.
-//
-// Deprecated: use NewUserTurnResponseCancelFrame.
-func NewEagerEndOfTurnCancelFrame() *UserTurnResponseCancelFrame {
-	return NewUserTurnResponseCancelFrame()
-}
-
 // LLMMarkerFrame carries a turn-completion marker the LLM emitted (for example
 // "●"), pushed by the LLM service's turn-completion extension. It is
 // informational, since the TTS downstream ignores it, and lets observers see

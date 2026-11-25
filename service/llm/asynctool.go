@@ -117,23 +117,11 @@ func WithCancellableByLLM(on bool) RegisterOption {
 	return func(i *registryItem) { i.cancellableByLLM = on }
 }
 
-// WithAsyncToolCancellation lets the model cancel every asynchronous call, not
-// only the tools that opted in.
-//
-// Deprecated: register the tools the model may cancel with
-// WithCancellableByLLM(true) instead. This widens cancellation to every tool
-// registered with WithCancelOnInterruption(false), which lets a model that
-// wrongly decides a pending result is unwanted destroy work nobody asked it to.
-func WithAsyncToolCancellation() Option {
-	return func(b *Base) { b.asyncToolCancellation = true }
-}
-
 // resolveCancellableByLLM settles whether the model may cancel a tool's calls,
-// refusing the pairing that cannot work. The deprecated
-// WithAsyncToolCancellation widens it here, at registration, to every
-// asynchronous tool, so the registry alone says what the model may cancel.
+// refusing the pairing that cannot work, so the registry alone says what the
+// model may cancel.
 func (b *Base) resolveCancellableByLLM(item *registryItem) {
-	if !item.cancellableByLLM && (!b.asyncToolCancellation || item.cancelOnInterruption) {
+	if !item.cancellableByLLM {
 		return
 	}
 	if item.cancelOnInterruption {

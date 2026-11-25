@@ -46,11 +46,6 @@ type SpeechEvent struct {
 
 // SpeakingConfig configures a Speaking observer.
 type SpeakingConfig struct {
-	// MaxFrames is unused.
-	//
-	// Deprecated: the observer is told about each frame once, so it keeps no
-	// window of the frames it has seen.
-	MaxFrames int
 	// Now reads the current time. Nil uses time.Now. Supplying one lets a test
 	// place moments without waiting.
 	Now func() time.Time

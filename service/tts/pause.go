@@ -1,9 +1,5 @@
 package tts
 
-import (
-	"time"
-)
-
 // PauseOptions configures pausing the service's frame handling while the audio
 // for a turn is generated. It is off unless asked for.
 type PauseOptions struct {
@@ -12,13 +8,6 @@ type PauseOptions struct {
 	// context ID need it: it stops the next request's audio being taken for
 	// this one's. Frames stay queued, in order, while the service is paused.
 	Enabled bool
-
-	// WatchdogTimeout is unused.
-	//
-	// Deprecated: it has no replacement. Frame handling is paused only while an
-	// audio context is open, and every context ends, so no timer is needed to
-	// break the pause.
-	WatchdogTimeout time.Duration
 }
 
 // SetPauseFrameProcessing configures pausing frame handling while a turn's audio

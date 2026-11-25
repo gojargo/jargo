@@ -38,11 +38,6 @@ var (
 	// ErrType is returned when a value cannot be stored in a field without
 	// losing something.
 	ErrType = errors.New("settings: value does not fit the field")
-	// ErrMismatch was returned when a delta and a store were different types.
-	//
-	// Deprecated: a delta of another type is now merged field by field, as
-	// pipecat merges one, so nothing returns it.
-	ErrMismatch = errors.New("settings: delta and store are different types")
 	// ErrNotSettings is returned for anything that is not a settings struct.
 	ErrNotSettings = errors.New("settings: not a pointer to a settings struct")
 )
@@ -294,33 +289,12 @@ type LLM struct {
 	PresencePenalty Opt[float64] `settings:"presence_penalty"`
 	// Seed makes generation reproducible where the provider supports it.
 	Seed Opt[int] `settings:"seed"`
-	// FilterIncompleteUserTurns gates each reply on the model's own verdict of
-	// whether the user had finished speaking. An update that sets it installs
-	// the turn-completion LLM extension, and one that clears it removes the
-	// extension, with a warning either way.
-	//
-	// Deprecated: use turns.FilterIncompleteUserTurnStrategies on the user
-	// aggregator, whose stop strategy installs the turn-completion extension
-	// over a settings update of its own.
-	FilterIncompleteUserTurns Opt[bool] `settings:"filter_incomplete_user_turns"`
 	// UseProviderThinkingDefault reports whether a model with no thinking
 	// configured runs at its provider's default. Services that otherwise send
 	// each model a low-latency thinking default send none. A backend worker sets
 	// it on its LLM, which does the reasoning its frontend hands off. Unset
 	// means false.
 	UseProviderThinkingDefault Opt[bool] `settings:"use_provider_thinking_default"`
-	// UserTurnCompletionConfig configures that gating: the protocol taught to the
-	// model, the waits before re-prompting, and the re-prompts themselves. An
-	// update that sets it reconfigures the turn-completion LLM extension, with a
-	// warning.
-	//
-	// It is typed loosely because the type belongs to the LLM service, which is
-	// built on this package and so cannot be named here. Set it to an
-	// llm.UserTurnCompletionConfig; anything else is reported and ignored.
-	//
-	// Deprecated: pass the configuration to
-	// turns.FilterIncompleteUserTurnStrategies instead.
-	UserTurnCompletionConfig Opt[any] `settings:"user_turn_completion_config"`
 	// Extensions are the LLM extensions attached to the service (see
 	// llm.Extension). A delta adds to the extensions held. An entry is an
 	// extension, for the one service the settings are for, or a function taking

@@ -2,7 +2,6 @@ package tts_test
 
 import (
 	"context"
-	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -112,20 +111,6 @@ func TestSkippedAggregationTypeStillReachesTheConversation(t *testing.T) {
 	}
 	if skipped.WillBeSpoken {
 		t.Error("a skipped block is marked as one that will be spoken")
-	}
-}
-
-// The former name of the skip list sets the same list.
-func TestSkipAggregatorTypesIsTheFormerNameOfSkipTextTypes(t *testing.T) {
-	spoken, _ := runSkipping(t, func(base *tts.Base) {
-		base.SetSkipAggregatorTypes(codeType) //nolint:staticcheck // the deprecated name is what is tested
-	}, "Here is code <code>print here</code> done.")
-
-	if slices.Contains(spoken, "print here") {
-		t.Fatalf("the skipped block was spoken: %q", spoken)
-	}
-	if len(spoken) == 0 {
-		t.Fatalf("nothing was spoken at all, so the skip proves nothing")
 	}
 }
 
