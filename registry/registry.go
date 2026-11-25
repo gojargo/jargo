@@ -5,6 +5,9 @@
 // A runner owns one registry and shares it with its workers. Workers are kept
 // under the runner they belong to, so a local one is told apart from a remote
 // one, and each name is registered at most once.
+//
+// Experimental: this package may still change in a minor release. See
+// https://gojargo.dev/docs/compatibility/ for what that means.
 package registry
 
 import (

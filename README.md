@@ -224,7 +224,8 @@ the **[Quickstart](docs/getting-started/quickstart.md)** for the full setup.
 jargo is pre-1.0. The public API may still change in a minor release; every
 breaking change is called out in the [changelog](CHANGELOG.md) and carries a `!`
 in its commit type. Only the latest release receives security fixes (see
-[`SECURITY.md`](SECURITY.md)).
+[`SECURITY.md`](SECURITY.md)). [Compatibility](docs/compatibility.md) describes
+what `1.0` will promise.
 
 ## Contributing
 

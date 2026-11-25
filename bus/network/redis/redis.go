@@ -3,6 +3,9 @@
 //
 // It is a module of its own, so only a program that imports it depends on a
 // Redis client.
+//
+// Experimental: this package may still change in a minor release. See
+// https://gojargo.dev/docs/compatibility/ for what that means.
 package redis
 
 import (

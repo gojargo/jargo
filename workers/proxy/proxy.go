@@ -14,6 +14,9 @@
 // conversation's whole traffic does not put all of it on the wire. Message
 // types named in ForwardMessages cross as well, addressed or not, which is how
 // frames reach a bridged worker in another process.
+//
+// Experimental: this package may still change in a minor release. See
+// https://gojargo.dev/docs/compatibility/ for what that means.
 package proxy
 
 import (

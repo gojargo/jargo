@@ -9,6 +9,9 @@
 // A Bus is the transport-independent core. AsyncQueueBus delivers in process; a
 // networked one embeds Bus, overrides Publish for its transport, and calls
 // OnMessageReceived as messages arrive.
+//
+// Experimental: this package may still change in a minor release. See
+// https://gojargo.dev/docs/compatibility/ for what that means.
 package bus
 
 import (

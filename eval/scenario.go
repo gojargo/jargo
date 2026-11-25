@@ -353,6 +353,9 @@
 // trace of what the harness itself decided. Together they are what makes a
 // scenario that failed once and passed the next time readable. Options.OnProgress
 // reports the same as it happens, for a caller watching a long run.
+//
+// Experimental: this package may still change in a minor release. See
+// https://gojargo.dev/docs/compatibility/ for what that means.
 package eval
 
 import (

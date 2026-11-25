@@ -28,6 +28,9 @@
 // replace the behavior entirely. A worker built on another worker rather than on
 // Base directly overrides that worker's hooks the same way, and binds itself
 // with Bind so the base reaches them.
+//
+// Experimental: this package may still change in a minor release. See
+// https://gojargo.dev/docs/compatibility/ for what that means.
 package workers
 
 import (

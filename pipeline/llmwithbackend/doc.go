@@ -17,4 +17,7 @@
 // into the conversation.
 //
 // The package is alpha: its API is likely to change between releases.
+//
+// Experimental: this package may still change in a minor release. See
+// https://gojargo.dev/docs/compatibility/ for what that means.
 package llmwithbackend
