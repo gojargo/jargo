@@ -104,7 +104,7 @@ func NewSimulationJudge(
 		explainBelow: explainBelow,
 		trace:        trace,
 		newJudge: func(cfg *JudgeEvalConfig) (RunJudge, error) {
-			return NewEvalJudgeFromConfig(cfg)
+			return NewClassifierJudgeFromConfig(cfg)
 		},
 	}
 }

@@ -658,7 +658,7 @@ func TestStopBotLeavesAnExitedBotAlone(t *testing.T) {
 const (
 	simulationFile = `
 name: %[1]s
-simulator: {service: openai}
+simulator: {service: ollama}
 scenarios:
   - name: %[1]s
     persona: "A caller."

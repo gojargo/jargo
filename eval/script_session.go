@@ -49,21 +49,20 @@ func NewScriptSession(
 	// The connection to the bot: the eval pipeline and the user's sends,
 	// asking the bot for what the scenario's assertions need.
 	s.client = NewClient(botURL, ClientParams{
-		BotAudio:          scenario.BotAudio,
-		UserAudio:         scenario.UserAudio,
-		UserSpeech:        scenario.UserSpeech,
-		CaptureBotAudio:   scenario.WantsResponse(),
-		CaptureBotImages:  scenario.NeedsBotImages(),
-		ReportLevel:       scenario.RequiredReportLevel(),
-		VADEvents:         scenario.NeedsVADEvents(),
-		MarkerEvents:      scenario.NeedsMarkerEvents(),
-		Context:           scenario.Context,
-		TriggerDisconnect: scenario.TriggerDisconnect, //nolint:staticcheck // the deprecated key still asks
+		BotAudio:         scenario.BotAudio,
+		UserAudio:        scenario.UserAudio,
+		UserSpeech:       scenario.UserSpeech,
+		CaptureBotAudio:  scenario.WantsResponse(),
+		CaptureBotImages: scenario.NeedsBotImages(),
+		ReportLevel:      scenario.RequiredReportLevel(),
+		VADEvents:        scenario.NeedsVADEvents(),
+		MarkerEvents:     scenario.NeedsMarkerEvents(),
+		Context:          scenario.Context,
 	}, s.params, s.stream, s.trace, userTTS, botSTT, nil)
 	// What the user says next and how the outcome is scored: a scenario is
 	// played by the script driver.
 	s.script = newScriptDriver(scenario, s.params.DefaultTimeoutMS, s.client, s.stream, judge, s.trace,
-		func(p Progress) { s.progress(p) })
+		func(p ScriptTurnProgress) { s.progress(p) })
 	s.driver = s.script
 	s.assemble = s.script.result
 	s.describe = func() string { return DescribeConfig(&scenario.Configured, false) }
@@ -85,7 +84,7 @@ func ScriptSessionFromScenario(
 	userTTS *CachingTTSService, botSTT *stt.SegmentService,
 ) (*ScriptSession, error) {
 	if judge == nil && scenario.anyExpectation(func(e *Expectation) bool { return e.Eval != "" }) {
-		built, err := NewEvalJudgeFromConfig(&scenario.Judge)
+		built, err := NewClassifierJudgeFromConfig(&scenario.Judge)
 		if err != nil {
 			return nil, fmt.Errorf("eval: building the judge of %q: %w", scenario.Name, err)
 		}

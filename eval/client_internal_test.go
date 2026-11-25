@@ -63,9 +63,9 @@ func TestConnectURL(t *testing.T) {
 		}
 	})
 	t.Run("the run's params reach the client", func(t *testing.T) {
-		params := SessionParams{DefaultTimeoutMS: 1234, TriggerDisconnect: true}
+		params := SessionParams{DefaultTimeoutMS: 1234}
 		s := newSessionFor(t, &ScriptScenario{Name: "t"}, params)
-		if s.script.defaultTimeoutMS != 1234 || !strings.Contains(s.client.connectURL(), "trigger_disconnect=true") {
+		if s.script.defaultTimeoutMS != 1234 {
 			t.Fatalf("timeout %d, url %q", s.script.defaultTimeoutMS, s.client.connectURL())
 		}
 	})

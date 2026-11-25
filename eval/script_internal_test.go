@@ -881,27 +881,6 @@ func TestTurnAudioASynthesizedTurnStillNeedsSpeech(t *testing.T) {
 	wantErrContains(t, err, "turn(s) [1]")
 }
 
-func TestDeprecatedTriggerDisconnectIsStillRead(t *testing.T) {
-	var s *ScriptScenario
-	warnings := captureWarnings(t, func() {
-		s = script(t, "name: t\ntrigger_disconnect: true\nturns: [{user: hi}]\n")
-	})
-	if !s.TriggerDisconnect {
-		t.Fatal("trigger_disconnect: true should still be read")
-	}
-	if len(warnings) != 1 || !strings.Contains(warnings[0], "`trigger_disconnect:`") {
-		t.Fatalf("warnings = %q, want the deprecation", warnings)
-	}
-}
-
-func TestDeprecatedTriggerDisconnectAbsentDoesNotWarn(t *testing.T) {
-	var s *ScriptScenario
-	warnings := captureWarnings(t, func() { s = script(t, "name: t\nturns: [{user: hi}]\n") })
-	if s.TriggerDisconnect || len(warnings) != 0 {
-		t.Fatalf("trigger_disconnect = %v, warnings = %q", s.TriggerDisconnect, warnings)
-	}
-}
-
 // scriptLevel is the report level a one-turn scenario asks the bot for.
 func scriptLevel(expect ...Expectation) rtvi.FunctionCallReportLevel {
 	s := &ScriptScenario{Name: "t", Turns: []ScriptTurn{{User: "x", Expect: expect}}}

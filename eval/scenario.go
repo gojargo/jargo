@@ -502,40 +502,6 @@ func (f *ScenarioFile) Scenario(name string) (LoadedScenario, error) {
 	return nil, invalidf("%s: no scenario called %s (has %s)", f.Path, pyRepr(name), strings.Join(names, ", "))
 }
 
-// LoadScenarioFile loads a file holding one scenario, as whichever kind it is.
-//
-// Deprecated: Use LoadFile instead, which returns every scenario a file holds.
-func LoadScenarioFile(path string) (LoadedScenario, error) {
-	slog.Warn("eval: `LoadScenarioFile` is deprecated and will be removed. Use `LoadFile` instead.")
-	file, err := LoadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	if len(file.Scenarios) != 1 {
-		return nil, invalidf("%s: holds %d scenarios; use LoadFile()", path, len(file.Scenarios))
-	}
-	return file.Scenarios[0], nil
-}
-
-// Load reads a file holding one scripted scenario.
-//
-// Deprecated: Use LoadFile instead, which returns every scenario a file holds,
-// of every kind.
-func Load(path string) (*ScriptScenario, error) {
-	file, err := LoadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	if len(file.Scenarios) != 1 {
-		return nil, invalidf("%s: holds %d scenarios; use LoadFile()", path, len(file.Scenarios))
-	}
-	script, ok := file.Scenarios[0].(*ScriptScenario)
-	if !ok {
-		return nil, invalidf("%s: holds a scenario that is not scripted; use LoadFile()", path)
-	}
-	return script, nil
-}
-
 // scenarioFromMapping parses one scenario's mapping as a simulation (persona:),
 // a script (turns:), or a rubric (success:).
 //
@@ -596,4 +562,20 @@ func IsScenarioFile(path string) bool {
 	}
 	_, named := data[keyName]
 	return named
+}
+
+// loadScript loads a file that holds exactly one scripted scenario.
+func loadScript(path string) (*ScriptScenario, error) {
+	file, err := LoadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	if len(file.Scenarios) != 1 {
+		return nil, invalidf("%s: holds %d scenarios; use LoadFile()", path, len(file.Scenarios))
+	}
+	script, ok := file.Scenarios[0].(*ScriptScenario)
+	if !ok {
+		return nil, invalidf("%s: holds a scenario that is not scripted; use LoadFile()", path)
+	}
+	return script, nil
 }

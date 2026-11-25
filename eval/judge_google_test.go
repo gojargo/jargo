@@ -43,7 +43,7 @@ func TestGoogleClassifierIsRegistered(t *testing.T) {
 
 func TestGoogleClassifierAMissingAPIKeyIsAnError(t *testing.T) {
 	t.Setenv("GOOGLE_API_KEY", "")
-	_, err := eval.NewEvalJudgeFromConfig(&eval.JudgeEvalConfig{
+	_, err := eval.NewClassifierJudgeFromConfig(&eval.JudgeEvalConfig{
 		Factory: "evals.judges.google_classifier",
 	})
 	if err == nil || !strings.Contains(err.Error(), "GOOGLE_API_KEY") {

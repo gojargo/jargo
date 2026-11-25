@@ -69,8 +69,7 @@ func NewSimulationSession(
 		CaptureBotAudio: scenario.BotAudio,
 		// The bot's function calls, with their arguments, are the judge's
 		// evidence of what the bot actually did.
-		ReportLevel:       rtvi.ReportFull,
-		TriggerDisconnect: scenario.TriggerDisconnect, //nolint:staticcheck // the deprecated key still asks
+		ReportLevel: rtvi.ReportFull,
 	}, s.params, s.stream, s.trace, userTTS, botSTT, persona)
 	s.simulation = newSimulationDriver(scenario, persona, s.client, s.stream, judge, s.trace,
 		func(p SimulationProgress) { s.progress(p) })
@@ -101,7 +100,7 @@ func SimulationSessionFromScenario(
 		personaLLM = built
 	}
 	if judge == nil {
-		built, err := NewEvalJudgeFromConfig(&scenario.Judge)
+		built, err := NewClassifierJudgeFromConfig(&scenario.Judge)
 		if err != nil {
 			return nil, fmt.Errorf("eval: building the judge of %q: %w", scenario.Name, err)
 		}

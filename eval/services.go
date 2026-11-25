@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"errors"
 	"fmt"
-	"log/slog"
 	"maps"
 	"os"
 	"slices"
@@ -14,7 +13,6 @@ import (
 	"github.com/gojargo/jargo/classifier"
 	"github.com/gojargo/jargo/classifier/llmclassifier"
 	"github.com/gojargo/jargo/language"
-	"github.com/gojargo/jargo/provider/cartesia"
 	"github.com/gojargo/jargo/provider/kokoro"
 	"github.com/gojargo/jargo/provider/moonshine"
 	"github.com/gojargo/jargo/provider/ollama"
@@ -70,9 +68,6 @@ const (
 	// DefaultOllamaEndpoint is where the Ollama service is reached when the
 	// block names no endpoint.
 	DefaultOllamaEndpoint = "http://localhost:11434/v1"
-	// defaultCartesiaModel is the model the deprecated `service: cartesia`
-	// builds with when the block names none.
-	defaultCartesiaModel = "sonic-2"
 )
 
 // DefaultOllamaJudgeExtra is the request parameters the default judge model is
@@ -331,10 +326,6 @@ func TTSServiceFromConfig(cfg *SpeechConfig, cacheDir string, useCache bool) (*C
 
 // builtinTTS is the TTS a built-in `user.speech.service:` name builds.
 func builtinTTS(name string, cfg *SpeechConfig) (*tts.Base, error) {
-	if name == ttsCartesia {
-		slog.Warn("eval: `user.speech.service: cartesia` is deprecated and will be removed. Use `factory` instead.")
-		return cartesiaService(cfg)
-	}
 	registry.RLock()
 	build, ok := registry.tts[name]
 	names := known(registry.tts)
@@ -387,30 +378,6 @@ func kokoroService(cfg *SpeechConfig) (*tts.Base, error) {
 		Espeak:     kokoro.EspeakConfig{LibPath: os.Getenv(kokoro.EspeakLibPathEnv)},
 		SampleRate: CacheSampleRate,
 	})
-}
-
-// cartesiaService is a Cartesia HTTP TTS from a `user.speech:` block, keyed
-// from the block or, so committed scenarios carry no secrets, from
-// CARTESIA_API_KEY. It synthesizes at the cache's rate.
-//
-// Deprecated: use a `user.speech.factory` that builds a Cartesia HTTP TTS.
-func cartesiaService(cfg *SpeechConfig) (*tts.Base, error) {
-	apiKey := cmp.Or(cfg.APIKey, os.Getenv("CARTESIA_API_KEY"))
-	if apiKey == "" {
-		return nil, fmt.Errorf("%w: Cartesia API key not found; set $CARTESIA_API_KEY or user.speech.api_key",
-			ErrServiceUnavailable)
-	}
-	lang, err := cfgLanguage(cfg.Language)
-	if err != nil {
-		return nil, err
-	}
-	return cartesia.NewHTTPTTS(cartesia.HTTPTTSConfig{
-		APIKey:     apiKey,
-		VoiceID:    cfg.Voice,
-		Model:      cmp.Or(cfg.Model, defaultCartesiaModel),
-		Language:   lang,
-		SampleRate: CacheSampleRate,
-	}), nil
 }
 
 // ClassifierFromConfig builds the classifier a `judge.eval:` block names.
@@ -481,10 +448,6 @@ func LLMServiceFromConfig(cfg *LLMServiceConfig, where string) (llm.Inferencer, 
 	switch name := strings.ToLower(cmp.Or(cfg.Service, llmOllama)); name {
 	case llmOllama:
 		return OllamaService(cfg), nil
-	case llmOpenAI:
-		slog.Warn(fmt.Sprintf("eval: `%s.service: openai` is deprecated and will be removed. Use `factory` instead.",
-			where))
-		return openAIService(cfg), nil
 	default:
 		return nil, fmt.Errorf("%w: unknown %s service: %q. Known: ollama. For any other, set %s.factory "+
 			"to a registered factory returning an LLM service", ErrUnknownService, where, name, where)
@@ -509,17 +472,5 @@ func OllamaService(cfg *LLMServiceConfig) *chat.LLMService {
 		BaseURL: cmp.Or(cfg.Endpoint, DefaultOllamaEndpoint),
 		Model:   cmp.Or(cfg.Model, DefaultOllamaJudgeModel),
 		Extra:   extra,
-	})
-}
-
-// openAIService is an OpenAI LLM from a block, its `extra:` forwarded as
-// request parameters, keyed from OPENAI_API_KEY.
-//
-// Deprecated: use a `judge.eval.factory` that builds an OpenAI service.
-func openAIService(cfg *LLMServiceConfig) *chat.LLMService {
-	return chat.NewLLM(chat.LLMConfig{
-		APIKey: os.Getenv("OPENAI_API_KEY"),
-		Model:  cmp.Or(cfg.Model, DefaultOpenAIModel),
-		Extra:  cfg.Extra,
 	})
 }

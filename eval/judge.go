@@ -342,8 +342,8 @@ const (
 	roleBot       = "bot"
 )
 
-// NewEvalJudge builds a judge.
-func NewEvalJudge(cfg ClassifierJudgeConfig) (*ClassifierJudge, error) {
+// NewClassifierJudge builds a judge.
+func NewClassifierJudge(cfg ClassifierJudgeConfig) (*ClassifierJudge, error) {
 	if cfg.Classifier == nil {
 		return nil, errNoClassifier
 	}
@@ -368,18 +368,18 @@ func NewEvalJudge(cfg ClassifierJudgeConfig) (*ClassifierJudge, error) {
 	return j, nil
 }
 
-// NewEvalJudgeFromConfig builds a judge from a scenario's `judge.eval:` block.
+// NewClassifierJudgeFromConfig builds a judge from a scenario's `judge.eval:` block.
 //
 // The block names an LLM, Ollama by default, and the judge classifies and
 // explains with it. A factory builds the classifier instead, or an LLM service
 // to classify with; the explainer is then the `explainer:` block's LLM, or the
 // default LLM when the block names none. `explainer: false` gives no
 // explainer. A nil cfg uses all the defaults. For a fully custom judge, build
-// one with NewEvalJudge.
+// one with NewClassifierJudge.
 //
 // It fails when the block names an unknown service, or its factory is not
 // registered or returned neither a classifier nor an LLM service.
-func NewEvalJudgeFromConfig(cfg *JudgeEvalConfig) (*ClassifierJudge, error) {
+func NewClassifierJudgeFromConfig(cfg *JudgeEvalConfig) (*ClassifierJudge, error) {
 	if cfg == nil {
 		cfg = &JudgeEvalConfig{}
 	}
@@ -407,28 +407,12 @@ func NewEvalJudgeFromConfig(cfg *JudgeEvalConfig) (*ClassifierJudge, error) {
 	if cfg.ExplainBelow != nil {
 		explainBelow = *cfg.ExplainBelow
 	}
-	return NewEvalJudge(ClassifierJudgeConfig{
+	return NewClassifierJudge(ClassifierJudgeConfig{
 		Classifier:    c,
 		Explainer:     inf,
 		ExplainBelow:  &explainBelow,
 		AllowContinue: cfg.AllowContinue,
 	})
-}
-
-// NewLLMJudge builds a judge that classifies with inf and explains with it too,
-// e.g. eval.NewLLMJudge(chat.NewLLM(chat.LLMConfig{APIKey: key})).
-//
-// Deprecated: build a classifier/llmclassifier classifier over the service and pass it to
-// NewEvalJudge, with the service as the Explainer for the reasons.
-func NewLLMJudge(inf llm.Inferencer) *ClassifierJudge {
-	c, err := llmclassifier.New(llmclassifier.Config{LLM: inf})
-	if err != nil {
-		// A nil service is the only way to fail, and that is a caller's mistake
-		// made where it is made.
-		panic(err) //nolint:forbidigo // a mistake in the program, refused where it is made
-	}
-	j, _ := NewEvalJudge(ClassifierJudgeConfig{Classifier: c, Explainer: inf})
-	return j
 }
 
 // Classifier is the classifier that decides the verdicts.

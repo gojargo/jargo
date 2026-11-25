@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"log/slog"
 	"math"
 	"os"
 	"path/filepath"
@@ -19,7 +18,6 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/onnxrt"
 	"github.com/gojargo/jargo/language"
-	"github.com/gojargo/jargo/provider/cartesia"
 	"github.com/gojargo/jargo/provider/kokoro"
 	"github.com/gojargo/jargo/provider/moonshine"
 	"github.com/gojargo/jargo/provider/openai/chat"
@@ -112,17 +110,6 @@ func init() {
 	RegisterFactory("evaltest.not_a_judge", func(map[string]any) (any, error) { return [2]string{"FAKE", "JUDGE"}, nil })
 }
 
-// captureWarnings records what is logged while fn runs.
-func captureWarningText(t *testing.T, fn func()) string {
-	t.Helper()
-	var buf bytes.Buffer
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
-	defer slog.SetDefault(prev)
-	fn()
-	return buf.String()
-}
-
 func judgeEvalConfig(t *testing.T, block string) *JudgeEvalConfig {
 	t.Helper()
 	var cfg JudgeEvalConfig
@@ -145,7 +132,7 @@ func modelOf(t *testing.T, inf llm.Inferencer) string {
 // The judge's config
 
 func TestTheDefaultJudgeClassifiesAndExplainsWithOneLLM(t *testing.T) {
-	j, err := NewEvalJudgeFromConfig(nil)
+	j, err := NewClassifierJudgeFromConfig(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,7 +153,7 @@ func TestTheDefaultJudgeClassifiesAndExplainsWithOneLLM(t *testing.T) {
 }
 
 func TestAnExplainerBlockNamesTheLLMThatGivesTheReasons(t *testing.T) {
-	j, err := NewEvalJudgeFromConfig(judgeEvalConfig(t,
+	j, err := NewClassifierJudgeFromConfig(judgeEvalConfig(t,
 		"service: ollama\nmodel: a\nexplainer: {service: ollama, model: b}\n"))
 	if err != nil {
 		t.Fatal(err)
@@ -178,7 +165,7 @@ func TestAnExplainerBlockNamesTheLLMThatGivesTheReasons(t *testing.T) {
 }
 
 func TestExplainerFalseBuildsNoExplainer(t *testing.T) {
-	j, err := NewEvalJudgeFromConfig(judgeEvalConfig(t, "service: ollama\nexplainer: false\n"))
+	j, err := NewClassifierJudgeFromConfig(judgeEvalConfig(t, "service: ollama\nexplainer: false\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +175,8 @@ func TestExplainerFalseBuildsNoExplainer(t *testing.T) {
 }
 
 func TestAllowContinueFalseIsReadFromTheConfig(t *testing.T) {
-	j, err := NewEvalJudgeFromConfig(judgeEvalConfig(t, "service: ollama\nallow_continue: false\nexplain_below: 0.5\n"))
+	cfg := judgeEvalConfig(t, "service: ollama\nallow_continue: false\nexplain_below: 0.5\n")
+	j, err := NewClassifierJudgeFromConfig(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,13 +189,13 @@ func TestAllowContinueFalseIsReadFromTheConfig(t *testing.T) {
 }
 
 func TestJudgeFromConfigUnknownServiceRejected(t *testing.T) {
-	if _, err := NewEvalJudgeFromConfig(judgeEvalConfig(t, "service: nope\n")); !errors.Is(err, ErrUnknownService) {
+	if _, err := NewClassifierJudgeFromConfig(judgeEvalConfig(t, "service: nope\n")); !errors.Is(err, ErrUnknownService) {
 		t.Fatalf("err = %v, want an unknown service", err)
 	}
 }
 
 func TestJudgeFromConfigFactoryEscapeHatch(t *testing.T) {
-	j, err := NewEvalJudgeFromConfig(judgeEvalConfig(t, "factory: evaltest.fake_judge_llm\n"))
+	j, err := NewClassifierJudgeFromConfig(judgeEvalConfig(t, "factory: evaltest.fake_judge_llm\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -223,7 +211,7 @@ func TestJudgeFromConfigFactoryEscapeHatch(t *testing.T) {
 // A factory's classifier is explained by the default LLM, unless the block
 // turns the explainer off, and the rest of the block still applies.
 func TestAFactorysClassifierIsExplainedByTheDefaultLLM(t *testing.T) {
-	j, err := NewEvalJudgeFromConfig(judgeEvalConfig(t, "factory: evaltest.fake_classifier\n"))
+	j, err := NewClassifierJudgeFromConfig(judgeEvalConfig(t, "factory: evaltest.fake_classifier\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,7 +219,7 @@ func TestAFactorysClassifierIsExplainedByTheDefaultLLM(t *testing.T) {
 		modelOf(t, j.explainer.inf) != DefaultOllamaJudgeModel {
 		t.Fatalf("classifier = %T, explainer = %+v", j.Classifier(), j.explainer)
 	}
-	j, err = NewEvalJudgeFromConfig(judgeEvalConfig(t,
+	j, err = NewClassifierJudgeFromConfig(judgeEvalConfig(t,
 		"factory: evaltest.fake_classifier\nexplainer: false\nallow_continue: false\n"))
 	if err != nil {
 		t.Fatal(err)
@@ -473,37 +461,6 @@ func TestTTSKokoroBuildsTheLocalService(t *testing.T) {
 	}
 }
 
-// cartesiaLanguage is the language a Cartesia TTS's settings hold.
-func cartesiaLanguage(t *testing.T, b *tts.Base) string {
-	t.Helper()
-	s, ok := b.CurrentSettings().(*cartesia.TTSSettings)
-	if !ok {
-		t.Fatalf("settings = %T", b.CurrentSettings())
-	}
-	lang, _ := s.Language.Value()
-	return lang
-}
-
-func TestLanguageReachesCartesiaSettings(t *testing.T) {
-	b, err := cartesiaService(&SpeechConfig{Service: "cartesia", Voice: "v", APIKey: "test-key", Language: "zh"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := cartesiaLanguage(t, b); got != "zh" {
-		t.Fatalf("language = %q, want zh", got)
-	}
-}
-
-func TestNoLanguageLeavesCartesiaDefault(t *testing.T) {
-	b, err := cartesiaService(&SpeechConfig{Service: "cartesia", Voice: "v", APIKey: "test-key"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := cartesiaLanguage(t, b); got != "en" {
-		t.Fatalf("language = %q, want en", got)
-	}
-}
-
 func TestWebsocketServiceRejected(t *testing.T) {
 	// RunTTS cannot be driven without a pipeline to manage the connection.
 	if _, err := NewCachingTTSService(&fakeWebsocketTTS{}, CachingTTSConfig{CacheKey: "k"}); err == nil {
@@ -663,36 +620,6 @@ func TestAudioAtAnotherInnerRateIsCachedAtTheCacheRate(t *testing.T) {
 }
 
 // Deprecated paid services
-
-func TestCartesiaByNameWarnsAndBuilds(t *testing.T) {
-	var (
-		s   *CachingTTSService
-		err error
-	)
-	logged := captureWarningText(t, func() {
-		s, err = TTSServiceFromConfig(&SpeechConfig{Service: "cartesia", Voice: "v", APIKey: "test-key"}, "", false)
-	})
-	if err != nil || s == nil {
-		t.Fatalf("tts = %v, %v", s, err)
-	}
-	if !strings.Contains(logged, "`user.speech.service: cartesia`") {
-		t.Fatalf("logged %q, want a deprecation warning", logged)
-	}
-}
-
-func TestOpenAIByNameWarnsAndBuilds(t *testing.T) {
-	t.Setenv("OPENAI_API_KEY", "test-key")
-	var err error
-	logged := captureWarningText(t, func() {
-		_, err = LLMServiceFromConfig(&LLMServiceConfig{Service: "openai"}, "simulator")
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(logged, "`simulator.service: openai`") {
-		t.Fatalf("logged %q, want a deprecation warning", logged)
-	}
-}
 
 func TestUnknownNamesPointAtTheFactory(t *testing.T) {
 	_, err := TTSServiceFromConfig(&SpeechConfig{Service: "elevenlabs", Voice: "v"}, "", true)

@@ -180,7 +180,7 @@ func newJudge(
 	for _, o := range opts {
 		o(&cfg)
 	}
-	j, err := eval.NewEvalJudge(cfg)
+	j, err := eval.NewClassifierJudge(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -540,22 +540,8 @@ func TestWithoutAnExplainerTheProbabilitiesAreTheReason(t *testing.T) {
 	}
 }
 
-func TestALLMJudgeClassifiesAndExplainsWithOneService(t *testing.T) {
-	service := &explainerLLM{replies: []string{
-		`{"verdict": {"choice": "no", "probabilities": {"no": 0.9}}}`,
-		`{"reason": "it never mentions the weather"}`,
-	}}
-	//nolint:staticcheck // the deprecated constructor is what is under test
-	j := eval.NewLLMJudge(service)
-	j.AddAssistantMessage("Hello there.")
-	v := j.Evaluate(t.Context(), "describes the weather", nil)
-	if v.Reason != "it never mentions the weather" || len(service.recorded()) != 2 {
-		t.Fatalf("verdict = %+v after %d calls", v, len(service.recorded()))
-	}
-}
-
 func TestAJudgeNeedsAClassifier(t *testing.T) {
-	if _, err := eval.NewEvalJudge(eval.ClassifierJudgeConfig{}); err == nil {
+	if _, err := eval.NewClassifierJudge(eval.ClassifierJudgeConfig{}); err == nil {
 		t.Fatal("a judge with no classifier was built")
 	}
 }
@@ -624,7 +610,7 @@ func TestPassedOnlyForYes(t *testing.T) {
 
 func TestHarnessJudgePasses(t *testing.T) {
 	// The bot echoes "you said: hello there"; the judge is told to answer yes.
-	scenario, err := eval.Load(writeScenario(t, `
+	scenario, err := loadScript(writeScenario(t, `
 name: judged
 turns:
   - user: "hello there"
@@ -646,7 +632,7 @@ turns:
 }
 
 func TestHarnessJudgeFailsSurfacesReason(t *testing.T) {
-	scenario, err := eval.Load(writeScenario(t, `
+	scenario, err := loadScript(writeScenario(t, `
 name: judged-fail
 turns:
   - user: "hello there"
@@ -676,7 +662,7 @@ turns:
 // block builds; a block naming a factory nothing registered fails the run
 // before it starts, naming it.
 func TestHarnessBuildsTheJudgeFromTheScenario(t *testing.T) {
-	scenario, err := eval.Load(writeScenario(t, `
+	scenario, err := loadScript(writeScenario(t, `
 name: judged-from-config
 judge:
   eval: {factory: evaltest.no_such_judge}
@@ -698,7 +684,7 @@ turns:
 // The judge sees the user turn as well as the reply, so it can resolve a terse
 // answer that would not make sense on its own.
 func TestHarnessJudgeSeesTheConversation(t *testing.T) {
-	scenario, err := eval.Load(writeScenario(t, `
+	scenario, err := loadScript(writeScenario(t, `
 name: judged-context
 turns:
   - user: "what is two plus two?"
@@ -763,7 +749,7 @@ func (j *closingJudge) wasClosed() bool {
 }
 
 func TestARunThatNeverReachesTheBotClosesItsJudge(t *testing.T) {
-	scenario, err := eval.Load(writeScenario(t,
+	scenario, err := loadScript(writeScenario(t,
 		"name: x\nturns:\n  - user: hi\n    expect:\n      - event: llm_started\n"))
 	if err != nil {
 		t.Fatal(err)

@@ -146,14 +146,14 @@ func buildDTMFBot(in, out processor.Processor) *pipeline.Worker {
 	})
 }
 
-func host(t *testing.T, body string) eval.Result {
+func host(t *testing.T, body string) eval.ScriptResult {
 	t.Helper()
 	return hostWith(t, buildFakeBot, body)
 }
 
-func hostWith(t *testing.T, build eval.Bot, body string) eval.Result {
+func hostWith(t *testing.T, build eval.Bot, body string) eval.ScriptResult {
 	t.Helper()
-	scenario, err := eval.Load(writeScenario(t, body))
+	scenario, err := loadScript(writeScenario(t, body))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,9 +167,9 @@ func hostWith(t *testing.T, build eval.Bot, body string) eval.Result {
 }
 
 // hostWithJudge is host with a judge answering the scenario's criteria.
-func hostWithJudge(t *testing.T, judge eval.Judge, body string) eval.Result {
+func hostWithJudge(t *testing.T, judge eval.Judge, body string) eval.ScriptResult {
 	t.Helper()
-	scenario, err := eval.Load(writeScenario(t, body))
+	scenario, err := loadScript(writeScenario(t, body))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -411,7 +411,7 @@ turns:
 // A judge that says continue on the filler and yes on the answer passes, and is
 // asked once per segment.
 func TestHarnessAggregatesPastJudgeContinue(t *testing.T) {
-	scenario, err := eval.Load(writeScenario(t, `
+	scenario, err := loadScript(writeScenario(t, `
 name: filler-judge
 turns:
   - user: "can you check the weather?"
@@ -439,7 +439,7 @@ turns:
 // A judge that says no is an affirmative rejection: the expectation fails at
 // once rather than waiting out the budget for more text.
 func TestHarnessJudgeNoFailsWithoutWaiting(t *testing.T) {
-	scenario, err := eval.Load(writeScenario(t, `
+	scenario, err := loadScript(writeScenario(t, `
 name: judge-no
 turns:
   - user: "can you check the weather?"
@@ -608,7 +608,7 @@ turns:
 // is cut short instead; what this checks is the shape of the failure. Upstream
 // leaves the 30s bound itself untested too.
 func TestHarnessSendAfterNeverFires(t *testing.T) {
-	scenario, err := eval.Load(writeScenario(t, `
+	scenario, err := loadScript(writeScenario(t, `
 name: never-fires
 turns:
   - user: "hello"
@@ -756,7 +756,7 @@ turns:
 
 // A caller can watch a run as it happens rather than waiting for the result.
 func TestHarnessReportsProgress(t *testing.T) {
-	scenario, err := eval.Load(writeScenario(t, `
+	scenario, err := loadScript(writeScenario(t, `
 name: watched
 turns:
   - user: "hello world"
@@ -769,7 +769,7 @@ turns:
 		t.Fatal(err)
 	}
 	var got []string
-	opts := eval.Options{OnProgress: func(p eval.Progress) {
+	opts := eval.Options{OnProgress: func(p eval.ScriptTurnProgress) {
 		got = append(got, p.Status+":"+p.EventName)
 	}}
 	if _, err := eval.Host(t.Context(), scenario, buildFakeBot, opts); err != nil {
@@ -1275,7 +1275,7 @@ turns:
 
 // wantKind asserts the run's first failure is of kind, the stable key failures
 // are grouped by across runs.
-func wantKind(t *testing.T, res eval.Result, kind string) {
+func wantKind(t *testing.T, res eval.ScriptResult, kind string) {
 	t.Helper()
 	if len(res.Failures) == 0 || res.Failures[0].Kind != kind {
 		t.Fatalf("failures = %+v, want the first of kind %s", res.Failures, kind)

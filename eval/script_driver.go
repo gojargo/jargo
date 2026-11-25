@@ -46,14 +46,14 @@ type ScriptDriver struct {
 // as turns and expectations resolve.
 func newScriptDriver(
 	scenario *ScriptScenario, defaultTimeoutMS int, client turnSender, stream *EventStream,
-	judge Judge, trace *Trace, progress func(Progress),
+	judge Judge, trace *Trace, progress func(ScriptTurnProgress),
 ) *ScriptDriver {
 	turns := make([]ScriptTurnResult, len(scenario.Turns))
 	for i := range turns {
 		turns[i] = ScriptTurnResult{TurnIndex: i, Status: TurnNotRun}
 	}
 	if progress == nil {
-		progress = func(Progress) {}
+		progress = func(ScriptTurnProgress) {}
 	}
 	return &ScriptDriver{
 		client:           client,
@@ -158,7 +158,7 @@ func (d *ScriptDriver) runTurn(ctx context.Context, turn *ScriptTurn, turnIdx in
 	if input == "" {
 		input = turn.DTMF
 	}
-	d.progress(Progress{TurnIndex: turnIdx, ExpectationIndex: -1, EventName: input, Status: StatusTurn})
+	d.progress(ScriptTurnProgress{TurnIndex: turnIdx, ExpectationIndex: -1, EventName: input, Status: StatusTurn})
 	return d.matchExpectations(ctx, turn, turnIdx)
 }
 
@@ -238,7 +238,9 @@ func (d *ScriptDriver) sendAfterFailure(sendAfter SendAfter, turnIdx int, reason
 	if kind == FailureSendAfterTimeout {
 		status = StatusTimeout
 	}
-	d.progress(Progress{TurnIndex: turnIdx, ExpectationIndex: -1, EventName: eventName, Status: status, Detail: reason})
+	d.progress(ScriptTurnProgress{
+		TurnIndex: turnIdx, ExpectationIndex: -1, EventName: eventName, Status: status, Detail: reason,
+	})
 	return &AssertionFailure{TurnIndex: turnIdx, ExpectationIndex: -1, EventName: eventName, Reason: reason, Kind: kind}
 }
 
@@ -334,7 +336,7 @@ func (d *ScriptDriver) matchExpectations(
 			failures = append(failures, *f)
 			*resolved = append(*resolved, ExpectationResult{ExpectationIndex: expIdx, EventName: exp.Event})
 			d.trace.Log(fmt.Sprintf("FAIL: %s: %s", exp.Event, f.Reason))
-			d.progress(Progress{
+			d.progress(ScriptTurnProgress{
 				TurnIndex: turnIdx, ExpectationIndex: expIdx, EventName: exp.Event, Status: StatusFailed, Detail: f.Reason,
 			})
 			continue
@@ -343,7 +345,7 @@ func (d *ScriptDriver) matchExpectations(
 		*resolved = append(*resolved, ExpectationResult{
 			ExpectationIndex: expIdx, EventName: exp.Event, Passed: true, Matched: matched,
 		})
-		d.progress(Progress{
+		d.progress(ScriptTurnProgress{
 			TurnIndex: turnIdx, ExpectationIndex: expIdx, EventName: exp.Event, Status: StatusMatched, Detail: matched,
 		})
 	}
@@ -360,7 +362,7 @@ func (d *ScriptDriver) unmatched(turnIdx, expIdx int, exp *Expectation, reason, 
 	if kind == FailureTimeout {
 		status = StatusTimeout
 	}
-	d.progress(Progress{
+	d.progress(ScriptTurnProgress{
 		TurnIndex: turnIdx, ExpectationIndex: expIdx, EventName: exp.Event, Status: status, Detail: reason,
 	})
 	return AssertionFailure{TurnIndex: turnIdx, ExpectationIndex: expIdx, EventName: exp.Event, Reason: reason, Kind: kind}

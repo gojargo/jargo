@@ -162,7 +162,7 @@ func configJudge(t *testing.T, api *jevAPI, block string) (*eval.ClassifierJudge
 		[]byte("factory: evals.judges.typesafe_classifier\nendpoint: "+api.srv.URL+"/\n"+block), &cfg); err != nil {
 		t.Fatal(err)
 	}
-	return eval.NewEvalJudgeFromConfig(&cfg)
+	return eval.NewClassifierJudgeFromConfig(&cfg)
 }
 
 func TestJevAReplyIsAskedAsAChoiceOverTheConversation(t *testing.T) {
@@ -331,7 +331,7 @@ func TestJevCloseReleasesAConnectionTheJudgeOpened(t *testing.T) {
 func TestJevCloseLeavesAConnectionTheJudgeWasGivenOpen(t *testing.T) {
 	api := newJevAPI(t)
 	c := api.classifier(t)
-	j, err := eval.NewEvalJudge(eval.ClassifierJudgeConfig{Classifier: c})
+	j, err := eval.NewClassifierJudge(eval.ClassifierJudgeConfig{Classifier: c})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -358,7 +358,7 @@ func TestJevServiceTypesafeJudgesWithJevAndExplainsWithAnLLM(t *testing.T) {
 
 func TestJevAMissingAPIKeyIsAnError(t *testing.T) {
 	t.Setenv("TYPESAFE_API_KEY", "")
-	_, err := eval.NewEvalJudgeFromConfig(&eval.JudgeEvalConfig{
+	_, err := eval.NewClassifierJudgeFromConfig(&eval.JudgeEvalConfig{
 		Factory: "evals.judges.typesafe_classifier",
 	})
 	if err == nil || !strings.Contains(err.Error(), "TYPESAFE_API_KEY") {

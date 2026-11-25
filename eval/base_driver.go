@@ -43,7 +43,7 @@ type baseDriver struct {
 	stream   *EventStream
 	judge    Judge
 	trace    *Trace
-	progress func(Progress)
+	progress func(ScriptTurnProgress)
 }
 
 // botMetrics is the metrics reports the bot sent during the run, for the

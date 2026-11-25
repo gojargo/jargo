@@ -338,11 +338,6 @@ type ScriptTurn struct {
 	Image string
 }
 
-// Turn is a scripted turn.
-//
-// Deprecated: Use ScriptTurn instead.
-type Turn = ScriptTurn
-
 // ScriptScenario is a scripted scenario: a conversation and the events it
 // should produce.
 type ScriptScenario struct {
@@ -358,11 +353,6 @@ type ScriptScenario struct {
 	Context []map[string]any
 	// Configured is the scenario's user: and judge: blocks.
 	Configured
-	// TriggerDisconnect is the trigger_disconnect: key.
-	//
-	// Deprecated: No replacement. A bot fires its client-disconnected handlers
-	// whenever the harness disconnects.
-	TriggerDisconnect bool
 	// StopOnFailure is whether the first failed turn ends the scenario; nil is
 	// true. A failed turn leaves the conversation in an unknown state, so the
 	// remaining turns usually just burn a budget each. Set it false for a
@@ -373,11 +363,6 @@ type ScriptScenario struct {
 	// SourcePath is the file the scenario was loaded from.
 	SourcePath string
 }
-
-// Scenario is a scripted scenario.
-//
-// Deprecated: Use ScriptScenario instead.
-type Scenario = ScriptScenario
 
 // ScenarioName is the scenario's name.
 func (s *ScriptScenario) ScenarioName() string { return s.Name }
@@ -524,17 +509,16 @@ func parseScript(data map[string]any, path string) (*ScriptScenario, error) {
 		stopOnFailure = truthy(v)
 	}
 	return &ScriptScenario{
-		Name:              name,
-		Turns:             turns,
-		Context:           context,
-		UserAudio:         userAudio,
-		UserSpeech:        userSpeech,
-		BotAudio:          botAudio,
-		Transcriber:       transcriber,
-		Judge:             judge,
-		TriggerDisconnect: parseTriggerDisconnect(data, path),
-		StopOnFailure:     &stopOnFailure,
-		SourcePath:        path,
+		Name:          name,
+		Turns:         turns,
+		Context:       context,
+		UserAudio:     userAudio,
+		UserSpeech:    userSpeech,
+		BotAudio:      botAudio,
+		Transcriber:   transcriber,
+		Judge:         judge,
+		StopOnFailure: &stopOnFailure,
+		SourcePath:    path,
 	}, nil
 }
 

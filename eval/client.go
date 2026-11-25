@@ -519,10 +519,6 @@ type ClientParams struct {
 	// Context is the messages the bot's context starts from, sent right after
 	// the handshake; empty sends nothing.
 	Context []map[string]any
-	// TriggerDisconnect is whether the scenario itself asks a bot serving
-	// eval.Handler to fire its client-disconnected handlers when this
-	// connection ends; the run's SessionParams can ask too.
-	TriggerDisconnect bool
 }
 
 // BotUnavailableError is a bot that refused the connection, closed it before
@@ -1147,9 +1143,6 @@ func (c *Client) connectURL() string {
 	}
 	if connection.CaptureBotImages {
 		flags = append(flags, evalws.CaptureImagesQueryParam+"=true")
-	}
-	if c.sessionParams.TriggerDisconnect || c.params.TriggerDisconnect {
-		flags = append(flags, evalws.TriggerDisconnectQueryParam+"=true")
 	}
 	if len(flags) == 0 {
 		return c.botURL

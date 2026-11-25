@@ -146,16 +146,18 @@ func (*repliesClient) SayWithPauses(context.Context, []TurnPart) error { return 
 func (*repliesClient) Play(context.Context, string) error              { return nil }
 
 // testDriver is a script driver over stream for turns, recording its progress.
-func testDriver(stream *EventStream, client turnSender, progress *[]Progress, turns ...ScriptTurn) *ScriptDriver {
+func testDriver(
+	stream *EventStream, client turnSender, progress *[]ScriptTurnProgress, turns ...ScriptTurn,
+) *ScriptDriver {
 	return newScriptDriver(&ScriptScenario{Name: "t", Turns: turns}, 5000, client, stream, nil, NewTrace(),
-		func(p Progress) { *progress = append(*progress, p) })
+		func(p ScriptTurnProgress) { *progress = append(*progress, p) })
 }
 
 // Once the bot ends the call, the driver fails what waits on it at once.
 func TestBotEndedDriver(t *testing.T) {
 	ctx := t.Context()
 	t.Run("the driver fails the turn as the bot ended it", func(t *testing.T) {
-		var progress []Progress
+		var progress []ScriptTurnProgress
 		stream := newStream(false)
 		turn := ScriptTurn{User: "hi", Expect: []Expectation{{Event: EventLLMResponse}}}
 		d := testDriver(stream, nil, &progress, turn)
@@ -171,7 +173,7 @@ func TestBotEndedDriver(t *testing.T) {
 		}
 	})
 	t.Run("a send_after wait fails at once once the bot ended the call", func(t *testing.T) {
-		var progress []Progress
+		var progress []ScriptTurnProgress
 		stream := newStream(false)
 		sendAfter := SendAfter{Event: EventBotStartedSpeaking}
 		d := testDriver(stream, nil, &progress, ScriptTurn{User: "hi", SendAfter: &sendAfter})
@@ -194,7 +196,7 @@ func TestBotEndedDriver(t *testing.T) {
 func TestHarnessErrorDriver(t *testing.T) {
 	ctx := t.Context()
 	t.Run("a harness error fails the turn at once as an error", func(t *testing.T) {
-		var progress []Progress
+		var progress []ScriptTurnProgress
 		stream := newStream(false)
 		client := &repliesClient{stream: stream, replies: map[string][]map[string]any{
 			"hi": {{keyType: EventHarnessError, "text": "TTS failed"}},
@@ -212,7 +214,7 @@ func TestHarnessErrorDriver(t *testing.T) {
 		}
 	})
 	t.Run("a send_after wait fails at once as an error", func(t *testing.T) {
-		var progress []Progress
+		var progress []ScriptTurnProgress
 		stream := newStream(false)
 		sendAfter := SendAfter{Event: EventBotStartedSpeaking}
 		d := testDriver(stream, &repliesClient{stream: stream}, &progress, ScriptTurn{User: "hi", SendAfter: &sendAfter})
@@ -240,7 +242,7 @@ func sightAt(s *EventStream, eventType string, when time.Time) {
 // The send_after delay is measured from when its event was seen, not from when
 // the turn asked: an event seen longer ago than the delay has already fired it.
 func TestWaitSendAfterAnchorsOnAnEarlierSighting(t *testing.T) {
-	var progress []Progress
+	var progress []ScriptTurnProgress
 	stream := newStream(false)
 	d := testDriver(stream, nil, &progress)
 	sightAt(stream, EventLLMStarted, time.Now().Add(-time.Second))
@@ -257,7 +259,7 @@ func TestWaitSendAfterAnchorsOnAnEarlierSighting(t *testing.T) {
 // The send_after wait polls until its event arrives, and only then waits out
 // its delay.
 func TestWaitSendAfterWaitsForAnUnseenEvent(t *testing.T) {
-	var progress []Progress
+	var progress []ScriptTurnProgress
 	stream := newStream(false)
 	d := testDriver(stream, nil, &progress)
 	const arrivesAfter = 200 * time.Millisecond
@@ -278,7 +280,7 @@ func TestWaitSendAfterWaitsForAnUnseenEvent(t *testing.T) {
 // A send_after with no event waits out its delay from now, the previous turn's
 // send.
 func TestWaitSendAfterPureDelay(t *testing.T) {
-	var progress []Progress
+	var progress []ScriptTurnProgress
 	d := testDriver(newStream(false), nil, &progress)
 	start := time.Now()
 	if err := d.waitSendAfter(t.Context(), SendAfter{DelayMS: 150}); err != nil {

@@ -856,7 +856,7 @@ func TestProgressEvent(t *testing.T) {
 	)
 	s.Add(EventProgress, func(_ context.Context, source any, args ...any) {
 		time.Sleep(10 * time.Millisecond)
-		p, _ := args[0].(Progress)
+		p, _ := args[0].(ScriptTurnProgress)
 		mu.Lock()
 		finished = append(finished, p.EventName+" "+p.Status)
 		sources = append(sources, source)
@@ -884,7 +884,7 @@ func TestOptionsOnProgressIsCalled(t *testing.T) {
 	bot.onText("hi", reply("hello")...)
 	var seen []string
 	res, err := RunURL(t.Context(), progressScenario(), bot.url(), Options{
-		OnProgress: func(p Progress) { seen = append(seen, p.EventName+" "+p.Status) },
+		OnProgress: func(p ScriptTurnProgress) { seen = append(seen, p.EventName+" "+p.Status) },
 	})
 	if err != nil || !res.Passed() {
 		t.Fatalf("run = %v, %v", res, err)

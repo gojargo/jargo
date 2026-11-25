@@ -116,11 +116,6 @@ type AssertionFailure struct {
 	Kind string
 }
 
-// Failure is an assertion failure.
-//
-// Deprecated: Use AssertionFailure instead.
-type Failure = AssertionFailure
-
 // String renders a failure as a single line.
 func (f AssertionFailure) String() string {
 	return fmt.Sprintf("turn %d expectation %d (%s): %s", f.TurnIndex, f.ExpectationIndex, f.EventName, f.Reason)
@@ -181,11 +176,6 @@ type ScriptTurnResult struct {
 	DurationMS int
 }
 
-// TurnResult is the outcome of one turn of a scripted scenario.
-//
-// Deprecated: Use ScriptTurnResult instead.
-type TurnResult = ScriptTurnResult
-
 // ScriptResult is the outcome of running a scripted scenario.
 type ScriptResult struct {
 	// ScenarioName is the name of the scenario that was run.
@@ -236,11 +226,6 @@ func botMetricsOf(stream *EventStream) []BotMetricsReport {
 	}
 	return reports
 }
-
-// Result is the outcome of running a scripted scenario.
-//
-// Deprecated: Use ScriptResult instead.
-type Result = ScriptResult
 
 // Passed reports whether every assertion passed and the scenario was run.
 func (r ScriptResult) Passed() bool { return len(r.Failures) == 0 && r.Skipped == "" }
@@ -465,11 +450,6 @@ type ScriptTurnProgress struct {
 	// Detail is optional extra text: the failure reason, the user utterance.
 	Detail string
 }
-
-// Progress is a progress record emitted while a turn runs.
-//
-// Deprecated: Use ScriptTurnProgress instead.
-type Progress = ScriptTurnProgress
 
 // SimulationProgress is a progress record emitted while a simulation runs.
 type SimulationProgress struct {

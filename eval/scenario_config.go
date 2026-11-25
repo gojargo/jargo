@@ -2,7 +2,6 @@ package eval
 
 import (
 	"fmt"
-	"log/slog"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -157,18 +156,6 @@ func parseJudgeBlock(judge any, path string) (bool, *TranscriptionConfig, JudgeE
 	}
 	cfg.Transcription.Raw = transcription
 	return true, cfg.Transcription, evalCfg, nil
-}
-
-// parseTriggerDisconnect reads a scenario's trigger_disconnect: key, warning
-// that it is deprecated when given.
-func parseTriggerDisconnect(data map[string]any, path string) bool {
-	v, set := data["trigger_disconnect"]
-	if !set {
-		return false
-	}
-	slog.Warn("eval: `trigger_disconnect:` is deprecated and will be removed. No replacement. "+
-		"A bot fires its client-disconnected handlers whenever the harness disconnects.", "path", path)
-	return truthy(v)
 }
 
 // parseLLMConfig parses a block naming an LLM service; where is the block's

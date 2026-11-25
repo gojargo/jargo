@@ -277,9 +277,8 @@ func TestSessionFromScenario(t *testing.T) {
 			t.Fatalf("session = %T", session)
 		}
 	})
-	t.Run("params reach the driver and the client", func(t *testing.T) {
-		//nolint:staticcheck // the deprecated field still asks
-		params := SessionParams{DefaultTimeoutMS: 1234, TriggerDisconnect: true}
+	t.Run("params reach the driver", func(t *testing.T) {
+		params := SessionParams{DefaultTimeoutMS: 1234}
 		session, err := SessionFromScenario(script(), "ws://localhost:0", params, SessionServices{})
 		if err != nil {
 			t.Fatal(err)
@@ -290,9 +289,6 @@ func TestSessionFromScenario(t *testing.T) {
 		}
 		if s.Driver().defaultTimeoutMS != 1234 {
 			t.Fatalf("default timeout = %d", s.Driver().defaultTimeoutMS)
-		}
-		if !strings.Contains(s.client.connectURL(), "trigger_disconnect=true") {
-			t.Fatalf("url = %s", s.client.connectURL())
 		}
 	})
 	t.Run("a persona LLM is rejected for a script", func(t *testing.T) {

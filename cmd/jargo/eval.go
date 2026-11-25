@@ -474,7 +474,7 @@ func buildJudge(opts judgeOptions) eval.Judge {
 	if opts.explainer {
 		cfg.Explainer = service
 	}
-	judge, err := eval.NewEvalJudge(cfg)
+	judge, err := eval.NewClassifierJudge(cfg)
 	if err != nil {
 		return nil
 	}

@@ -91,17 +91,6 @@ type SessionParams struct {
 	// audio_unsupported); a bot that reports nothing runs unchecked. "" is
 	// AudioSupportCheckOff.
 	AudioSupportCheck string
-	// StopBot has no effect: the harness ends the bot's session when a run
-	// finishes.
-	//
-	// Deprecated: No replacement. The harness always ends the bot's session.
-	StopBot bool
-	// TriggerDisconnect, when true, asks a bot serving eval.Handler to fire its
-	// client-disconnected handlers when the connection ends.
-	//
-	// Deprecated: No replacement. A bot fires its client-disconnected handlers
-	// whenever the harness disconnects.
-	TriggerDisconnect bool
 }
 
 // withDefaults is the params with every zero value replaced by its default.
@@ -131,13 +120,6 @@ func (p SessionParams) validate() error {
 	case "", AudioSupportCheckOff, AudioSupportCheckWhenAdvertised:
 	default:
 		return fmt.Errorf("%w, not %q", errAudioSupportCheck, p.AudioSupportCheck)
-	}
-	if p.StopBot { //nolint:staticcheck // warning about the deprecated field
-		slog.Warn("eval: SessionParams.StopBot is deprecated and has no effect")
-	}
-	if p.TriggerDisconnect { //nolint:staticcheck // warning about the deprecated field
-		slog.Warn("eval: SessionParams.TriggerDisconnect is deprecated: " +
-			"a bot fires its client-disconnected handlers whenever the harness disconnects")
 	}
 	return nil
 }

@@ -45,7 +45,7 @@ type Options struct {
 	// OnProgress, when set, is called as each turn and expectation resolves, in
 	// order, for a caller reporting a long run as it happens rather than at the
 	// end (see EventProgress). Keep it quick: the records queue behind it.
-	OnProgress func(Progress)
+	OnProgress func(ScriptTurnProgress)
 	// Params is how the run behaves: its timeouts, its cache, its audio
 	// support check.
 	Params SessionParams
@@ -68,7 +68,7 @@ func Run(t *testing.T, path string, buildBot Bot) {
 }
 
 // RunWithJudge is Run with a judge for the scenario's `judge:` assertions (see
-// NewEvalJudge). Pass nil when no scenario uses `judge:`.
+// NewClassifierJudge). Pass nil when no scenario uses `judge:`.
 func RunWithJudge(t *testing.T, path string, buildBot Bot, judge Judge) {
 	t.Helper()
 	RunWith(t, path, buildBot, Options{Judge: judge})
@@ -77,7 +77,7 @@ func RunWithJudge(t *testing.T, path string, buildBot Bot, judge Judge) {
 // RunWith is Run with explicit Options (a judge, audio mode, or both).
 func RunWith(t *testing.T, path string, buildBot Bot, opts Options) {
 	t.Helper()
-	scenario, err := Load(path)
+	scenario, err := loadScript(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +97,7 @@ func RunWith(t *testing.T, path string, buildBot Bot, opts Options) {
 // What goes wrong with the run itself, a bot that never becomes ready or a
 // harness that fails mid-run, is a failure in the Result, and the error is what
 // RunURL returns.
-func Host(ctx context.Context, scenario *Scenario, buildBot Bot, opts Options) (Result, error) {
+func Host(ctx context.Context, scenario *ScriptScenario, buildBot Bot, opts Options) (ScriptResult, error) {
 	srv := httptest.NewServer(Handler(buildBot))
 	defer srv.Close()
 
@@ -151,12 +151,12 @@ func Handler(buildBot Bot) http.Handler {
 // harness failing mid-run (an <error> or <harness> one), with every turn not
 // reached left TurnNotRun. The error is ctx ending, or a service the scenario
 // names that cannot be built.
-func RunURL(ctx context.Context, scenario *Scenario, botURL string, opts Options) (Result, error) {
+func RunURL(ctx context.Context, scenario *ScriptScenario, botURL string, opts Options) (ScriptResult, error) {
 	return runAgainst(ctx, scenario, botURL, opts)
 }
 
 // runAgainst plays the scenario against the bot at url, in a ScriptSession.
-func runAgainst(ctx context.Context, scenario *Scenario, url string, opts Options) (Result, error) {
+func runAgainst(ctx context.Context, scenario *ScriptScenario, url string, opts Options) (ScriptResult, error) {
 	params := opts.Params
 	if opts.BotReadyTimeout > 0 {
 		params.BotReadyTimeout = opts.BotReadyTimeout
@@ -172,7 +172,7 @@ func runAgainst(ctx context.Context, scenario *Scenario, url string, opts Option
 		userTTS, err = NewCachingTTSService(syn, CachingTTSConfig{UseCache: &noCache, SampleRate: syn.SampleRate()})
 		if err != nil {
 			closeJudge(ctx, opts.Judge)
-			return Result{ScenarioName: scenario.Name}, err
+			return ScriptResult{ScenarioName: scenario.Name}, err
 		}
 	}
 	session, err := ScriptSessionFromScenario(scenario, url, params, opts.Judge, userTTS, opts.BotSTT)
@@ -180,10 +180,10 @@ func runAgainst(ctx context.Context, scenario *Scenario, url string, opts Option
 		// The session closes its judge however its run ends; one that was never
 		// built closes the caller's here.
 		closeJudge(ctx, opts.Judge)
-		return Result{ScenarioName: scenario.Name}, err
+		return ScriptResult{ScenarioName: scenario.Name}, err
 	}
 	if opts.OnProgress != nil {
-		event.On(&session.Registry, EventProgress, func(_ context.Context, p Progress) { opts.OnProgress(p) })
+		event.On(&session.Registry, EventProgress, func(_ context.Context, p ScriptTurnProgress) { opts.OnProgress(p) })
 	}
 	return session.Run(ctx)
 }

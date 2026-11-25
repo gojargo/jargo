@@ -754,16 +754,6 @@ func TestSimulationDriverTheBotsToolCallsAreTheJudgesEvidence(t *testing.T) {
 	if !slices.Equal(told, calls) {
 		t.Fatalf("tool lines = %v", told)
 	}
-	var transcribed []string
-	for _, e := range r.driver.Transcript() { //nolint:staticcheck // the deprecated view still works
-		if e["role"] == "tool" {
-			content, _ := e["content"].(string)
-			transcribed = append(transcribed, content)
-		}
-	}
-	if !slices.Equal(transcribed, calls) {
-		t.Fatalf("transcript tool lines = %v", transcribed)
-	}
 	if !slices.Equal(r.driver.ToolCalls(), calls) {
 		t.Fatalf("tool calls = %v", r.driver.ToolCalls())
 	}

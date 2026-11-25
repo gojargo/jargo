@@ -160,11 +160,6 @@ type SimulationScenario struct {
 	// Runs is how many times the suite runs the simulation; every run must
 	// pass.
 	Runs int
-	// TriggerDisconnect is the trigger_disconnect: key.
-	//
-	// Deprecated: No replacement. A bot fires its client-disconnected handlers
-	// whenever the harness disconnects.
-	TriggerDisconnect bool
 	// SourcePath is the file the simulation was loaded from.
 	SourcePath string
 }
@@ -223,7 +218,6 @@ func parseSimulation(data map[string]any, path string) (*SimulationScenario, err
 	if err = parseCaps(s, data, path); err != nil {
 		return nil, err
 	}
-	s.TriggerDisconnect = parseTriggerDisconnect(data, path)
 	return s, nil
 }
 

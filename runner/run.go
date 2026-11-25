@@ -1348,8 +1348,6 @@ func addFlags(fs *flag.FlagSet) *rawFlags {
 	fs.StringVar(&a.Proxy, "x", "", "Public proxy host name")
 	fs.StringVar(&a.DownloadsFolder, "downloads-folder", "", "Path to folder for files available for download")
 	fs.StringVar(&a.DownloadsFolder, "f", "", "Path to folder for files available for download")
-	fs.StringVar(&a.DownloadsFolder, "folder", "",
-		"Path to folder for files available for download. (Deprecated: use --downloads-folder instead)")
 	fs.StringVar(&a.RunnerBody, "runner-body", "",
 		"Path to a YAML or JSON file with the runner args body for WebSocket sessions")
 	fs.Var(&f.verbose, "verbose", "Increase logging verbosity")

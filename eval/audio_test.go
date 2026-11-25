@@ -155,7 +155,7 @@ func buildSpeakingBot(in, out processor.Processor) *pipeline.Worker {
 // step past what the model wrote: llm_response passes on a reply the TTS never
 // got, and tts_response does not.
 func TestHarnessTTSResponse(t *testing.T) {
-	scenario, err := eval.Load(writeScenario(t, `
+	scenario, err := loadScript(writeScenario(t, `
 name: spoken
 judge: {modality: audio, transcription: {service: moonshine}}
 turns:
@@ -215,7 +215,7 @@ func buildSilentBot(in, out processor.Processor) *pipeline.Worker {
 // synthesis, and the turn was silent. llm_response passes on it, because the
 // text was written; tts_response is what fails.
 func TestHarnessTTSResponseCatchesSilentTurn(t *testing.T) {
-	scenario, err := eval.Load(writeScenario(t, `
+	scenario, err := loadScript(writeScenario(t, `
 name: silent
 judge: {modality: audio, transcription: {service: moonshine}}
 turns:
@@ -252,7 +252,7 @@ turns:
 // the user turn, streams it as mic audio, and the bot's (fake) VAD/STT turn it
 // into speaking + transcription events that reach the assertions.
 func TestHarnessAudioMode(t *testing.T) {
-	scenario, err := eval.Load(writeScenario(t, `
+	scenario, err := loadScript(writeScenario(t, `
 name: audio
 turns:
   - user: "hello"

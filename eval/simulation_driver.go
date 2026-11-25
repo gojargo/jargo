@@ -363,24 +363,6 @@ func (d *SimulationDriver) Timeline() []map[string]any {
 	return lines
 }
 
-// Transcript is the conversation as the judge sees it: the lines, each tool call
-// in place before the line it preceded, as a "tool" line.
-//
-// Deprecated: No replacement. The judge keeps the conversation it judges.
-func (d *SimulationDriver) Transcript() []map[string]any {
-	var entries []map[string]any
-	for _, m := range d.conversation.Messages() {
-		if m[keyRole] == ConversationRoleToolCall {
-			for _, line := range CallLines(m) {
-				entries = append(entries, map[string]any{keyRole: roleTool, keyContent: line})
-			}
-			continue
-		}
-		entries = append(entries, map[string]any{keyRole: m[keyRole], keyContent: m[keyContent]})
-	}
-	return entries
-}
-
 // Conversation is the conversation with the persona as user and the bot as
 // assistant, without the tool calls.
 func (d *SimulationDriver) Conversation() []map[string]any {

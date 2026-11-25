@@ -43,7 +43,7 @@ func TestZoomClassifierIsRegistered(t *testing.T) {
 
 func TestZoomClassifierAMissingAPIKeyIsAnError(t *testing.T) {
 	t.Setenv("ZOOM_AI_API_KEY", "")
-	_, err := eval.NewEvalJudgeFromConfig(&eval.JudgeEvalConfig{
+	_, err := eval.NewClassifierJudgeFromConfig(&eval.JudgeEvalConfig{
 		Factory: "evals.judges.zoom_classifier",
 	})
 	if err == nil || !strings.Contains(err.Error(), "ZOOM_AI_API_KEY") {

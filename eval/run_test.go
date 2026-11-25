@@ -110,9 +110,9 @@ func TestRunWith(t *testing.T) {
 // TestRunWithReportsProgress checks the progress callback fires as the run goes,
 // for a caller reporting a long scenario as it happens rather than at the end.
 func TestRunWithReportsProgress(t *testing.T) {
-	var updates []eval.Progress
+	var updates []eval.ScriptTurnProgress
 	eval.RunWith(t, writeScenario(t, echoScenario), buildFakeBot, eval.Options{
-		OnProgress: func(p eval.Progress) { updates = append(updates, p) },
+		OnProgress: func(p eval.ScriptTurnProgress) { updates = append(updates, p) },
 	})
 
 	if len(updates) == 0 {

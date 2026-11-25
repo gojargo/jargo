@@ -243,7 +243,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   | `processor.ProcessorSetUp` | `processor.SetUp` |
   | `pipeline.PipelineStartedObserver` | `pipeline.StartedObserver` |
   | `runner.RunnerArguments`, `runner.RunnerHost`, `runner.RunnerPort`, `runner.RunnerDownloadsFolder` | `runner.BaseArguments`, `runner.Host`, `runner.Port`, `runner.DownloadsFolder` |
-  | `eval.EvalJudge`, `eval.EvalJudgeConfig` | `eval.ClassifierJudge`, `eval.ClassifierJudgeConfig` |
+  | `eval.EvalJudge`, `eval.EvalJudgeConfig`, `eval.NewEvalJudge`, `eval.NewEvalJudgeFromConfig` | `eval.ClassifierJudge`, `eval.ClassifierJudgeConfig`, `eval.NewClassifierJudge`, `eval.NewClassifierJudgeFromConfig` |
   | `turn.TurnOption` | `turn.Option` |
 
 - **BREAKING: no two public packages share a name any more.** Packages that
@@ -423,6 +423,19 @@ replacement.
   `llmclassifier` classifier and pass it as `Classifier`.
 - **`rtvi.BotOutputTransformer.AggregatedBy`** (`TextType`) and
   **`rtvi.ObserverParams.SkipAggregatorTypes`** (`SkipTextTypes`).
+- **Eval: the former names and loaders.** `eval.Scenario`, `Turn`, `Result`,
+  `TurnResult`, `Progress` and `Failure` are `ScriptScenario`, `ScriptTurn`,
+  `ScriptResult`, `ScriptTurnResult`, `ScriptTurnProgress` and
+  `AssertionFailure`; `eval.Load` and `LoadScenarioFile` give way to `LoadFile`;
+  `eval.NewLLMJudge` to an `llmclassifier` classifier passed to
+  `NewClassifierJudge`; `SimulationDriver.Transcript` has no replacement.
+- **Eval: the options with no effect.** `SessionParams.StopBot` and the
+  `TriggerDisconnect` fields and `trigger_disconnect:` key: a bot fires its
+  client-disconnected handlers whenever the harness disconnects.
+- **Eval: the built-in `service: openai` and `service: cartesia`** in a
+  scenario's `judge.eval:`, `simulator:` and `user.speech:` blocks: name a
+  registered `factory` instead. `service: ollama` stays.
+- **The runner's `--folder` flag**: use `--downloads-folder` (or `-f`).
 
 ### Fixed
 

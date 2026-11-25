@@ -3,6 +3,7 @@ package eval_test
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -19,6 +20,25 @@ func writeScenario(t *testing.T, body string) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+// errNotOneScript is a file that does not hold exactly one scripted scenario.
+var errNotOneScript = errors.New("not a lone scripted scenario")
+
+// loadScript loads a file that holds exactly one scripted scenario.
+func loadScript(path string) (*eval.ScriptScenario, error) {
+	file, err := eval.LoadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	if len(file.Scenarios) != 1 {
+		return nil, fmt.Errorf("%w: %s holds %d scenarios", errNotOneScript, path, len(file.Scenarios))
+	}
+	script, ok := file.Scenarios[0].(*eval.ScriptScenario)
+	if !ok {
+		return nil, fmt.Errorf("%w: %s holds a scenario that is not scripted", errNotOneScript, path)
+	}
+	return script, nil
 }
 
 // loadFile loads body as a scenario file, failing the test on an error.
@@ -260,22 +280,6 @@ func TestAFileKnowsItsNameAndPathAndFindsAScenarioByName(t *testing.T) {
 	mustContain(t, err, "no scenario called 'turn_completion/nope'")
 }
 
-func TestLoadScenarioFileWantsALoneScenario(t *testing.T) {
-	one := "name: greet\nscenarios:\n  - name: greet\n    turns: [{user: hi}]\n"
-	s, err := eval.LoadScenarioFile(writeScenario(t, one))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if s.ScenarioName() != "greet/greet" {
-		t.Fatalf("name = %q", s.ScenarioName())
-	}
-	_, err = eval.LoadScenarioFile(writeScenario(t, group))
-	if err == nil {
-		t.Fatal("expected an error for a file of two scenarios")
-	}
-	mustContain(t, err, "holds 2 scenarios")
-}
-
 func TestGroupNeedsAName(t *testing.T) {
 	mustContain(t, loadFileErr(t, "scenarios: [{name: a, turns: []}]\n"), "missing or invalid 'name:'")
 }
@@ -341,21 +345,6 @@ func TestCheckFrom(t *testing.T) {
 		err := loadFileErr(t, checkFromFile("{event: response, absent: true, check_from: turn_start}"))
 		mustContain(t, err, "cannot be combined with 'check_from'")
 	})
-}
-
-// The deprecated single-scenario loader still reads a scripted scenario.
-func TestLoadReadsALoneScriptedScenario(t *testing.T) {
-	s, err := eval.Load(writeScenario(t, "name: greet\nscenarios:\n  - name: greet\n    turns: [{user: hi}]\n"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if s.Name != "greet/greet" || s.Turns[0].User != "hi" {
-		t.Fatalf("scenario = %+v", s)
-	}
-	_, err = eval.Load(writeScenario(t, "name: s\nscenarios: [{name: s, persona: p, goal: g, success: s}]\n"))
-	if err == nil {
-		t.Fatal("expected an error for a simulation")
-	}
 }
 
 // !include pulls any value from a separate file, so scenarios can share a block
