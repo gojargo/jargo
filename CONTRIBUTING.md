@@ -22,10 +22,14 @@ are a good place to start.
 
 jargo is a Go port of [Pipecat](https://github.com/pipecat-ai/pipecat), and
 Pipecat is the reference for its design. When you add a feature or a provider
-that Pipecat already has, port what Pipecat does (its structure, its names, and
-the layer it lives in) rather than inventing a new design, and port its tests
-alongside the code. Where the Go version has to differ, say why in the pull
-request.
+that Pipecat already has, port what Pipecat does (its behaviour, the names of its
+concepts and frames, and the layer it lives in) rather than inventing a new
+design, and port its tests alongside the code. Where the Go version has to
+differ, say why in the pull request.
+
+Package layout is the exception: it follows Go conventions, not Pipecat's Python
+module tree. See [Package layout and naming](AGENTS.md#package-layout-and-naming)
+in `AGENTS.md`.
 
 Keep Pipecat and Python out of `.go` comments and commit messages, though:
 attribution lives only in `LICENSE`, `NOTICE` and the README.

@@ -72,10 +72,31 @@ worth knowing:
   (see `examples/`), not the library. The one exception is `runner`, the
   development runner: it is an application's entry point, so it reads flags,
   the environment and a `.env` file.
+- **Faithful design, Go packaging.** Port Pipecat's behaviour, its tests, the
+  layer that owns each piece of machinery, and the names of its concepts and
+  frames. Do not port its Python module tree: package layout and naming follow
+  Go conventions (next section).
 - **Commits** follow Conventional Commits (`feat:`, `fix:`, `ci:`, `docs:`, …).
 - Record notable changes in [`CHANGELOG.md`](CHANGELOG.md). The project is
   pre-1.0: the public API may still change in any minor release, and a change
   that breaks it says so in its entry and carries a `!` in its commit type.
+
+## Package layout and naming
+
+A Go package name is part of every identifier a user writes, and two packages
+with the same name collide in user code. So:
+
+- No `utils`-style grab-bag packages, and no package named like a standard
+  library one (`context`, `errors`).
+- No two public packages with the same name. Code that serves only one provider
+  lives in that provider's package or under `internal/`.
+- Package names are short, lower-case and singular, and say what they provide.
+- No stutter: an identifier does not repeat its package name (`llm.Service`, not
+  `llm.LLMService`). Frame types are the exception and keep their upstream names
+  (`frames.TranscriptionFrame`), since users search for them.
+- Adding a method to an exported interface breaks every outside implementation.
+  Add new capabilities as an optional interface, or as a method with a default
+  in an embedded base type.
 
 ## Layout
 
