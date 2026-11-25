@@ -441,8 +441,8 @@ type Base struct {
 	// the latest metadata frame of each kind the service has processed, handed
 	// to an extension attached later.
 	extensionsMu   sync.RWMutex
-	attached       []LLMExtension
-	extensions     []LLMExtension
+	attached       []Extension
+	extensions     []Extension
 	extensionSetup *processor.Setup
 	metadataFrames map[reflect.Type]frames.ServiceMetadata
 
@@ -1224,7 +1224,7 @@ func (b *Base) ApplySettingsUpdate(
 	if changed.Has("user_turn_completion_config") {
 		slog.Warn("settings.LLM.UserTurnCompletionConfig is deprecated and will be removed; pass the "+
 			"configuration to turns.FilterIncompleteUserTurnStrategies instead", "service", b.Name())
-		if extension, ok := GetExtension[*LLMTurnCompletionLLMExtension](b); ok {
+		if extension, ok := GetExtension[*TurnCompletionExtension](b); ok {
 			extension.SetConfig(b.turnCompletionConfigSetting())
 		}
 	}
@@ -1316,10 +1316,10 @@ func (b *Base) turnCompletionConfigSetting() UserTurnCompletionConfig {
 // when on and none is attached, and removes the one attached when off. It is
 // what the deprecated settings that switch turn completion do.
 func (b *Base) setTurnCompletion(ctx context.Context, on bool, cfg UserTurnCompletionConfig) error {
-	extension, attached := GetExtension[*LLMTurnCompletionLLMExtension](b)
+	extension, attached := GetExtension[*TurnCompletionExtension](b)
 	switch {
 	case on && !attached:
-		extension = NewLLMTurnCompletionLLMExtension(cfg)
+		extension = NewTurnCompletionExtension(cfg)
 		if err := b.attachExtension(extension); err != nil {
 			return err
 		}
@@ -2100,33 +2100,33 @@ func (b *Base) CancelFunctionCalls(ctx context.Context, reason string) []frames.
 	return b.cancelFunctionCallTasks(ctx, func(*functionCall) bool { return true }, reason)
 }
 
-// LLMWithBackendRole is a role a service can fill in a pairing of a
+// BackendRole is a role a service can fill in a pairing of a
 // conversational frontend with a backend that does the work it hands off.
-type LLMWithBackendRole string
+type BackendRole string
 
 // The roles of a pairing.
 const (
 	// RoleFrontend is the conversational LLM, which holds the conversation.
-	RoleFrontend LLMWithBackendRole = "frontend"
+	RoleFrontend BackendRole = "frontend"
 	// RoleBackend is the LLM inside the backend worker.
-	RoleBackend LLMWithBackendRole = "backend"
+	RoleBackend BackendRole = "backend"
 )
 
-// LLMWithBackendRoleObjector is implemented by a service that can say why it
+// BackendRoleObjector is implemented by a service that can say why it
 // cannot take a role in a pairing. *Base implements it, saying nothing.
-type LLMWithBackendRoleObjector interface {
-	// LLMWithBackendRoleObjection says why the service cannot take role, or ""
+type BackendRoleObjector interface {
+	// BackendRoleObjection says why the service cannot take role, or ""
 	// when it can.
-	LLMWithBackendRoleObjection(role LLMWithBackendRole) string
+	BackendRoleObjection(role BackendRole) string
 }
 
-// LLMWithBackendRoleObjection says why this service cannot take the given role
+// BackendRoleObjection says why this service cannot take the given role
 // in a pairing of a frontend with a backend, or "" when it can.
 //
 // The pairing refuses the service with what this returns, so the objection says
 // what to do instead. Services that work in both roles, which is nearly all of
 // them, say nothing; a service that cannot fill one overrides this.
-func (b *Base) LLMWithBackendRoleObjection(LLMWithBackendRole) string { return "" }
+func (b *Base) BackendRoleObjection(BackendRole) string { return "" }
 
 // IntermediateResultAcceptor is implemented by every service, through Base,
 // to say whether it delivers a tool's intermediate results to its model.

@@ -1071,7 +1071,7 @@ func TestTheLLMRunsAtItsProvidersDefaultThinking(t *testing.T) {
 // objectingLLM is a model that declines the backend role.
 type objectingLLM struct{ *scriptedLLM }
 
-func (objectingLLM) LLMWithBackendRoleObjection(role llm.LLMWithBackendRole) string {
+func (objectingLLM) BackendRoleObjection(role llm.BackendRole) string {
 	return "cannot be the " + string(role)
 }
 

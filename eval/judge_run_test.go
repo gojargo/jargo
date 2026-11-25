@@ -24,7 +24,7 @@ var turnOptions = []string{"meets", "fails", "not_applicable"} //nolint:gocheckn
 
 // converse feeds the judge a booking: a tool call, a turn of two segments, and
 // a second turn.
-func converse(j *eval.EvalJudge) {
+func converse(j *eval.ClassifierJudge) {
 	j.AddUserMessage("Book a table at six.")
 	j.AddToolCall(`book({"time": "6pm"})`)
 	j.AddAssistantMessage("Let me check.")
@@ -83,8 +83,8 @@ func runAnswers(
 
 func runJudge(
 	t *testing.T, respond responder,
-	explainer *explainerLLM, opts ...func(*eval.EvalJudgeConfig),
-) (*eval.EvalJudge, *fakeClassifier) {
+	explainer *explainerLLM, opts ...func(*eval.ClassifierJudgeConfig),
+) (*eval.ClassifierJudge, *fakeClassifier) {
 	t.Helper()
 	c := newFakeClassifier()
 	c.respond = respond
@@ -101,8 +101,8 @@ func verdictsOf(vs []eval.JudgeVerdict) []string {
 	return out
 }
 
-func explainBelow(v float64) func(*eval.EvalJudgeConfig) {
-	return func(cfg *eval.EvalJudgeConfig) { cfg.ExplainBelow = &v }
+func explainBelow(v float64) func(*eval.ClassifierJudgeConfig) {
+	return func(cfg *eval.ClassifierJudgeConfig) { cfg.ExplainBelow = &v }
 }
 
 func TestARunWithAFailedQuestionIsNotCached(t *testing.T) {

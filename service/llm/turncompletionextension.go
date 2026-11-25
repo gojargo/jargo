@@ -11,7 +11,7 @@ import (
 	"github.com/gojargo/jargo/processor"
 )
 
-// LLMTurnCompletionLLMExtension reads the turn-completion marker that opens
+// TurnCompletionExtension reads the turn-completion marker that opens
 // each of the model's responses.
 //
 // Each response starts with a marker: complete (the turn is complete),
@@ -42,8 +42,8 @@ import (
 // aggregator is how an application turns turn completion on.
 //
 //nolint:revive // the name is the one the extension design uses throughout
-type LLMTurnCompletionLLMExtension struct {
-	BaseLLMExtension
+type TurnCompletionExtension struct {
+	BaseExtension
 
 	mu     sync.Mutex
 	config UserTurnCompletionConfig
@@ -73,21 +73,21 @@ type LLMTurnCompletionLLMExtension struct {
 	marker TurnMarker
 }
 
-// NewLLMTurnCompletionLLMExtension builds the turn-completion extension with
+// NewTurnCompletionExtension builds the turn-completion extension with
 // cfg: the markers, the instructions, the re-prompts and their timeouts. The
 // zero value is the defaults.
-func NewLLMTurnCompletionLLMExtension(cfg UserTurnCompletionConfig) *LLMTurnCompletionLLMExtension {
-	return &LLMTurnCompletionLLMExtension{config: cfg}
+func NewTurnCompletionExtension(cfg UserTurnCompletionConfig) *TurnCompletionExtension {
+	return &TurnCompletionExtension{config: cfg}
 }
 
-// Order implements LLMExtension. The extension sits "closer" to the service
+// Order implements Extension. The extension sits "closer" to the service
 // than any other reader of the model's output, so it filters the output first:
 // the marker opens the response, and what follows it reads differently once it
 // is stripped.
-func (e *LLMTurnCompletionLLMExtension) Order() int { return -1 }
+func (e *TurnCompletionExtension) Order() int { return -1 }
 
 // Config is the turn completion configuration.
-func (e *LLMTurnCompletionLLMExtension) Config() UserTurnCompletionConfig {
+func (e *TurnCompletionExtension) Config() UserTurnCompletionConfig {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.config
@@ -95,25 +95,25 @@ func (e *LLMTurnCompletionLLMExtension) Config() UserTurnCompletionConfig {
 
 // SetConfig replaces the turn completion configuration. The service composes
 // its instruction anew when its settings change it.
-func (e *LLMTurnCompletionLLMExtension) SetConfig(cfg UserTurnCompletionConfig) {
+func (e *TurnCompletionExtension) SetConfig(cfg UserTurnCompletionConfig) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.config = cfg
 }
 
-// Setup implements LLMExtension, recording whether the pipeline has expressive
+// Setup implements Extension, recording whether the pipeline has expressive
 // conversation on.
-func (e *LLMTurnCompletionLLMExtension) Setup(_ context.Context, s processor.Setup) error {
+func (e *TurnCompletionExtension) Setup(_ context.Context, s processor.Setup) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.expressive = s.EnableExpressiveConversation
 	return nil
 }
 
-// SystemInstruction implements LLMExtension: the turn-completion instructions,
+// SystemInstruction implements Extension: the turn-completion instructions,
 // with the perception note when the model is taught a reading of how the user
 // spoke.
-func (e *LLMTurnCompletionLLMExtension) SystemInstruction() string {
+func (e *TurnCompletionExtension) SystemInstruction() string {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	parts := []string{e.config.CompletionInstructions()}
@@ -123,9 +123,9 @@ func (e *LLMTurnCompletionLLMExtension) SystemInstruction() string {
 	return strings.Join(parts, "\n\n")
 }
 
-// ProcessFrame implements LLMExtension: it follows the inference the service
+// ProcessFrame implements Extension: it follows the inference the service
 // runs, and resets on an interruption.
-func (e *LLMTurnCompletionLLMExtension) ProcessFrame(
+func (e *TurnCompletionExtension) ProcessFrame(
 	ctx context.Context, f frames.Frame, _ processor.Direction,
 ) error {
 	switch fr := f.(type) {
@@ -151,11 +151,11 @@ func (e *LLMTurnCompletionLLMExtension) ProcessFrame(
 	return nil
 }
 
-// FilterPushFrame implements LLMExtension: it reads the marker from the
+// FilterPushFrame implements Extension: it reads the marker from the
 // response's text, and reports it. The frames it returns are the text held back
 // until the marker is read, the marker frame, and the response's report at its
 // end.
-func (e *LLMTurnCompletionLLMExtension) FilterPushFrame(
+func (e *TurnCompletionExtension) FilterPushFrame(
 	ctx context.Context, f frames.Frame, _ processor.Direction,
 ) ([]frames.Frame, error) {
 	switch fr := f.(type) {
@@ -197,7 +197,7 @@ func (e *LLMTurnCompletionLLMExtension) FilterPushFrame(
 //     pushed, and the rest of the response is dropped;
 //   - after the complete marker, the text after it is pushed, and all later
 //     text flows through as it comes.
-func (e *LLMTurnCompletionLLMExtension) filterText(
+func (e *TurnCompletionExtension) filterText(
 	ctx context.Context, f *frames.LLMTextFrame,
 ) ([]frames.Frame, error) {
 	e.mu.Lock()
@@ -274,7 +274,7 @@ func (e *LLMTurnCompletionLLMExtension) filterText(
 // mark reports the marker read from the response, and returns its frame for
 // the conversation. Only a complete turn's marker belongs to the response that
 // follows.
-func (e *LLMTurnCompletionLLMExtension) mark(ctx context.Context, marker, kind string) (*frames.LLMMarkerFrame, error) {
+func (e *TurnCompletionExtension) mark(ctx context.Context, marker, kind string) (*frames.LLMMarkerFrame, error) {
 	e.mu.Lock()
 	e.foundMarker, e.foundKind = marker, kind
 	e.mu.Unlock()
@@ -289,7 +289,7 @@ func (e *LLMTurnCompletionLLMExtension) mark(ctx context.Context, marker, kind s
 // reportTurnCompletion pushes the turn-completion judgment upstream, once per
 // inference, as a UserTurnCompletionFrame naming the inference it judges. A
 // complete turn is also broadcast as a UserTurnInferenceCompletedFrame.
-func (e *LLMTurnCompletionLLMExtension) reportTurnCompletion(ctx context.Context, kind, marker string) error {
+func (e *TurnCompletionExtension) reportTurnCompletion(ctx context.Context, kind, marker string) error {
 	e.mu.Lock()
 	if e.reported {
 		e.mu.Unlock()
@@ -313,7 +313,7 @@ func (e *LLMTurnCompletionLLMExtension) reportTurnCompletion(ctx context.Context
 // response to read, or nil. It is a diagnostic for a consumer checking the
 // model against the protocol it was given, and plays no part in the
 // conversation.
-func (e *LLMTurnCompletionLLMExtension) responseReport() *frames.LLMMarkerResponseFrame {
+func (e *TurnCompletionExtension) responseReport() *frames.LLMMarkerResponseFrame {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.raw.Len() == 0 && e.foundKind == "" {
@@ -330,7 +330,7 @@ func (e *LLMTurnCompletionLLMExtension) responseReport() *frames.LLMMarkerRespon
 // resetTurn resets the turn's state between responses. It returns the text
 // buffered without a marker ever appearing, as a frame to push so it is not
 // lost, so a model that ignored the protocol still says something.
-func (e *LLMTurnCompletionLLMExtension) resetTurn() []frames.Frame {
+func (e *TurnCompletionExtension) resetTurn() []frames.Frame {
 	e.mu.Lock()
 	var out []frames.Frame
 	orphaned := e.marker == turnMarkerNone && e.buffer != ""

@@ -61,7 +61,7 @@ func (f *textFrontend) Generate(context.Context, *frames.LLMContext, llm.Emit) e
 
 func (f *textFrontend) LLMAdapter() llm.BuiltinToolHolder { return &f.adapter }
 
-func (f *textFrontend) LLMWithBackendRoleObjection(role llm.LLMWithBackendRole) string {
+func (f *textFrontend) BackendRoleObjection(role llm.BackendRole) string {
 	if f.objection == "" {
 		return ""
 	}

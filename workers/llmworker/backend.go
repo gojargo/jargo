@@ -403,7 +403,7 @@ type BackendLLM interface {
 	SetUseProviderThinkingDefault(on bool)
 	// CancelFunctionCalls cancels every function call in flight.
 	CancelFunctionCalls(ctx context.Context, reason string) []frames.ToolCall
-	llm.LLMWithBackendRoleObjector
+	llm.BackendRoleObjector
 }
 
 // BackendConfig configures a BackendWorker.
@@ -524,7 +524,7 @@ type BackendWorker struct {
 // NewBackend builds a backend worker. It reports an error when the LLM service
 // declines the backend role.
 func NewBackend(cfg BackendConfig) (*BackendWorker, error) {
-	if objection := cfg.LLM.LLMWithBackendRoleObjection(llm.RoleBackend); objection != "" {
+	if objection := cfg.LLM.BackendRoleObjection(llm.RoleBackend); objection != "" {
 		return nil, fmt.Errorf("%w: %s", ErrRoleDeclined, objection)
 	}
 	cfg.LLM.SetUseProviderThinkingDefault(true)

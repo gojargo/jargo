@@ -254,7 +254,7 @@ func TestCreateTransportNeedsParams(t *testing.T) {
 }
 
 func TestCreateTransportRejectsUnknownArguments(t *testing.T) {
-	_, err := CreateTransport(context.Background(), &RunnerArguments{}, TransportParams{
+	_, err := CreateTransport(context.Background(), &BaseArguments{}, TransportParams{
 		WebRTC: transport.DefaultParams,
 	})
 	if err == nil {

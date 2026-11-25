@@ -51,15 +51,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - **More examples run under the eval transport:** `voice-deepgram`,
   `voice-neuphonic-http`, `voice-speechmatics`, `voice-speechmatics-vad`,
   `mcp-multiple-mcp` and `mcp-streamable-http`.
-- **LLM extensions.** An extension (`llm.LLMExtension`, embedding
-  `llm.BaseLLMExtension`) is a pluggable feature of an LLM service: it
+- **LLM extensions.** An extension (`llm.Extension`, embedding
+  `llm.BaseExtension`) is a pluggable feature of an LLM service: it
   contributes to the system instruction, adds built-in tools, watches the
   frames the service processes and filters the frames it pushes, layered
   around the service by `Order()`. Attach one with `Base.AddExtension` before
   the pipeline runs, or with an `LLMUpdateSettingsFrame` whose `settings.LLM`
-  delta lists it in `Extensions` (a `func() llm.LLMExtension` entry builds one
+  delta lists it in `Extensions` (a `func() llm.Extension` entry builds one
   per service the update reaches). `llm.GetExtension[*T]` finds an attached
-  extension. `llm.LLMExtensionTool.AnnounceCallStart` makes an extension tool's
+  extension. `llm.ExtensionTool.AnnounceCallStart` makes an extension tool's
   calls announced like the application's own, and `Base.RunningFunctionCalls`
   and `Base.CancelFunctionCall` let a tool handler act on the calls in flight.
 - **Wait reassurance.** `turns.WaitReassuranceLLMExtension` keeps the
@@ -222,6 +222,23 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **BREAKING: names no longer repeat their package.** The package name is
+  part of every identifier in Go, so these drop the prefix that said it twice.
+  Frame types keep their names.
+
+  | Before | After |
+  |---|---|
+  | `llm.LLMExtension`, `llm.LLMExtensionTool`, `llm.BaseLLMExtension` | `llm.Extension`, `llm.ExtensionTool`, `llm.BaseExtension` |
+  | `llm.AsyncToolLLMExtension`, `llm.NewAsyncToolLLMExtension` | `llm.AsyncToolExtension`, `llm.NewAsyncToolExtension` |
+  | `llm.LLMTurnCompletionLLMExtension`, `llm.NewLLMTurnCompletionLLMExtension` | `llm.TurnCompletionExtension`, `llm.NewTurnCompletionExtension` |
+  | `llm.LLMWithBackendRole`, `llm.LLMWithBackendRoleObjector`, `Base.LLMWithBackendRoleObjection` | `llm.BackendRole`, `llm.BackendRoleObjector`, `Base.BackendRoleObjection` |
+  | `tts.TTSRequest` | `tts.Request` |
+  | `processor.ProcessorSetUp` | `processor.SetUp` |
+  | `pipeline.PipelineStartedObserver` | `pipeline.StartedObserver` |
+  | `runner.RunnerArguments`, `runner.RunnerHost`, `runner.RunnerPort`, `runner.RunnerDownloadsFolder` | `runner.BaseArguments`, `runner.Host`, `runner.Port`, `runner.DownloadsFolder` |
+  | `eval.EvalJudge`, `eval.EvalJudgeConfig` | `eval.ClassifierJudge`, `eval.ClassifierJudgeConfig` |
+  | `turn.TurnOption` | `turn.Option` |
+
 - **BREAKING: no two public packages share a name any more.** Packages that
   collided with another one in user code were renamed or merged:
 
@@ -277,10 +294,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   declared where the aliases were: `chat.Message`, `chat.ToolCall`,
   `chat.ToolCallFunction`, the `chat.Role*` constants, and `cartesia.Emotion`
   with the `cartesia.Emotion*` constants keep their names.
-- **Turn completion is an LLM extension.** `llm.LLMTurnCompletionLLMExtension`
+- **Turn completion is an LLM extension.** `llm.TurnCompletionExtension`
   is installed by `turns.LLMTurnCompletionStop` over a settings update, one per
   service. The async-tool guidance and `cancel_<name>` tools come from
-  `llm.AsyncToolLLMExtension`, which every LLM service holds, and
+  `llm.AsyncToolExtension`, which every LLM service holds, and
   `WithAsyncToolCancellation` widens cancellability when a tool is registered.
   `LLMWithBackend` installs its pairing on the frontend as
   `llmwithbackend.BackendPairingLLMExtension`, and a `delegate` call is
@@ -293,7 +310,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   take a frontend that can broadcast. `*llm.Base` satisfies it.
 - **BREAKING: `eval.Judge.Evaluate`** takes a third argument, `allowContinue
   *bool`: whether this reply may be judged continue, nil leaving it to the
-  judge's own setting. `EvalJudge` caches a verdict by the answers it was
+  judge's own setting. `ClassifierJudge` caches a verdict by the answers it was
   allowed as well.
 
 - **BREAKING: the Piper HTTP server client moved** from
@@ -507,7 +524,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   pipeline's audio as numbered `raw-audio` messages. `utils/shared` runs the
   paired setup and teardown of a resource two processors share once each.
 - **The eval judge judges whole runs and is built from configuration.**
-  `EvalJudge.EvaluateRun` judges a run against its goal and every bot turn
+  `ClassifierJudge.EvaluateRun` judges a run against its goal and every bot turn
   against each criterion, in parallel, and explains them in one call.
   `NewEvalJudgeFromConfig` builds a judge from a scenario's `judge.eval`
   block. `ClassifierFromConfig`, `LLMServiceFromConfig`,
@@ -4102,7 +4119,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   the start; pass a classifier instead.
 
 - **The eval judge decides with a classifier, and asks an LLM for the
-  reasons.** `eval.NewEvalJudge` builds an `EvalJudge` over a `Classifier`: a
+  reasons.** `eval.NewEvalJudge` builds an `ClassifierJudge` over a `Classifier`: a
   reply is judged `yes`, `no` or `continue` with the conversation before it and
   the reply sent apart, a tool call `yes` or `no` by its name and arguments.
   `JudgeVerdict` gained `Confidence`, and a verdict's reason starts out as the
@@ -4115,7 +4132,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   classifier up before its first question, and a run closes it however it
   ends. `jargo eval` gained `--judge-explainer`, `--judge-explain-below` and
   `--judge-allow-continue`. **Breaking:** `LLMJudge` is gone and
-  `NewLLMJudge`, now deprecated, returns an `*EvalJudge` that classifies
+  `NewLLMJudge`, now deprecated, returns an `*ClassifierJudge` that classifies
   through an LLM classifier and explains with the same service. A borderline
   reply can get a different verdict than before.
 
@@ -5396,7 +5413,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   mid-sentence. Zero, the default, leaves a session to run as long as it likes.
 
 - **`tts.EventTTSRequest` announces each unit on its way to the synthesizer.**
-  It fires just before the provider is asked, carrying a `tts.TTSRequest` with
+  It fires just before the provider is asked, carrying a `tts.Request` with
   the synthesis context id and the text exactly as it will be sent, filters,
   transforms and any final shaping included. It is the last point at which what
   the bot is about to say can be seen in the form the synthesizer receives it,

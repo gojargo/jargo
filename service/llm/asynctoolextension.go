@@ -13,7 +13,7 @@ import (
 	"github.com/gojargo/jargo/frames"
 )
 
-// AsyncToolLLMExtension teaches the model about its asynchronous tools, and
+// AsyncToolExtension teaches the model about its asynchronous tools, and
 // gives it a cancel tool for each it may stop.
 //
 // An asynchronous tool (registered with WithCancelOnInterruption(false)) keeps
@@ -26,8 +26,8 @@ import (
 // Every LLM service has one, from construction; it contributes nothing until a
 // tool is registered that calls for it, and follows the registered tools as
 // they come and go.
-type AsyncToolLLMExtension struct {
-	BaseLLMExtension
+type AsyncToolExtension struct {
+	BaseExtension
 
 	mu            sync.Mutex
 	hasAsyncTools bool
@@ -38,21 +38,21 @@ type AsyncToolLLMExtension struct {
 	warnedCollisions map[string]bool
 }
 
-// NewAsyncToolLLMExtension builds the async-tool extension. A service attaches
+// NewAsyncToolExtension builds the async-tool extension. A service attaches
 // its own at construction, so an application never needs to.
-func NewAsyncToolLLMExtension() *AsyncToolLLMExtension {
-	return &AsyncToolLLMExtension{
+func NewAsyncToolExtension() *AsyncToolExtension {
+	return &AsyncToolExtension{
 		cancelToolNames:  make(map[string]bool),
 		warnedCollisions: make(map[string]bool),
 	}
 }
 
-// Order implements LLMExtension. It sits after the extensions an application
+// Order implements Extension. It sits after the extensions an application
 // attaches, whose instructions come first, as the tool guidance closes the
 // system instruction.
-func (e *AsyncToolLLMExtension) Order() int { return 1 }
+func (e *AsyncToolExtension) Order() int { return 1 }
 
-// SystemInstruction implements LLMExtension: the cancellation guidance while a
+// SystemInstruction implements Extension: the cancellation guidance while a
 // cancel tool is advertised, and the async-tool guidance while an asynchronous
 // tool is registered.
 //
@@ -61,7 +61,7 @@ func (e *AsyncToolLLMExtension) Order() int { return 1 }
 // lands in a conversation whose most recent turn is the user asking for
 // something else, and a model weighing the two follows the nearer request.
 // Stating it up front puts it in force before any result exists.
-func (e *AsyncToolLLMExtension) SystemInstruction() string {
+func (e *AsyncToolExtension) SystemInstruction() string {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	var parts []string
@@ -74,14 +74,14 @@ func (e *AsyncToolLLMExtension) SystemInstruction() string {
 	return strings.Join(parts, "\n\n")
 }
 
-// BuiltinTools implements LLMExtension: one cancel tool per cancellable tool,
+// BuiltinTools implements Extension: one cancel tool per cancellable tool,
 // named for it.
 //
 // It is reconciled from a single reading of the registry, so the advertised set
 // can never drift from what is actually cancellable. A tool that never opted in
 // has no cancel tool at all, so there is nothing for the model to call against
 // it.
-func (e *AsyncToolLLMExtension) BuiltinTools(registered map[string]FunctionCallRegistryItem) []LLMExtensionTool {
+func (e *AsyncToolExtension) BuiltinTools(registered map[string]FunctionCallRegistryItem) []ExtensionTool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.hasAsyncTools = false
@@ -97,7 +97,7 @@ func (e *AsyncToolLLMExtension) BuiltinTools(registered map[string]FunctionCallR
 			wanted[CancelToolName(name)] = name
 		}
 	}
-	var tools []LLMExtensionTool
+	var tools []ExtensionTool
 	for _, name := range slices.Sorted(maps.Keys(wanted)) {
 		target := wanted[name]
 		if _, claimed := registered[name]; claimed && !e.cancelToolNames[name] {
@@ -111,7 +111,7 @@ func (e *AsyncToolLLMExtension) BuiltinTools(registered map[string]FunctionCallR
 			}
 			continue
 		}
-		tools = append(tools, LLMExtensionTool{Schema: buildCancelToolSchema(target, e.cancel)})
+		tools = append(tools, ExtensionTool{Schema: buildCancelToolSchema(target, e.cancel)})
 	}
 	e.cancelToolNames = make(map[string]bool, len(tools))
 	for _, tool := range tools {
@@ -125,7 +125,7 @@ func (e *AsyncToolLLMExtension) BuiltinTools(registered map[string]FunctionCallR
 // Which work to stop comes from the tool the model called, so the common case
 // takes no arguments at all. A tool_call_id only has to be given to choose
 // between several running calls of the same tool.
-func (e *AsyncToolLLMExtension) cancel(ctx context.Context, params FunctionCallParams) error {
+func (e *AsyncToolExtension) cancel(ctx context.Context, params FunctionCallParams) error {
 	target := strings.TrimPrefix(params.FunctionName, CancelToolPrefix)
 
 	var args struct {

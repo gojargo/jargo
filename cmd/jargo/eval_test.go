@@ -312,9 +312,9 @@ func TestJudgeFlags(t *testing.T) {
 				t.Errorf("request %s is not to the judge's model", body)
 			}
 		}
-		evalJudge, ok := judge.(*eval.EvalJudge)
+		evalJudge, ok := judge.(*eval.ClassifierJudge)
 		if !ok {
-			t.Fatalf("judge = %T, want an EvalJudge", judge)
+			t.Fatalf("judge = %T, want an ClassifierJudge", judge)
 		}
 		if _, ok := evalJudge.Classifier().(*llmclassifier.Classifier); !ok {
 			t.Errorf("classifier = %T, want the judge's model behind an LLM classifier", evalJudge.Classifier())

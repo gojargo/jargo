@@ -262,7 +262,7 @@ func TestInterruptedResponseDoesNotLeakTTFATWhenReportingOnlyInitialTTFB(t *test
 // instead.
 func TestTTFATIsRecordedBeforeTheTurnCompletionExtensionHoldsTheTextBack(t *testing.T) {
 	withTurnCompletion := func(svc *llm.Base) {
-		if err := svc.AddExtension(llm.NewLLMTurnCompletionLLMExtension(llm.UserTurnCompletionConfig{})); err != nil {
+		if err := svc.AddExtension(llm.NewTurnCompletionExtension(llm.UserTurnCompletionConfig{})); err != nil {
 			t.Fatal(err)
 		}
 	}

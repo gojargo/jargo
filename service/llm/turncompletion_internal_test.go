@@ -26,13 +26,13 @@ type pushedFrame struct {
 // recording what goes out: what the extension lets through or adds in
 // FilterPushFrame, and what it pushes or broadcasts itself, in order.
 type reader struct {
-	extension *LLMTurnCompletionLLMExtension
+	extension *TurnCompletionExtension
 	mu        sync.Mutex
 	pushed    []pushedFrame
 }
 
 func newReader(cfg UserTurnCompletionConfig) *reader {
-	r := &reader{extension: NewLLMTurnCompletionLLMExtension(cfg)}
+	r := &reader{extension: NewTurnCompletionExtension(cfg)}
 	r.extension.extensionBase().wire(nil,
 		func(_ context.Context, f frames.Frame, dir processor.Direction) error {
 			r.record(f, dir)
@@ -361,16 +361,16 @@ func updateLLMSettings(t *testing.T, svc *Base, delta *settings.LLM) error {
 
 // enableTurnCompletion installs the extension the way the stop strategy does:
 // over a settings update, with a function that builds it.
-func enableTurnCompletion(t *testing.T, svc *Base, cfg UserTurnCompletionConfig) *LLMTurnCompletionLLMExtension {
+func enableTurnCompletion(t *testing.T, svc *Base, cfg UserTurnCompletionConfig) *TurnCompletionExtension {
 	t.Helper()
 	var delta settings.LLM
 	delta.Extensions = settings.Set(settings.Extensions{
-		func() LLMExtension { return NewLLMTurnCompletionLLMExtension(cfg) },
+		func() Extension { return NewTurnCompletionExtension(cfg) },
 	})
 	if err := updateLLMSettings(t, svc, &delta); err != nil {
 		t.Fatalf("updateSettings: %v", err)
 	}
-	extension, ok := GetExtension[*LLMTurnCompletionLLMExtension](svc)
+	extension, ok := GetExtension[*TurnCompletionExtension](svc)
 	if !ok {
 		t.Fatal("the update did not attach the turn-completion extension")
 	}
@@ -433,7 +433,7 @@ func TestSimultaneousEnableAndSystemInstructionChange(t *testing.T) {
 
 	var delta settings.LLM
 	delta.Extensions = settings.Set(settings.Extensions{
-		func() LLMExtension { return NewLLMTurnCompletionLLMExtension(UserTurnCompletionConfig{}) },
+		func() Extension { return NewTurnCompletionExtension(UserTurnCompletionConfig{}) },
 	})
 	delta.SystemInstruction = settings.Set("New prompt.")
 	if err := updateLLMSettings(t, svc, &delta); err != nil {
@@ -458,7 +458,7 @@ func TestTheFlagAttachesAndDetachesTheExtension(t *testing.T) {
 	}
 	if extensions := svc.Extensions(); len(extensions) == 0 {
 		t.Fatal("no extension attached")
-	} else if _, ok := extensions[0].(*LLMTurnCompletionLLMExtension); !ok {
+	} else if _, ok := extensions[0].(*TurnCompletionExtension); !ok {
 		t.Fatalf("the closest extension is %T, want the turn-completion extension", extensions[0])
 	}
 	if !strings.Contains(svc.SystemInstruction(), UserTurnCompletionInstructions) {
@@ -470,7 +470,7 @@ func TestTheFlagAttachesAndDetachesTheExtension(t *testing.T) {
 	if err := updateLLMSettings(t, svc, &off); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := GetExtension[*LLMTurnCompletionLLMExtension](svc); ok {
+	if _, ok := GetExtension[*TurnCompletionExtension](svc); ok {
 		t.Error("the turn-completion extension is still attached")
 	}
 	// The base prompt is the single source of truth that composition rebuilds
@@ -526,7 +526,7 @@ func TestTheFlagInstallsTheExtensionWithTheConfigTheSettingsHold(t *testing.T) {
 	var cfg settings.LLM
 	cfg.UserTurnCompletionConfig = settings.Set[any](custom) //nolint:staticcheck // the deprecated setting under test
 	_ = updateLLMSettings(t, svc, &cfg)
-	if _, ok := GetExtension[*LLMTurnCompletionLLMExtension](svc); ok {
+	if _, ok := GetExtension[*TurnCompletionExtension](svc); ok {
 		t.Fatal("a configuration alone should not attach the extension")
 	}
 
@@ -534,7 +534,7 @@ func TestTheFlagInstallsTheExtensionWithTheConfigTheSettingsHold(t *testing.T) {
 	on.FilterIncompleteUserTurns = settings.Set(true) //nolint:staticcheck // the deprecated setting under test
 	_ = updateLLMSettings(t, svc, &on)
 
-	extension, ok := GetExtension[*LLMTurnCompletionLLMExtension](svc)
+	extension, ok := GetExtension[*TurnCompletionExtension](svc)
 	if !ok {
 		t.Fatal("the flag did not attach the extension")
 	}
@@ -703,7 +703,7 @@ func TestEachInferenceIsReportedOnce(t *testing.T) {
 // text goes out as the model wrote it.
 func TestNothingIsReadWithoutTheExtension(t *testing.T) {
 	svc := plainService("")
-	if _, ok := GetExtension[*LLMTurnCompletionLLMExtension](svc); ok {
+	if _, ok := GetExtension[*TurnCompletionExtension](svc); ok {
 		t.Fatal("a service should not read markers until the extension is installed")
 	}
 	if svc.FilterIncompleteUserTurns() {
@@ -742,7 +742,7 @@ func TestTheStrategysSettingsUpdateIsSilent(t *testing.T) {
 	if strings.Contains(logged, "deprecated") {
 		t.Errorf("the strategy's update warned: %s", logged)
 	}
-	if _, ok := svc.Extensions()[0].(*LLMTurnCompletionLLMExtension); !ok {
+	if _, ok := svc.Extensions()[0].(*TurnCompletionExtension); !ok {
 		t.Error("the turn-completion extension is not the closest to the service")
 	}
 }
@@ -757,7 +757,7 @@ func TestTheFlagInASettingsUpdateWarnsAndInstallsTheExtension(t *testing.T) {
 	if !strings.Contains(logged, "deprecated") {
 		t.Error("setting the deprecated flag did not warn")
 	}
-	if _, ok := GetExtension[*LLMTurnCompletionLLMExtension](svc); !ok {
+	if _, ok := GetExtension[*TurnCompletionExtension](svc); !ok {
 		t.Error("the flag did not install the extension")
 	}
 }
@@ -792,7 +792,7 @@ func TestTheExtensionReadsTheServicesResponse(t *testing.T) {
 		}
 		return emit(MarkerComplete + " Hello there!")
 	}))
-	if err := svc.AddExtension(NewLLMTurnCompletionLLMExtension(UserTurnCompletionConfig{})); err != nil {
+	if err := svc.AddExtension(NewTurnCompletionExtension(UserTurnCompletionConfig{})); err != nil {
 		t.Fatal(err)
 	}
 	var mu sync.Mutex

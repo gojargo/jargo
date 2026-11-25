@@ -446,14 +446,14 @@ func (b *Base) SetTextAggregator(a ttstext.Aggregator) {
 }
 
 // EventTTSRequest fires just before each unit of text is handed to the
-// synthesizer, carrying a TTSRequest.
+// synthesizer, carrying a Request.
 //
 //	event.On(svc.Events(), tts.EventTTSRequest,
-//	    func(ctx context.Context, r tts.TTSRequest) { … })
+//	    func(ctx context.Context, r tts.Request) { … })
 const EventTTSRequest = "on_tts_request"
 
-// TTSRequest is one unit of text on its way to the synthesizer.
-type TTSRequest struct {
+// Request is one unit of text on its way to the synthesizer.
+type Request struct {
 	// ContextID identifies the synthesis context the text belongs to, which is
 	// how the audio it produces is grouped.
 	ContextID string
@@ -1672,7 +1672,7 @@ func (b *Base) speakText(
 	// be sent. It is the last point at which what the bot is about to say can be
 	// seen in the form the synthesizer receives it, filters and transforms
 	// included, which is what a caller logging or auditing speech wants.
-	b.Events().Call(ctx, EventTTSRequest, b, TTSRequest{ContextID: contextID, Text: prepared})
+	b.Events().Call(ctx, EventTTSRequest, b, Request{ContextID: contextID, Text: prepared})
 	c.addText(prepared)
 	b.pushSequencerFrames(ctx, b.sequencer.RegisterSpoken(
 		aggregated, contextID, prepared, appendToContext, b.wordPath(), false, b.TextAggregationLanguage()),

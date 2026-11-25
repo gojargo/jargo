@@ -393,7 +393,7 @@ func TestEveryLLMInASwitcherLearnsOfTheTagger(t *testing.T) {
 func turnCompletionUpdate() frames.Frame {
 	var delta settings.LLM
 	delta.Extensions = settings.Set(settings.Extensions{
-		func() llm.LLMExtension { return llm.NewLLMTurnCompletionLLMExtension(llm.UserTurnCompletionConfig{}) },
+		func() llm.Extension { return llm.NewTurnCompletionExtension(llm.UserTurnCompletionConfig{}) },
 	})
 	return frames.NewLLMUpdateSettingsFrame(&delta)
 }

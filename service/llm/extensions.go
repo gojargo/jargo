@@ -18,7 +18,7 @@ import (
 	"github.com/gojargo/jargo/service/settings"
 )
 
-// The service side of the LLM extensions (see LLMExtension): attaching them,
+// The service side of the LLM extensions (see Extension): attaching them,
 // wiring them up as the service is set up, running every frame the service
 // processes and pushes through their layers, and keeping their built-in tools
 // in step with the registry.
@@ -97,7 +97,7 @@ type FunctionCallRunnerItem struct {
 
 // Extensions implements ExtensionHolder: the extensions attached, from the one
 // "closest" to the service to the one "farthest" from it.
-func (b *Base) Extensions() []LLMExtension {
+func (b *Base) Extensions() []Extension {
 	b.extensionsMu.RLock()
 	defer b.extensionsMu.RUnlock()
 	return slices.Clone(b.extensions)
@@ -111,7 +111,7 @@ func (b *Base) Extensions() []LLMExtension {
 //
 // It reports ErrExtensionAfterSetup on a service that is set up, and
 // ErrDuplicateExtension when the service holds an extension of the same type.
-func (b *Base) AddExtension(extension LLMExtension) error {
+func (b *Base) AddExtension(extension Extension) error {
 	b.extensionsMu.RLock()
 	setUp := b.extensionSetup != nil
 	b.extensionsMu.RUnlock()
@@ -124,7 +124,7 @@ func (b *Base) AddExtension(extension LLMExtension) error {
 // attachExtension adds an extension to the ones held, in its place by order,
 // and its instruction to the composition. An extension held already is left as
 // it is; one of a type held already is refused.
-func (b *Base) attachExtension(extension LLMExtension) error {
+func (b *Base) attachExtension(extension Extension) error {
 	b.extensionsMu.Lock()
 	if slices.Contains(b.attached, extension) {
 		b.extensionsMu.Unlock()
@@ -147,7 +147,7 @@ func (b *Base) attachExtension(extension LLMExtension) error {
 
 // detachExtension removes an extension from the ones held, and from the
 // running service.
-func (b *Base) detachExtension(ctx context.Context, extension LLMExtension) {
+func (b *Base) detachExtension(ctx context.Context, extension Extension) {
 	if b.removeExtension(extension) {
 		b.unwireExtension(ctx, extension)
 	}
@@ -156,9 +156,9 @@ func (b *Base) detachExtension(ctx context.Context, extension LLMExtension) {
 
 // removeExtension drops an extension from the ones held, reporting whether the
 // service is set up, and so had it wired.
-func (b *Base) removeExtension(extension LLMExtension) bool {
+func (b *Base) removeExtension(extension Extension) bool {
 	b.extensionsMu.Lock()
-	b.attached = slices.DeleteFunc(b.attached, func(e LLMExtension) bool { return e == extension })
+	b.attached = slices.DeleteFunc(b.attached, func(e Extension) bool { return e == extension })
 	b.sortExtensionsLocked()
 	attached := slices.Clone(b.attached)
 	setUp := b.extensionSetup != nil
@@ -172,13 +172,13 @@ func (b *Base) removeExtension(extension LLMExtension) bool {
 // by when each was attached. Call it with extensionsMu held.
 func (b *Base) sortExtensionsLocked() {
 	b.extensions = slices.Clone(b.attached)
-	slices.SortStableFunc(b.extensions, func(x, y LLMExtension) int { return cmp.Compare(x.Order(), y.Order()) })
+	slices.SortStableFunc(b.extensions, func(x, y Extension) int { return cmp.Compare(x.Order(), y.Order()) })
 }
 
 // storeExtensions writes the extensions held into the settings, which is where
 // a settings update reads the ones held from. A store with no field for them
 // is left alone: the service holds them either way.
-func (b *Base) storeExtensions(attached []LLMExtension) {
+func (b *Base) storeExtensions(attached []Extension) {
 	entries := make(settings.Extensions, 0, len(attached))
 	for _, extension := range attached {
 		entries = append(entries, extension)
@@ -199,7 +199,7 @@ func (b *Base) attachInitialExtensions() {
 	b.storeExtensions(nil)
 	// Every service has one: it contributes nothing until an async tool is
 	// registered.
-	if err := b.attachExtension(NewAsyncToolLLMExtension()); err != nil {
+	if err := b.attachExtension(NewAsyncToolExtension()); err != nil {
 		slog.Error("attaching the async-tool extension failed", "service", b.Name(), "error", err)
 	}
 	for _, entry := range initial {
@@ -217,11 +217,11 @@ func (b *Base) attachInitialExtensions() {
 
 // buildLLMExtension is an extension entry of the settings as an extension:
 // itself, or what the function it is builds.
-func buildLLMExtension(entry any) (LLMExtension, bool) {
+func buildLLMExtension(entry any) (Extension, bool) {
 	switch e := entry.(type) {
-	case LLMExtension:
+	case Extension:
 		return e, true
-	case func() LLMExtension:
+	case func() Extension:
 		built := e()
 		return built, built != nil
 	default:
@@ -233,7 +233,7 @@ func buildLLMExtension(entry any) (LLMExtension, bool) {
 // latest metadata of each kind the service has processed: a system frame such
 // as a PerceptionMetadataFrame can pass before the settings update that
 // attaches the extension that reads it.
-func (b *Base) wireExtension(ctx context.Context, extension LLMExtension) error {
+func (b *Base) wireExtension(ctx context.Context, extension Extension) error {
 	base := extension.extensionBase()
 	if other := base.AttachedService(); other != nil && other != b {
 		return fmt.Errorf("%T belongs to %s, not %s: %w", extension, other.Name(), b.Name(),
@@ -267,7 +267,7 @@ func (b *Base) wireExtension(ctx context.Context, extension LLMExtension) error 
 }
 
 // unwireExtension drops an extension's frames and cleans it up.
-func (b *Base) unwireExtension(ctx context.Context, extension LLMExtension) {
+func (b *Base) unwireExtension(ctx context.Context, extension Extension) {
 	extension.extensionBase().unwire()
 	if err := extension.Cleanup(ctx); err != nil {
 		slog.ErrorContext(ctx, "cleaning an extension up failed", "service", b.Name(),
@@ -277,7 +277,7 @@ func (b *Base) unwireExtension(ctx context.Context, extension LLMExtension) {
 
 // extensionsOutside are the extensions "farther" from the service than the
 // given one, the "closest" first.
-func (b *Base) extensionsOutside(extension LLMExtension) []LLMExtension {
+func (b *Base) extensionsOutside(extension Extension) []Extension {
 	b.extensionsMu.RLock()
 	defer b.extensionsMu.RUnlock()
 	i := slices.Index(b.extensions, extension)
@@ -291,7 +291,7 @@ func (b *Base) extensionsOutside(extension LLMExtension) []LLMExtension {
 // broadcastThroughExtensions pushes a frame each way through the given
 // extensions, the two paired as siblings.
 func (b *Base) broadcastThroughExtensions(
-	ctx context.Context, build func() frames.Frame, extensions []LLMExtension,
+	ctx context.Context, build func() frames.Frame, extensions []Extension,
 ) error {
 	down, up := build(), build()
 	down.Base().SetBroadcastSiblingID(up.ID())
@@ -307,7 +307,7 @@ func (b *Base) broadcastThroughExtensions(
 // "closest" to the service first, and what one returns goes on through the
 // rest, each frame through the rest of the chain and out before the next.
 func (b *Base) pushThroughExtensions(
-	ctx context.Context, f frames.Frame, dir processor.Direction, extensions []LLMExtension,
+	ctx context.Context, f frames.Frame, dir processor.Direction, extensions []Extension,
 ) error {
 	if len(extensions) == 0 {
 		return b.pushPastExtensions(ctx, f, dir)
@@ -424,7 +424,7 @@ func (b *Base) updateExtensions(ctx context.Context, held any) error {
 	b.settingsMu.RUnlock()
 	after, _ := v.(settings.Extensions)
 
-	var built []LLMExtension
+	var built []Extension
 	for _, entry := range after {
 		if slices.ContainsFunc(before, func(h any) bool { return sameEntry(h, entry) }) {
 			continue
@@ -455,7 +455,7 @@ func (b *Base) updateExtensions(ctx context.Context, held any) error {
 }
 
 // attachedExtensions are the extensions held, in the order they were attached.
-func (b *Base) attachedExtensions() []LLMExtension {
+func (b *Base) attachedExtensions() []Extension {
 	b.extensionsMu.RLock()
 	defer b.extensionsMu.RUnlock()
 	return slices.Clone(b.attached)
@@ -488,7 +488,7 @@ func (b *Base) registeredTools() map[string]FunctionCallRegistryItem {
 // own already has is left to it.
 func (b *Base) syncExtensionTools() {
 	registered := b.registeredTools()
-	wanted := make(map[string]LLMExtensionTool)
+	wanted := make(map[string]ExtensionTool)
 	var order []string
 	for _, extension := range b.Extensions() {
 		for _, tool := range extension.BuiltinTools(registered) {

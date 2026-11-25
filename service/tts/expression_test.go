@@ -162,7 +162,7 @@ func response(chunks ...string) []frames.Frame {
 func recordRequests(base *tts.Base) func() []string {
 	var mu sync.Mutex
 	var requests []string
-	event.On(base.Events(), tts.EventTTSRequest, func(_ context.Context, r tts.TTSRequest) {
+	event.On(base.Events(), tts.EventTTSRequest, func(_ context.Context, r tts.Request) {
 		mu.Lock()
 		requests = append(requests, r.Text)
 		mu.Unlock()

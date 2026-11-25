@@ -466,7 +466,7 @@ func buildJudge(opts judgeOptions) eval.Judge {
 	if err != nil {
 		return nil
 	}
-	cfg := eval.EvalJudgeConfig{
+	cfg := eval.ClassifierJudgeConfig{
 		Classifier:    c,
 		ExplainBelow:  &opts.explainBelow,
 		AllowContinue: &opts.allowContinue,

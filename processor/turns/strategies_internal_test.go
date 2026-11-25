@@ -1221,18 +1221,18 @@ func TestLLMTurnCompletionStopConfiguresTheLLM(t *testing.T) {
 	if len(entries) != 1 {
 		t.Fatalf("the update carries %d extension entries, want one", len(entries))
 	}
-	build, ok := entries[0].(func() llm.LLMExtension)
+	build, ok := entries[0].(func() llm.Extension)
 	if !ok {
 		t.Fatalf("the entry is %T, want a function that builds the extension for each service", entries[0])
 	}
-	extension, ok := build().(*llm.LLMTurnCompletionLLMExtension)
+	extension, ok := build().(*llm.TurnCompletionExtension)
 	if !ok {
 		t.Fatal("the entry does not build the turn-completion extension")
 	}
 	if c := extension.Config(); c.IncompleteShortPrompt != "Go on." {
 		t.Errorf("the extension is configured with %+v, want the configuration the gate was built with", c)
 	}
-	if build() == llm.LLMExtension(extension) {
+	if build() == llm.Extension(extension) {
 		t.Error("the entry built the same extension twice; each service needs one of its own")
 	}
 }

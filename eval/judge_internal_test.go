@@ -32,7 +32,7 @@ func TestParseReason(t *testing.T) {
 // segment is left out of the conversation the judge keeps, and a tool call
 // stays in it.
 func TestATurnInWhichNothingWasSaidIsNotATurn(t *testing.T) {
-	j := &EvalJudge{}
+	j := &ClassifierJudge{}
 	j.AddUserMessage("Hi.")
 	j.AddToolCall("lookup({})")
 	j.AddAssistantMessage("  ")

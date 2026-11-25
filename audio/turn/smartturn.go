@@ -193,17 +193,17 @@ type SmartTurnV3 struct {
 	session *onnxrt.Session
 }
 
-// TurnOption configures a SmartTurnV3 analyzer.
-type TurnOption func(*Params)
+// Option configures a SmartTurnV3 analyzer.
+type Option func(*Params)
 
 // WithParams sets the analysis parameters.
-func WithParams(p Params) TurnOption {
+func WithParams(p Params) Option {
 	return func(dst *Params) { *dst = p }
 }
 
 // NewSmartTurnV3 loads the embedded smart-turn-v3 model and returns an analyzer.
 // It requires the ONNX runtime to be locatable (see the onnxrt package).
-func NewSmartTurnV3(opts ...TurnOption) (*SmartTurnV3, error) {
+func NewSmartTurnV3(opts ...Option) (*SmartTurnV3, error) {
 	params := DefaultParams()
 	for _, opt := range opts {
 		opt(&params)

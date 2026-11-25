@@ -787,8 +787,8 @@ func TestRunServesUntilCanceled(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	if RunnerPort() != port || RunnerHost() != "127.0.0.1" {
-		t.Fatalf("runner host/port = %s/%d", RunnerHost(), RunnerPort())
+	if Port() != port || Host() != "127.0.0.1" {
+		t.Fatalf("runner host/port = %s/%d", Host(), Port())
 	}
 
 	cancel()

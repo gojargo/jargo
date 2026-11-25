@@ -169,7 +169,7 @@ unless a stop strategy has a decision of its own scheduled
 gate. The model starts every response with a marker (● complete, ◐ the user will
 go on shortly, ○ the user needs more time), and the service reports each one as
 a `UserTurnCompletionFrame`. `LLMTurnCompletionStop` installs the
-`llm.LLMTurnCompletionLLMExtension` on the LLM when the pipeline starts, over a
+`llm.TurnCompletionExtension` on the LLM when the pipeline starts, over a
 settings update that reaches every LLM behind a switcher, and ends the turn on ●,
 a tool call, or a response with no marker; ◐ and ○ keep the turn open, and a user who then stays quiet for
 `IncompleteShortTimeout` or `IncompleteLongTimeout` is re-prompted. It works

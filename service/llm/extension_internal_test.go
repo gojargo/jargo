@@ -17,7 +17,7 @@ import (
 // recorder is an extension that records its setup and cleanup and contributes
 // the instruction it was given.
 type recorder struct {
-	BaseLLMExtension
+	BaseExtension
 	order       int
 	instruction string
 
@@ -103,8 +103,8 @@ func extensionsDelta(entries ...any) *settings.LLM {
 }
 
 // recordersOf are the recorders attached to the service, of whatever type.
-func recordersOf(svc *Base) []LLMExtension {
-	var out []LLMExtension
+func recordersOf(svc *Base) []Extension {
+	var out []Extension
 	for _, e := range svc.Extensions() {
 		switch e.(type) {
 		case *recorder, *alpha, *beta, *gamma:
@@ -183,14 +183,14 @@ func TestASettingsUpdateBuildsAndAddsExtensions(t *testing.T) {
 	setUpService(t, svc)
 
 	err := updateLLMSettings(t, svc, extensionsDelta(
-		func() LLMExtension { return &beta{&recorder{instruction: "SECOND"}} },
+		func() Extension { return &beta{&recorder{instruction: "SECOND"}} },
 	))
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	recorders := recordersOf(svc)
-	if len(recorders) != 2 || recorders[0] != LLMExtension(first) {
+	if len(recorders) != 2 || recorders[0] != Extension(first) {
 		t.Fatalf("recorders = %v, want the first then the one built", recorders)
 	}
 	second, ok := recorders[1].(*beta)
@@ -232,17 +232,17 @@ func TestASecondExtensionOfAClassIsRefused(t *testing.T) {
 	if err := svc.AddExtension(&recorder{}); !errors.Is(err, ErrDuplicateExtension) {
 		t.Errorf("AddExtension() = %v, want ErrDuplicateExtension", err)
 	}
-	err := updateLLMSettings(t, svc, extensionsDelta(func() LLMExtension { return &recorder{} }))
+	err := updateLLMSettings(t, svc, extensionsDelta(func() Extension { return &recorder{} }))
 	if !errors.Is(err, ErrDuplicateExtension) {
 		t.Errorf("a settings update = %v, want ErrDuplicateExtension", err)
 	}
-	if recorders := recordersOf(svc); len(recorders) != 1 || recorders[0] != LLMExtension(held) {
+	if recorders := recordersOf(svc); len(recorders) != 1 || recorders[0] != Extension(held) {
 		t.Errorf("recorders = %v, want only the one held", recorders)
 	}
 }
 
 func TestConstructorSettingsBuildACallableEntry(t *testing.T) {
-	svc := extensionService("", func() LLMExtension { return &recorder{} })
+	svc := extensionService("", func() Extension { return &recorder{} })
 
 	if _, ok := GetExtension[*recorder](svc); !ok {
 		t.Error("the function in the settings did not build an extension")
@@ -286,7 +286,7 @@ func TestAnExtensionBelongsToOneService(t *testing.T) {
 }
 
 func TestASettingsUpdateBuildsAnExtensionPerService(t *testing.T) {
-	delta := extensionsDelta(func() LLMExtension { return &recorder{} })
+	delta := extensionsDelta(func() Extension { return &recorder{} })
 	one, another := extensionService(""), extensionService("")
 
 	if err := updateLLMSettings(t, one, delta); err != nil {
@@ -309,7 +309,7 @@ func TestEveryServiceHasTheAsyncToolExtension(t *testing.T) {
 	svc := extensionService("", &recorder{})
 
 	extensions := svc.Extensions()
-	if _, ok := extensions[len(extensions)-1].(*AsyncToolLLMExtension); !ok {
+	if _, ok := extensions[len(extensions)-1].(*AsyncToolExtension); !ok {
 		t.Errorf("extensions = %v, want the async-tool extension farthest from the service", extensions)
 	}
 }

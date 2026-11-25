@@ -12,7 +12,7 @@ import (
 
 // Turn completion: the markers the model opens each response with, the
 // instructions that ask for them, and their configuration. The
-// LLMTurnCompletionLLMExtension reads and reports them (see
+// TurnCompletionExtension reads and reports them (see
 // turncompletionextension.go), so the turns package's LLMTurnCompletionStop can
 // decide whether the user was done.
 
@@ -268,9 +268,9 @@ const (
 // FilterIncompleteUserTurns reports whether the service reads turn-completion
 // markers: whether the turn-completion extension is attached.
 //
-// Deprecated: use GetExtension[*LLMTurnCompletionLLMExtension].
+// Deprecated: use GetExtension[*TurnCompletionExtension].
 func (b *Base) FilterIncompleteUserTurns() bool {
-	_, ok := GetExtension[*LLMTurnCompletionLLMExtension](b)
+	_, ok := GetExtension[*TurnCompletionExtension](b)
 	return ok
 }
 
@@ -291,7 +291,7 @@ func (b *Base) SetFilterIncompleteUserTurns(on bool) {
 //
 // Deprecated: pass the configuration to turns.FilterIncompleteUserTurnStrategies.
 func (b *Base) SetUserTurnCompletionConfig(cfg UserTurnCompletionConfig) {
-	if extension, ok := GetExtension[*LLMTurnCompletionLLMExtension](b); ok {
+	if extension, ok := GetExtension[*TurnCompletionExtension](b); ok {
 		extension.SetConfig(cfg)
 		b.composeSystemInstruction()
 	}
@@ -300,9 +300,9 @@ func (b *Base) SetUserTurnCompletionConfig(cfg UserTurnCompletionConfig) {
 // UserTurnCompletionConfig is the configuration of the turn-completion
 // extension attached, or the default one when none is.
 //
-// Deprecated: read it from GetExtension[*LLMTurnCompletionLLMExtension].
+// Deprecated: read it from GetExtension[*TurnCompletionExtension].
 func (b *Base) UserTurnCompletionConfig() UserTurnCompletionConfig {
-	if extension, ok := GetExtension[*LLMTurnCompletionLLMExtension](b); ok {
+	if extension, ok := GetExtension[*TurnCompletionExtension](b); ok {
 		return extension.Config()
 	}
 	return UserTurnCompletionConfig{}

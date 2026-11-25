@@ -34,17 +34,17 @@ func TestTurnCompletionExtensionAppliedToAllMemberLLMs(t *testing.T) {
 
 	var delta settings.LLM
 	delta.Extensions = settings.Set(settings.Extensions{
-		func() llm.LLMExtension { return llm.NewLLMTurnCompletionLLMExtension(llm.UserTurnCompletionConfig{}) },
+		func() llm.Extension { return llm.NewTurnCompletionExtension(llm.UserTurnCompletionConfig{}) },
 	})
 	update := frames.NewLLMUpdateSettingsFrame(&delta)
 	update.ReachInactiveServices = true
 	task.QueueFrame(update)
 
-	var built []*llm.LLMTurnCompletionLLMExtension
+	var built []*llm.TurnCompletionExtension
 	deadline := time.Now().Add(3 * time.Second)
 	for _, member := range members {
 		for {
-			extension, ok := llm.GetExtension[*llm.LLMTurnCompletionLLMExtension](member)
+			extension, ok := llm.GetExtension[*llm.TurnCompletionExtension](member)
 			if ok && member.SystemInstruction() == llm.UserTurnCompletionInstructions {
 				built = append(built, extension)
 				break

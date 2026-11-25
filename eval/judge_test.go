@@ -170,10 +170,10 @@ func (f *explainerLLM) recorded() []call {
 
 // newJudge builds a judge over c, explained by explainer when it is not nil.
 func newJudge(
-	t *testing.T, c classifier.Classifier, explainer *explainerLLM, opts ...func(*eval.EvalJudgeConfig),
-) *eval.EvalJudge {
+	t *testing.T, c classifier.Classifier, explainer *explainerLLM, opts ...func(*eval.ClassifierJudgeConfig),
+) *eval.ClassifierJudge {
 	t.Helper()
-	cfg := eval.EvalJudgeConfig{Classifier: c}
+	cfg := eval.ClassifierJudgeConfig{Classifier: c}
 	if explainer != nil {
 		cfg.Explainer = explainer
 	}
@@ -188,7 +188,7 @@ func newJudge(
 	return j
 }
 
-func noContinue(cfg *eval.EvalJudgeConfig) {
+func noContinue(cfg *eval.ClassifierJudgeConfig) {
 	off := false
 	cfg.AllowContinue = &off
 }
@@ -485,7 +485,7 @@ func TestTheSameCriterionOnAnotherCallIsAnotherQuestion(t *testing.T) {
 
 // Over an LLM classifier
 
-func llmJudge(t *testing.T, llmReplies []string, explain bool) (*eval.EvalJudge, *explainerLLM) {
+func llmJudge(t *testing.T, llmReplies []string, explain bool) (*eval.ClassifierJudge, *explainerLLM) {
 	t.Helper()
 	service := &explainerLLM{replies: llmReplies}
 	c, err := llmclassifier.New(llmclassifier.Config{LLM: service})
@@ -555,7 +555,7 @@ func TestALLMJudgeClassifiesAndExplainsWithOneService(t *testing.T) {
 }
 
 func TestAJudgeNeedsAClassifier(t *testing.T) {
-	if _, err := eval.NewEvalJudge(eval.EvalJudgeConfig{}); err == nil {
+	if _, err := eval.NewEvalJudge(eval.ClassifierJudgeConfig{}); err == nil {
 		t.Fatal("a judge with no classifier was built")
 	}
 }
@@ -594,7 +594,7 @@ func TestACallIsExplainedByNameAndArguments(t *testing.T) {
 func TestMaxTokensCapsTheExplainer(t *testing.T) {
 	explainer := &explainerLLM{replies: []string{`{"reason": "no rain"}`}}
 	j := newJudge(t, newFakeClassifier(choice("no", 0.95)), explainer,
-		func(cfg *eval.EvalJudgeConfig) { cfg.MaxTokens = 64 })
+		func(cfg *eval.ClassifierJudgeConfig) { cfg.MaxTokens = 64 })
 	j.AddAssistantMessage("Hello.")
 	j.Evaluate(t.Context(), "describes the weather", nil)
 	if got := explainer.recorded()[0].maxTokens; got != 64 {

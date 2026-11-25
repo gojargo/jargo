@@ -22,10 +22,10 @@ import (
 type Frontend interface {
 	processor.Processor
 	llm.AdapterHolder
-	llm.LLMWithBackendRoleObjector
+	llm.BackendRoleObjector
 	llm.ExtensionHolder
 	// AddExtension attaches an LLM extension, before the service is set up.
-	AddExtension(extension llm.LLMExtension) error
+	AddExtension(extension llm.Extension) error
 	// ServiceMetadataFrame describes the service, saying whether it is
 	// speech-to-speech.
 	ServiceMetadataFrame() frames.ServiceMetadata
@@ -126,7 +126,7 @@ type LLMWithBackend struct {
 func New(cfg Config) (*LLMWithBackend, error) {
 	slog.Warn("LLMWithBackend is alpha: its API is likely to change between releases")
 	frontend := cfg.Frontend
-	if objection := frontend.LLMWithBackendRoleObjection(llm.RoleFrontend); objection != "" {
+	if objection := frontend.BackendRoleObjection(llm.RoleFrontend); objection != "" {
 		return nil, fmt.Errorf("%w: %s", ErrFrontendDeclined, objection)
 	}
 	if frontend.LLMAdapter() == nil {

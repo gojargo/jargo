@@ -363,7 +363,7 @@ type SessionServices struct {
 	// PersonaLLM plays a simulation's caller; it applies to simulations only.
 	PersonaLLM PersonaLLM
 	// Judge decides the scenario's eval: assertions, or a simulation's goal and
-	// criteria, which takes a judge that is also a RunJudge (EvalJudge is
+	// criteria, which takes a judge that is also a RunJudge (ClassifierJudge is
 	// both).
 	Judge Judge
 	// UserTTS speaks the user's turns in audio mode.

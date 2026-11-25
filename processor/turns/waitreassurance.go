@@ -107,7 +107,7 @@ type WaitReassuranceConfig struct {
 //		return err
 //	}
 type WaitReassuranceLLMExtension struct {
-	llm.BaseLLMExtension
+	llm.BaseExtension
 
 	interval    time.Duration
 	instruction string
@@ -145,13 +145,13 @@ func NewWaitReassuranceLLMExtension(cfg WaitReassuranceConfig) *WaitReassuranceL
 	return e
 }
 
-// SystemInstruction implements llm.LLMExtension: the standing guidance, with
+// SystemInstruction implements llm.Extension: the standing guidance, with
 // the silent mark in place.
 func (e *WaitReassuranceLLMExtension) SystemInstruction() string {
 	return formatTemplate(e.instruction, map[string]string{"mark": e.silentMark})
 }
 
-// ProcessFrame implements llm.LLMExtension: it configures the wait at start,
+// ProcessFrame implements llm.Extension: it configures the wait at start,
 // and asks the model once the user has waited.
 func (e *WaitReassuranceLLMExtension) ProcessFrame(ctx context.Context, f frames.Frame, _ processor.Direction) error {
 	switch fr := f.(type) {
@@ -172,7 +172,7 @@ func (e *WaitReassuranceLLMExtension) ProcessFrame(ctx context.Context, f frames
 	return nil
 }
 
-// FilterPushFrame implements llm.LLMExtension: it drops a reply that opens with
+// FilterPushFrame implements llm.Extension: it drops a reply that opens with
 // the silent mark, and reports it. It returns the reply's text once its opening
 // shows it is not the mark, and nothing while the opening is held or the reply
 // is being dropped.

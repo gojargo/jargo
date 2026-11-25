@@ -29,7 +29,7 @@ type processedFrame struct {
 // frameRecorder is an extension that records what it sees and does what it is
 // told.
 type frameRecorder struct {
-	llm.BaseLLMExtension
+	llm.BaseExtension
 	order  int
 	filter func(frames.Frame) []frames.Frame
 
@@ -108,7 +108,7 @@ type passingGen struct{}
 func (passingGen) Generate(context.Context, *frames.LLMContext, llm.Emit) error { return nil }
 
 // extendedService builds a service with the extensions attached.
-func extendedService(t *testing.T, extensions ...llm.LLMExtension) *llm.Base {
+func extendedService(t *testing.T, extensions ...llm.Extension) *llm.Base {
 	t.Helper()
 	svc := llm.New("FakeLLM", passingGen{})
 	for _, extension := range extensions {
@@ -241,7 +241,7 @@ func TestFramesAnExtensionAddsContinueThroughTheOnesAfterIt(t *testing.T) {
 }
 
 // announcer pushes a frame of its own as it filters the text "first".
-type announcer struct{ llm.BaseLLMExtension }
+type announcer struct{ llm.BaseExtension }
 
 func (a *announcer) FilterPushFrame(
 	ctx context.Context, f frames.Frame, _ processor.Direction,
@@ -283,7 +283,7 @@ func TestAnExtensionCanHoldAFrameBack(t *testing.T) {
 
 // speaker pushes and broadcasts frames of its own when it processes a
 // TextFrame.
-type speaker struct{ llm.BaseLLMExtension }
+type speaker struct{ llm.BaseExtension }
 
 func (s *speaker) Order() int { return 1 }
 
@@ -347,7 +347,7 @@ func TestWhatAnExtensionPushesPassesTheExtensionsOutsideIt(t *testing.T) {
 // responder answers a TextFrame with a frame of its own, and logs what it is
 // handed.
 type responder struct {
-	llm.BaseLLMExtension
+	llm.BaseExtension
 	name  string
 	order int
 	log   *eventLog
@@ -433,7 +433,7 @@ func (closedGate) AllowFunctionCalls() bool { return true }
 
 // gateSpeaker pushes text of its own when it processes a
 // UserTurnInferenceCompletedFrame.
-type gateSpeaker struct{ llm.BaseLLMExtension }
+type gateSpeaker struct{ llm.BaseExtension }
 
 func (s *gateSpeaker) ProcessFrame(ctx context.Context, f frames.Frame, _ processor.Direction) error {
 	if _, ok := f.(*frames.UserTurnInferenceCompletedFrame); ok {
@@ -457,16 +457,16 @@ func TestWhatAnExtensionPushesIsPastTheOutputGate(t *testing.T) {
 // companion adds a built-in tool for every registered tool whose name starts
 // with "go".
 type companion struct {
-	llm.BaseLLMExtension
+	llm.BaseExtension
 	handler llm.FunctionCallHandler
 }
 
-func (c *companion) BuiltinTools(registered map[string]llm.FunctionCallRegistryItem) []llm.LLMExtensionTool {
+func (c *companion) BuiltinTools(registered map[string]llm.FunctionCallRegistryItem) []llm.ExtensionTool {
 	async := false
-	var tools []llm.LLMExtensionTool
+	var tools []llm.ExtensionTool
 	for name := range registered {
 		if len(name) >= 2 && name[:2] == "go" {
-			tools = append(tools, llm.LLMExtensionTool{
+			tools = append(tools, llm.ExtensionTool{
 				Schema: frames.Tool{
 					Name: "stop_" + name, Parameters: json.RawMessage(`{"type":"object"}`), Handler: c.handler,
 				},
@@ -515,10 +515,10 @@ func TestAnExtensionsToolsAreAdvertisedAndWithdrawnWithTheRegistry(t *testing.T)
 }
 
 // helperTool is an extension that adds a built-in tool named "helper".
-type helperTool struct{ llm.BaseLLMExtension }
+type helperTool struct{ llm.BaseExtension }
 
-func (*helperTool) BuiltinTools(map[string]llm.FunctionCallRegistryItem) []llm.LLMExtensionTool {
-	return []llm.LLMExtensionTool{{Schema: frames.Tool{Name: "helper", Handler: llm.FunctionCallHandler(noop)}}}
+func (*helperTool) BuiltinTools(map[string]llm.FunctionCallRegistryItem) []llm.ExtensionTool {
+	return []llm.ExtensionTool{{Schema: frames.Tool{Name: "helper", Handler: llm.FunctionCallHandler(noop)}}}
 }
 
 func TestAUsersToolKeepsItsNameOverAnExtensions(t *testing.T) {
@@ -540,15 +540,15 @@ func TestAUsersToolKeepsItsNameOverAnExtensions(t *testing.T) {
 
 // announcing adds two built-in tools: one quiet, one whose calls are announced.
 type announcing struct {
-	llm.BaseLLMExtension
+	llm.BaseExtension
 	handler llm.FunctionCallHandler
 }
 
-func (a *announcing) BuiltinTools(map[string]llm.FunctionCallRegistryItem) []llm.LLMExtensionTool {
+func (a *announcing) BuiltinTools(map[string]llm.FunctionCallRegistryItem) []llm.ExtensionTool {
 	tool := func(name string) frames.Tool {
 		return frames.Tool{Name: name, Parameters: json.RawMessage(`{"type":"object"}`), Handler: a.handler}
 	}
-	return []llm.LLMExtensionTool{
+	return []llm.ExtensionTool{
 		{Schema: tool("quiet")},
 		{Schema: tool("announced"), AnnounceCallStart: true},
 	}
@@ -621,7 +621,7 @@ func TestAnExtensionToolsCallStartIsAnnouncedOnlyIfTheToolAsks(t *testing.T) {
 
 // labeled is an extension that contributes an instruction.
 type labeled struct {
-	llm.BaseLLMExtension
+	llm.BaseExtension
 	instruction string
 }
 
@@ -638,7 +638,7 @@ func TestASettingsUpdateBuildsAndAddsExtensionsWhileRunning(t *testing.T) {
 
 	var delta settings.LLM
 	delta.Extensions = settings.Set(settings.Extensions{
-		func() llm.LLMExtension { return &secondLabel{&labeled{instruction: "SECOND"}} },
+		func() llm.Extension { return &secondLabel{&labeled{instruction: "SECOND"}} },
 	})
 	runExtended(t, svc, frames.NewLLMUpdateSettingsFrame(&delta))
 

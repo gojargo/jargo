@@ -322,7 +322,7 @@ type LLM struct {
 	// turns.FilterIncompleteUserTurnStrategies instead.
 	UserTurnCompletionConfig Opt[any] `settings:"user_turn_completion_config"`
 	// Extensions are the LLM extensions attached to the service (see
-	// llm.LLMExtension). A delta adds to the extensions held. An entry is an
+	// llm.Extension). A delta adds to the extensions held. An entry is an
 	// extension, for the one service the settings are for, or a function taking
 	// no arguments that builds one, for each service the delta reaches: an
 	// update marked to reach inactive services reaches every LLM behind a

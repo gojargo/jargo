@@ -18,7 +18,7 @@ func TestABotThatPanicsEndsOnlyItsSession(t *testing.T) {
 	s.activeSessions["s1"] = nil
 	s.mu.Unlock()
 
-	s.runBotSession(&RunnerArguments{SessionID: "s1"}, "s1", true)
+	s.runBotSession(&BaseArguments{SessionID: "s1"}, "s1", true)
 	s.waitSessions()
 
 	s.mu.Lock()
@@ -42,7 +42,7 @@ func TestASessionArrivingAfterShutdownIsRefused(t *testing.T) {
 	s.mu.Lock()
 	s.activeSessions["late"] = nil
 	s.mu.Unlock()
-	s.runBotSession(&RunnerArguments{SessionID: "late"}, "late", true)
+	s.runBotSession(&BaseArguments{SessionID: "late"}, "late", true)
 	s.waitSessions()
 
 	select {

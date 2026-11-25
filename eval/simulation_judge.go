@@ -37,7 +37,7 @@ func (r *Rubric) judged() (string, []SimulationMetric, JudgeEvalConfig) {
 }
 
 // RunJudge is the judge a whole conversation is put to: told the conversation,
-// it decides the goal and every bot turn on every criterion. EvalJudge is one.
+// it decides the goal and every bot turn on every criterion. ClassifierJudge is one.
 // A run judge that also has a Close(context.Context) error method is closed by
 // whoever built it.
 type RunJudge interface {

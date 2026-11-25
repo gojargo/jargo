@@ -473,9 +473,9 @@ func TestTTSTokenSpeakFramePreservesUnflushedLLMRequest(t *testing.T) {
 				endpoint, got := fakeTTSServer(t, ttsServerOptions{})
 				svc, _ := testTTS(endpoint, TTSConfig{TextAggregation: frames.TextTypeToken})
 				var mu sync.Mutex
-				var requests []tts.TTSRequest
+				var requests []tts.Request
 				event.On(svc.Events(), tts.EventTTSRequest,
-					func(_ context.Context, req tts.TTSRequest) {
+					func(_ context.Context, req tts.Request) {
 						mu.Lock()
 						requests = append(requests, req)
 						mu.Unlock()

@@ -455,7 +455,7 @@ func (p *PredictiveDelegation) shouldStartRace(ctx context.Context, f *frames.LL
 			"predictive delegation: speculative turns (eager end of turn) are left to the frontend")
 		return false
 	}
-	if _, filtering := llm.GetExtension[*llm.LLMTurnCompletionLLMExtension](p.frontend); filtering {
+	if _, filtering := llm.GetExtension[*llm.TurnCompletionExtension](p.frontend); filtering {
 		p.warnOnce(ctx, "filtering",
 			"predictive delegation: turns are left to the frontend while it filters incomplete user turns")
 		return false

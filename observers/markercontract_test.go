@@ -13,7 +13,7 @@ import (
 // returns the markers it pushed.
 func markersPushedFor(t *testing.T, text string) []*frames.LLMMarkerFrame {
 	t.Helper()
-	extension := llm.NewLLMTurnCompletionLLMExtension(llm.UserTurnCompletionConfig{})
+	extension := llm.NewTurnCompletionExtension(llm.UserTurnCompletionConfig{})
 	pushed, err := extension.FilterPushFrame(context.Background(), frames.NewLLMTextFrame(text), processor.Downstream)
 	if err != nil {
 		t.Fatal(err)

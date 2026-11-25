@@ -43,7 +43,7 @@ func newStreamingFrontend(firstOutputAfter, streaming time.Duration, call, syste
 
 func (f *streamingFrontend) LLMAdapter() llm.BuiltinToolHolder { return &f.adapter }
 
-func (f *streamingFrontend) LLMWithBackendRoleObjection(llm.LLMWithBackendRole) string { return "" }
+func (f *streamingFrontend) BackendRoleObjection(llm.BackendRole) string { return "" }
 
 func (f *streamingFrontend) ServiceMetadataFrame() frames.ServiceMetadata {
 	return frames.NewLLMServiceMetadataFrame(f.Name())
@@ -377,7 +377,7 @@ func TestNoTurnIsRacedWhileTheFrontendFiltersIncompleteTurns(t *testing.T) {
 
 	runSteps(t, service,
 		frames.NewLLMUpdateSettingsFrame(&settings.LLM{Extensions: settings.Set(settings.Extensions{
-			func() llm.LLMExtension { return llm.NewLLMTurnCompletionLLMExtension(llm.UserTurnCompletionConfig{}) },
+			func() llm.Extension { return llm.NewTurnCompletionExtension(llm.UserTurnCompletionConfig{}) },
 		})}),
 		100*ms, userTurn(""), 100*ms)
 

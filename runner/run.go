@@ -93,23 +93,23 @@ var (
 	runnerPort            = 7860
 )
 
-// RunnerDownloadsFolder returns the folder the runner serves files for download
+// DownloadsFolder returns the folder the runner serves files for download
 // from, or "" when it serves none.
-func RunnerDownloadsFolder() string {
+func DownloadsFolder() string {
 	runnerMu.Lock()
 	defer runnerMu.Unlock()
 	return runnerDownloadsFolder
 }
 
-// RunnerHost returns the host the runner listens on.
-func RunnerHost() string {
+// Host returns the host the runner listens on.
+func Host() string {
 	runnerMu.Lock()
 	defer runnerMu.Unlock()
 	return runnerHost
 }
 
-// RunnerPort returns the port the runner listens on.
-func RunnerPort() int {
+// Port returns the port the runner listens on.
+func Port() int {
 	runnerMu.Lock()
 	defer runnerMu.Unlock()
 	return runnerPort
@@ -655,7 +655,7 @@ func (s *server) offer(w http.ResponseWriter, req rtc.Request, sessionID string)
 	}
 	answer, err := s.rtcHandler.HandleWebRequest(req, func(conn *rtc.Connection) error {
 		args := &WebRTCRunnerArguments{
-			RunnerArguments:  newRunnerArguments(req.RequestData, resolved),
+			BaseArguments:    newRunnerArguments(req.RequestData, resolved),
 			WebRTCConnection: conn,
 		}
 		args.CLIArgs = s.args
@@ -886,10 +886,10 @@ func (s *server) startLiveKit(w http.ResponseWriter, body json.RawMessage) {
 		return
 	}
 	args := &LiveKitRunnerArguments{
-		RunnerArguments: newRunnerArguments(body, sessionID),
-		RoomName:        roomName,
-		URL:             url,
-		Token:           agentToken,
+		BaseArguments: newRunnerArguments(body, sessionID),
+		RoomName:      roomName,
+		URL:           url,
+		Token:         agentToken,
 	}
 	args.CLIArgs = s.args
 	s.mu.Lock()
@@ -987,8 +987,8 @@ func (s *server) setupTelephonyRoutes(mux *http.ServeMux) {
 		}
 		slog.Debug("runner: WebSocket connection accepted")
 		args := &WebSocketRunnerArguments{
-			RunnerArguments: newRunnerArguments(s.runnerBody(), uuid.NewString()),
-			WebSocket:       conn,
+			BaseArguments: newRunnerArguments(s.runnerBody(), uuid.NewString()),
+			WebSocket:     conn,
 		}
 		args.CLIArgs = s.args
 		s.runWebSocketBot(args)
@@ -1021,9 +1021,9 @@ func (s *server) setupWebSocketRoutes(mux *http.ServeMux) {
 		}
 		slog.Debug("runner: plain WebSocket connection accepted")
 		args := &WebSocketRunnerArguments{
-			RunnerArguments: newRunnerArguments(s.runnerBody(), uuid.NewString()),
-			WebSocket:       conn,
-			TransportType:   transportWebSocket,
+			BaseArguments: newRunnerArguments(s.runnerBody(), uuid.NewString()),
+			WebSocket:     conn,
+			TransportType: transportWebSocket,
 		}
 		args.CLIArgs = s.args
 		s.runWebSocketBot(args)
@@ -1069,7 +1069,7 @@ func (s *server) setupWhatsAppRoutes(mux *http.ServeMux) {
 		// business number, when, and its session.
 		body := call.Raw
 		args := &WebRTCRunnerArguments{
-			RunnerArguments:  newRunnerArguments(body, uuid.NewString()),
+			BaseArguments:    newRunnerArguments(body, uuid.NewString()),
 			WebRTCConnection: call.Connection,
 		}
 		args.CLIArgs = s.args

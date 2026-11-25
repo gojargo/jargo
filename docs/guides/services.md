@@ -269,7 +269,7 @@ service holds (see [LLM extensions](#llm-extensions)).
 ## LLM extensions
 
 An LLM extension is a pluggable feature of an LLM service. It embeds
-`llm.BaseLLMExtension` and overrides what it needs:
+`llm.BaseExtension` and overrides what it needs:
 
 | Method | What it does |
 |---|---|
@@ -288,14 +288,14 @@ type; `llm.GetExtension[*T](service)` finds it.
 A component that has the service in hand attaches one with `AddExtension`
 before the pipeline runs. A running service takes one over an
 `LLMUpdateSettingsFrame` whose `settings.LLM` delta lists it in `Extensions`; an
-entry that is a `func() llm.LLMExtension` builds one for each service the update
+entry that is a `func() llm.Extension` builds one for each service the update
 reaches, which is what an update reaching every LLM behind a switcher needs,
 since an extension belongs to one service.
 
 jargo's own features are extensions: turn completion
-(`llm.LLMTurnCompletionLLMExtension`, installed by the turn strategy, see
+(`llm.TurnCompletionExtension`, installed by the turn strategy, see
 [Turn-taking](turn-taking.md)), the async-tool guidance and cancel tools
-(`llm.AsyncToolLLMExtension`), and the pairing of a frontend with its backend
+(`llm.AsyncToolExtension`), and the pairing of a frontend with its backend
 (`llmwithbackend.BackendPairingLLMExtension`).
 
 ## Speech-to-speech

@@ -13,7 +13,7 @@ import (
 // LLMTurnCompletionStop decides the user is done only when the LLM marks the
 // turn complete.
 //
-// It installs the llm.LLMTurnCompletionLLMExtension on the LLM, which then
+// It installs the llm.TurnCompletionExtension on the LLM, which then
 // starts every response with the complete marker, the short one (the user will
 // continue shortly) or the long one (the user needs more time), and reports
 // each as a UserTurnCompletionFrame. The settings update is marked to reach
@@ -109,7 +109,7 @@ func (s *LLMTurnCompletionStop) configureLLM() {
 	cfg := s.config
 	var delta settings.LLM
 	delta.Extensions = settings.Set(settings.Extensions{
-		func() llm.LLMExtension { return llm.NewLLMTurnCompletionLLMExtension(cfg) },
+		func() llm.Extension { return llm.NewTurnCompletionExtension(cfg) },
 	})
 	update := frames.NewLLMUpdateSettingsFrame(&delta)
 	update.ReachInactiveServices = true
@@ -188,7 +188,7 @@ func (s *LLMTurnCompletionStop) stopReprompt() {
 // adds an LLMTurnCompletionStop, which waits for the turn's inference. Once the
 // other stop strategies decide the user stopped, the inference runs, and the
 // turn ends once the LLM marks it complete. This works with either StopMode.
-// That strategy installs the llm.LLMTurnCompletionLLMExtension on the LLM
+// That strategy installs the llm.TurnCompletionExtension on the LLM
 // service itself when the pipeline starts, configured with cfg, so nothing else
 // has to be set up.
 //

@@ -14,10 +14,10 @@ import (
 // both from its BackendConnector and installs the extension on the frontend;
 // the connector runs the session the tools feed.
 type BackendPairingLLMExtension struct {
-	llm.BaseLLMExtension
+	llm.BaseExtension
 
 	instruction string
-	tools       []llm.LLMExtensionTool
+	tools       []llm.ExtensionTool
 }
 
 // NewBackendPairingLLMExtension builds the pairing extension. instruction is
@@ -32,7 +32,7 @@ func NewBackendPairingLLMExtension(instruction string, tools []frames.Tool) *Bac
 		// A delegation is announced when it starts, as a call of the
 		// application's own tools is: the application may speak on it, and the
 		// pipeline counts it among the calls in progress.
-		e.tools = append(e.tools, llm.LLMExtensionTool{
+		e.tools = append(e.tools, llm.ExtensionTool{
 			Schema:               tool,
 			CancelOnInterruption: &async,
 			AnnounceCallStart:    true,
@@ -41,11 +41,11 @@ func NewBackendPairingLLMExtension(instruction string, tools []frames.Tool) *Bac
 	return e
 }
 
-// SystemInstruction implements llm.LLMExtension: the pairing instruction.
+// SystemInstruction implements llm.Extension: the pairing instruction.
 func (e *BackendPairingLLMExtension) SystemInstruction() string { return e.instruction }
 
-// BuiltinTools implements llm.LLMExtension: the delegation tools, whatever is
+// BuiltinTools implements llm.Extension: the delegation tools, whatever is
 // registered.
-func (e *BackendPairingLLMExtension) BuiltinTools(map[string]llm.FunctionCallRegistryItem) []llm.LLMExtensionTool {
+func (e *BackendPairingLLMExtension) BuiltinTools(map[string]llm.FunctionCallRegistryItem) []llm.ExtensionTool {
 	return e.tools
 }

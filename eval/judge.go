@@ -255,8 +255,8 @@ var turnOutcomes = []classifier.Option{
 // errNoClassifier reports a judge given nothing to decide with.
 var errNoClassifier = errors.New("eval: a judge needs a classifier to decide the verdicts")
 
-// EvalJudgeConfig configures an EvalJudge.
-type EvalJudgeConfig struct {
+// ClassifierJudgeConfig configures an ClassifierJudge.
+type ClassifierJudgeConfig struct {
 	// Classifier decides the verdicts. The judge sets it up before its first
 	// question and cleans it up when it is closed. Required.
 	Classifier classifier.Classifier
@@ -281,7 +281,7 @@ type EvalJudgeConfig struct {
 	MaxTokens int
 }
 
-// EvalJudge judges a conversation with a classifier, and asks an LLM for the
+// ClassifierJudge judges a conversation with a classifier, and asks an LLM for the
 // reasons.
 //
 // Every question goes to the classifier, which answers with an option and a
@@ -308,7 +308,7 @@ type EvalJudgeConfig struct {
 // A question that fails is asked once more; a second failure gives a none (no
 // verdict), with the reason "judge call failed: " and the error, its
 // credentials masked.
-type EvalJudge struct {
+type ClassifierJudge struct {
 	classifier    classifier.Classifier
 	explainer     *explainer
 	explainBelow  float64
@@ -343,11 +343,11 @@ const (
 )
 
 // NewEvalJudge builds a judge.
-func NewEvalJudge(cfg EvalJudgeConfig) (*EvalJudge, error) {
+func NewEvalJudge(cfg ClassifierJudgeConfig) (*ClassifierJudge, error) {
 	if cfg.Classifier == nil {
 		return nil, errNoClassifier
 	}
-	j := &EvalJudge{
+	j := &ClassifierJudge{
 		classifier:    cfg.Classifier,
 		explainBelow:  defaultExplainBelow,
 		allowContinue: cfg.AllowContinue == nil || *cfg.AllowContinue,
@@ -379,7 +379,7 @@ func NewEvalJudge(cfg EvalJudgeConfig) (*EvalJudge, error) {
 //
 // It fails when the block names an unknown service, or its factory is not
 // registered or returned neither a classifier nor an LLM service.
-func NewEvalJudgeFromConfig(cfg *JudgeEvalConfig) (*EvalJudge, error) {
+func NewEvalJudgeFromConfig(cfg *JudgeEvalConfig) (*ClassifierJudge, error) {
 	if cfg == nil {
 		cfg = &JudgeEvalConfig{}
 	}
@@ -407,7 +407,7 @@ func NewEvalJudgeFromConfig(cfg *JudgeEvalConfig) (*EvalJudge, error) {
 	if cfg.ExplainBelow != nil {
 		explainBelow = *cfg.ExplainBelow
 	}
-	return NewEvalJudge(EvalJudgeConfig{
+	return NewEvalJudge(ClassifierJudgeConfig{
 		Classifier:    c,
 		Explainer:     inf,
 		ExplainBelow:  &explainBelow,
@@ -420,34 +420,34 @@ func NewEvalJudgeFromConfig(cfg *JudgeEvalConfig) (*EvalJudge, error) {
 //
 // Deprecated: build a classifier/llmclassifier classifier over the service and pass it to
 // NewEvalJudge, with the service as the Explainer for the reasons.
-func NewLLMJudge(inf llm.Inferencer) *EvalJudge {
+func NewLLMJudge(inf llm.Inferencer) *ClassifierJudge {
 	c, err := llmclassifier.New(llmclassifier.Config{LLM: inf})
 	if err != nil {
 		// A nil service is the only way to fail, and that is a caller's mistake
 		// made where it is made.
 		panic(err) //nolint:forbidigo // a mistake in the program, refused where it is made
 	}
-	j, _ := NewEvalJudge(EvalJudgeConfig{Classifier: c, Explainer: inf})
+	j, _ := NewEvalJudge(ClassifierJudgeConfig{Classifier: c, Explainer: inf})
 	return j
 }
 
 // Classifier is the classifier that decides the verdicts.
-func (j *EvalJudge) Classifier() classifier.Classifier { return j.classifier }
+func (j *ClassifierJudge) Classifier() classifier.Classifier { return j.classifier }
 
 // AddUserMessage records a user turn, so a later reply is judged in context (a
 // terse "that's four" answering "what is two plus two?", say).
-func (j *EvalJudge) AddUserMessage(text string) { j.add(roleUser, text) }
+func (j *ClassifierJudge) AddUserMessage(text string) { j.add(roleUser, text) }
 
 // AddAssistantMessage adds a segment of the bot's current reply to the
 // conversation the judge sees. Consecutive segments are one reply.
-func (j *EvalJudge) AddAssistantMessage(text string) { j.add(roleAssistant, text) }
+func (j *ClassifierJudge) AddAssistantMessage(text string) { j.add(roleAssistant, text) }
 
 // AddToolCall records a tool call the bot made, on one line, e.g.
 // book({"time": "6pm"}). A reply and a call are judged on the spoken
 // conversation only, so it is kept but not shown to them.
-func (j *EvalJudge) AddToolCall(text string) { j.add(roleTool, text) }
+func (j *ClassifierJudge) AddToolCall(text string) { j.add(roleTool, text) }
 
-func (j *EvalJudge) add(role, text string) {
+func (j *ClassifierJudge) add(role, text string) {
 	if strings.TrimSpace(text) == "" {
 		return
 	}
@@ -457,7 +457,7 @@ func (j *EvalJudge) add(role, text string) {
 }
 
 // spoken is the conversation without the tool calls, and the whole transcript.
-func (j *EvalJudge) spoken() (spoken, all []transcriptEntry) {
+func (j *ClassifierJudge) spoken() (spoken, all []transcriptEntry) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	all = append([]transcriptEntry(nil), j.transcript...)
@@ -476,7 +476,7 @@ func (j *EvalJudge) spoken() (spoken, all []transcriptEntry) {
 // answer, cached by criterion, conversation and the answers it was allowed. A
 // final verdict that needs a reason is explained, and a failed question is a
 // none with the failure as its reason, not cached.
-func (j *EvalJudge) Evaluate(ctx context.Context, criterion string, allowContinue *bool) JudgeVerdict {
+func (j *ClassifierJudge) Evaluate(ctx context.Context, criterion string, allowContinue *bool) JudgeVerdict {
 	outcomes := j.outcomes
 	if allowContinue != nil {
 		outcomes = replyOutcomesFor(*allowContinue)
@@ -521,7 +521,7 @@ func (j *EvalJudge) Evaluate(ctx context.Context, criterion string, allowContinu
 // the conversation so far. It gives a yes or a no, cached by call, criterion and
 // conversation, and explained when it needs a reason. A failed question is a
 // none, not cached.
-func (j *EvalJudge) EvaluateCall(
+func (j *ClassifierJudge) EvaluateCall(
 	ctx context.Context, name string, args map[string]any, criterion string,
 ) JudgeVerdict {
 	spoken, all := j.spoken()
@@ -560,7 +560,7 @@ func (j *EvalJudge) EvaluateCall(
 // It gives the goal's verdict and, per criterion name, a verdict per bot turn
 // in order. A failed question is a none for each verdict it asked for, and a
 // run with a failed question is not cached.
-func (j *EvalJudge) EvaluateRun(ctx context.Context, criteria []Criterion, success string) RunVerdicts {
+func (j *ClassifierJudge) EvaluateRun(ctx context.Context, criteria []Criterion, success string) RunVerdicts {
 	_, conversationKept := j.spoken()
 	entries := numberedTurns(conversationKept)
 	key := cacheKey("run", criteriaObject(criteria), success, conversation(entries))
@@ -650,7 +650,7 @@ func (j *EvalJudge) EvaluateRun(ctx context.Context, criteria []Criterion, succe
 
 // explainRun is the run's verdicts, those that need a reason given the
 // explainer's; it explains them in one call.
-func (j *EvalJudge) explainRun(
+func (j *ClassifierJudge) explainRun(
 	ctx context.Context, verdicts RunVerdicts, transcript []transcriptEntry, criteria []Criterion, success string,
 ) RunVerdicts {
 	var goal *JudgeVerdict
@@ -689,7 +689,7 @@ func (j *EvalJudge) explainRun(
 
 // yesNo is the classifier's answer to one yes or no question, asked once more
 // if it failed.
-func (j *EvalJudge) yesNo(
+func (j *ClassifierJudge) yesNo(
 	ctx context.Context, state any, question classifier.YesNoQuestion,
 ) (classifier.YesNoResult, error) {
 	answers, err := askTwice(ctx, j, func() (map[string]classifier.YesNoResult, error) {
@@ -728,20 +728,20 @@ func criteriaObject(criteria []Criterion) ordered.Object {
 
 // Close releases what the judge holds open; the session calls it when the run
 // ends.
-func (j *EvalJudge) Close(ctx context.Context) error {
+func (j *ClassifierJudge) Close(ctx context.Context) error {
 	// A question still setting the classifier up finishes first.
 	j.setupOnce.Do(func() {})
 	return j.classifier.Cleanup(ctx)
 }
 
-func (j *EvalJudge) cached(key string) (JudgeVerdict, bool) {
+func (j *ClassifierJudge) cached(key string) (JudgeVerdict, bool) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	v, ok := j.cache[key]
 	return v, ok
 }
 
-func (j *EvalJudge) store(key string, v JudgeVerdict) {
+func (j *ClassifierJudge) store(key string, v JudgeVerdict) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	j.cache[key] = v
@@ -749,7 +749,7 @@ func (j *EvalJudge) store(key string, v JudgeVerdict) {
 
 // setup wires the classifier up before the first question. A classifier that
 // cannot be set up is only a warning: the question goes out regardless.
-func (j *EvalJudge) setup(ctx context.Context) {
+func (j *ClassifierJudge) setup(ctx context.Context) {
 	j.setupOnce.Do(func() {
 		if err := j.classifier.Setup(ctx); err != nil {
 			slog.WarnContext(ctx, "eval: the judge could not set its classifier up", "error", err)
@@ -759,13 +759,13 @@ func (j *EvalJudge) setup(ctx context.Context) {
 
 // needsReason reports whether a verdict is worth explaining: a no, or an unsure
 // one.
-func (j *EvalJudge) needsReason(v JudgeVerdict) bool {
+func (j *ClassifierJudge) needsReason(v JudgeVerdict) bool {
 	unsure := v.Confidence != nil && *v.Confidence < j.explainBelow
 	return v.Verdict == VerdictNo || unsure
 }
 
 // askTwice is the classifier's answer, asked once more if it failed.
-func askTwice[R any](ctx context.Context, j *EvalJudge, ask func() (R, error)) (R, error) {
+func askTwice[R any](ctx context.Context, j *ClassifierJudge, ask func() (R, error)) (R, error) {
 	j.setup(ctx)
 	var (
 		answers R
@@ -933,7 +933,7 @@ func describeProbabilities(probabilities ordered.Object) string {
 
 // failed is the verdict a failed question gives, with the question's error as
 // its reason.
-func (j *EvalJudge) failed(verdict string) JudgeVerdict {
+func (j *ClassifierJudge) failed(verdict string) JudgeVerdict {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	return JudgeVerdict{Verdict: verdict, Reason: judgeFailed + j.callError}
@@ -1391,4 +1391,4 @@ func textOf(v any) string {
 	}
 }
 
-var _ Judge = (*EvalJudge)(nil)
+var _ Judge = (*ClassifierJudge)(nil)

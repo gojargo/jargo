@@ -8,14 +8,14 @@ import (
 	"github.com/gojargo/jargo/processor"
 )
 
-// LLMExtensionTool is a tool an extension adds to the service's built-in tools.
+// ExtensionTool is a tool an extension adds to the service's built-in tools.
 //
 // Built-in tools go to the model on every inference, beside the tools the
 // conversation advertises. Once a tool is added its name is reserved: an
 // application cannot register a tool of its own under it.
 //
 //nolint:revive // the name is the one the extension design uses throughout
-type LLMExtensionTool struct {
+type ExtensionTool struct {
 	// Schema is the tool, carrying its handler in Handler, which must be a
 	// FunctionCallHandler.
 	Schema frames.Tool
@@ -34,15 +34,15 @@ type LLMExtensionTool struct {
 }
 
 // cancelOnInterruption resolves CancelOnInterruption, whose default is true.
-func (t LLMExtensionTool) cancelOnInterruption() bool {
+func (t ExtensionTool) cancelOnInterruption() bool {
 	return t.CancelOnInterruption == nil || *t.CancelOnInterruption
 }
 
-// LLMExtension is a pluggable feature or behavior of an LLM service. It can add
+// Extension is a pluggable feature or behavior of an LLM service. It can add
 // to the service's system instruction, watch the frames the service processes,
 // filter what the service pushes, and push frames of its own.
 //
-// An extension embeds BaseLLMExtension, which gives it the defaults for every
+// An extension embeds BaseExtension, which gives it the defaults for every
 // method below and the PushFrame and BroadcastFrame it pushes its own frames
 // with, and overrides what it needs.
 //
@@ -91,7 +91,7 @@ func (t LLMExtensionTool) cancelOnInterruption() bool {
 // and from each tool call. An extension guards its own state.
 //
 //nolint:revive // the name is the one the extension design uses throughout
-type LLMExtension interface {
+type Extension interface {
 	// Order is where the extension sits among the layers around a service: an
 	// extension with a lower order is "closer" to the service. The "closest"
 	// one filters an outgoing frame first and sees an incoming frame last.
@@ -109,7 +109,7 @@ type LLMExtension interface {
 	// registered tools, before an inference; the service advertises what is
 	// returned and withdraws what no longer is. SystemInstruction is read after
 	// it, so an instruction can describe the tools.
-	BuiltinTools(registered map[string]FunctionCallRegistryItem) []LLMExtensionTool
+	BuiltinTools(registered map[string]FunctionCallRegistryItem) []ExtensionTool
 	// Setup sets the extension up, as the service it extends is set up.
 	Setup(ctx context.Context, s processor.Setup) error
 	// Cleanup releases what the extension holds, as the service is cleaned up.
@@ -129,9 +129,9 @@ type LLMExtension interface {
 	// PushFrame or BroadcastFrame.
 	FilterPushFrame(ctx context.Context, f frames.Frame, dir processor.Direction) ([]frames.Frame, error)
 
-	// extensionBase is the embedded BaseLLMExtension, which the service wires
+	// extensionBase is the embedded BaseExtension, which the service wires
 	// the extension's own pushes through.
-	extensionBase() *BaseLLMExtension
+	extensionBase() *BaseExtension
 }
 
 // extensionPush is how a service takes the frames an extension pushes.
@@ -141,14 +141,14 @@ type extensionPush func(ctx context.Context, f frames.Frame, dir processor.Direc
 // broadcasts.
 type extensionBroadcast func(ctx context.Context, build func() frames.Frame) error
 
-// BaseLLMExtension is embedded by every LLM extension. It gives the defaults: an
+// BaseExtension is embedded by every LLM extension. It gives the defaults: an
 // order of zero, no instruction, no tools, nothing done with the frames the
 // service processes, and every frame pushed passed on. It also holds what the
 // service wired the extension with, which PushFrame and BroadcastFrame send the
 // extension's own frames through.
 //
 //nolint:revive // the name is the one the extension design uses throughout
-type BaseLLMExtension struct {
+type BaseExtension struct {
 	mu sync.Mutex
 	// service is the service the extension is wired to, nil until that service
 	// is set up.
@@ -157,34 +157,34 @@ type BaseLLMExtension struct {
 	broadcast extensionBroadcast
 }
 
-// extensionBase implements LLMExtension.
-func (e *BaseLLMExtension) extensionBase() *BaseLLMExtension { return e }
+// extensionBase implements Extension.
+func (e *BaseExtension) extensionBase() *BaseExtension { return e }
 
-// Order implements LLMExtension: zero by default.
-func (e *BaseLLMExtension) Order() int { return 0 }
+// Order implements Extension: zero by default.
+func (e *BaseExtension) Order() int { return 0 }
 
-// SystemInstruction implements LLMExtension: none by default.
-func (e *BaseLLMExtension) SystemInstruction() string { return "" }
+// SystemInstruction implements Extension: none by default.
+func (e *BaseExtension) SystemInstruction() string { return "" }
 
-// BuiltinTools implements LLMExtension: none by default.
-func (e *BaseLLMExtension) BuiltinTools(map[string]FunctionCallRegistryItem) []LLMExtensionTool {
+// BuiltinTools implements Extension: none by default.
+func (e *BaseExtension) BuiltinTools(map[string]FunctionCallRegistryItem) []ExtensionTool {
 	return nil
 }
 
-// Setup implements LLMExtension: nothing to set up by default.
-func (e *BaseLLMExtension) Setup(context.Context, processor.Setup) error { return nil }
+// Setup implements Extension: nothing to set up by default.
+func (e *BaseExtension) Setup(context.Context, processor.Setup) error { return nil }
 
-// Cleanup implements LLMExtension: nothing to release by default.
-func (e *BaseLLMExtension) Cleanup(context.Context) error { return nil }
+// Cleanup implements Extension: nothing to release by default.
+func (e *BaseExtension) Cleanup(context.Context) error { return nil }
 
-// ProcessFrame implements LLMExtension: nothing is done with the frame by
+// ProcessFrame implements Extension: nothing is done with the frame by
 // default.
-func (e *BaseLLMExtension) ProcessFrame(context.Context, frames.Frame, processor.Direction) error {
+func (e *BaseExtension) ProcessFrame(context.Context, frames.Frame, processor.Direction) error {
 	return nil
 }
 
-// FilterPushFrame implements LLMExtension: the frame is passed on by default.
-func (e *BaseLLMExtension) FilterPushFrame(
+// FilterPushFrame implements Extension: the frame is passed on by default.
+func (e *BaseExtension) FilterPushFrame(
 	_ context.Context, f frames.Frame, _ processor.Direction,
 ) ([]frames.Frame, error) {
 	return []frames.Frame{f}, nil
@@ -192,7 +192,7 @@ func (e *BaseLLMExtension) FilterPushFrame(
 
 // AttachedService is the service the extension is attached to, known once that
 // service is set up; nil before.
-func (e *BaseLLMExtension) AttachedService() *Base {
+func (e *BaseExtension) AttachedService() *Base {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.service
@@ -202,7 +202,7 @@ func (e *BaseLLMExtension) AttachedService() *Base {
 // FilterPushFrame of each extension "farther" from the service than this one,
 // then leaves the service. Before the service is set up there is nowhere for it
 // to go, and it is dropped.
-func (e *BaseLLMExtension) PushFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
+func (e *BaseExtension) PushFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
 	e.mu.Lock()
 	push := e.push
 	e.mu.Unlock()
@@ -216,7 +216,7 @@ func (e *BaseLLMExtension) PushFrame(ctx context.Context, f frames.Frame, dir pr
 // downstream. build is called once per direction, and the two frames are paired
 // as siblings. Each goes through the FilterPushFrame of each extension
 // "farther" from the service than this one, then leaves the service.
-func (e *BaseLLMExtension) BroadcastFrame(ctx context.Context, build func() frames.Frame) error {
+func (e *BaseExtension) BroadcastFrame(ctx context.Context, build func() frames.Frame) error {
 	e.mu.Lock()
 	broadcast := e.broadcast
 	e.mu.Unlock()
@@ -227,14 +227,14 @@ func (e *BaseLLMExtension) BroadcastFrame(ctx context.Context, build func() fram
 }
 
 // wire takes the service's handlers for the extension's own frames.
-func (e *BaseLLMExtension) wire(service *Base, push extensionPush, broadcast extensionBroadcast) {
+func (e *BaseExtension) wire(service *Base, push extensionPush, broadcast extensionBroadcast) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.service, e.push, e.broadcast = service, push, broadcast
 }
 
 // unwire drops the service's handlers.
-func (e *BaseLLMExtension) unwire() {
+func (e *BaseExtension) unwire() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.service, e.push, e.broadcast = nil, nil, nil
@@ -245,13 +245,13 @@ func (e *BaseLLMExtension) unwire() {
 type ExtensionHolder interface {
 	// Extensions are the extensions attached, from the one "closest" to the
 	// service to the one "farthest" from it.
-	Extensions() []LLMExtension
+	Extensions() []Extension
 }
 
 // GetExtension is the extension of type T attached to the service, exactly:
 // an extension of a type embedding T is an extension of its own. It reports
 // false if none of that type is attached.
-func GetExtension[T LLMExtension](service ExtensionHolder) (T, bool) {
+func GetExtension[T Extension](service ExtensionHolder) (T, bool) {
 	for _, extension := range service.Extensions() {
 		if found, ok := extension.(T); ok {
 			return found, true

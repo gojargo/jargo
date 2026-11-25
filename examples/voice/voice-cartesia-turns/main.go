@@ -62,7 +62,7 @@ func runBot(ctx context.Context, t transport.Transport, args runner.Arguments) e
 	llm := chat.NewLLM(chat.LLMConfig{APIKey: os.Getenv("OPENAI_API_KEY")})
 	llm.SetSystemInstruction(systemInstruction)
 
-	event.On(tts.Events(), ttsservice.EventTTSRequest, func(_ context.Context, r ttsservice.TTSRequest) {
+	event.On(tts.Events(), ttsservice.EventTTSRequest, func(_ context.Context, r ttsservice.Request) {
 		slog.Debug("TTS request", "context_id", r.ContextID, "text", r.Text)
 	})
 

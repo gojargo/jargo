@@ -147,14 +147,14 @@ func jevOK(answers map[string]any) map[string]any {
 	return map[string]any{"model": "jev-1", "answers": answers, "usage": map[string]any{}}
 }
 
-func jevJudge(t *testing.T, api *jevAPI) *eval.EvalJudge {
+func jevJudge(t *testing.T, api *jevAPI) *eval.ClassifierJudge {
 	t.Helper()
 	return newJudge(t, api.classifier(t), nil)
 }
 
 // configJudge is the judge a judge.eval block builds over the release suite's
 // Jev factory, sending to api.
-func configJudge(t *testing.T, api *jevAPI, block string) (*eval.EvalJudge, error) {
+func configJudge(t *testing.T, api *jevAPI, block string) (*eval.ClassifierJudge, error) {
 	t.Helper()
 	t.Setenv("TYPESAFE_API_KEY", "k")
 	var cfg eval.JudgeEvalConfig
@@ -262,7 +262,7 @@ func TestJevARunAsksTheGoalAndEveryTurnAtOnce(t *testing.T) {
 	}
 }
 
-func jevAsk(t *testing.T, j *eval.EvalJudge) eval.JudgeVerdict {
+func jevAsk(t *testing.T, j *eval.ClassifierJudge) eval.JudgeVerdict {
 	t.Helper()
 	j.AddAssistantMessage("It rains.")
 	return j.Evaluate(t.Context(), "mentions weather", nil)
@@ -331,7 +331,7 @@ func TestJevCloseReleasesAConnectionTheJudgeOpened(t *testing.T) {
 func TestJevCloseLeavesAConnectionTheJudgeWasGivenOpen(t *testing.T) {
 	api := newJevAPI(t)
 	c := api.classifier(t)
-	j, err := eval.NewEvalJudge(eval.EvalJudgeConfig{Classifier: c})
+	j, err := eval.NewEvalJudge(eval.ClassifierJudgeConfig{Classifier: c})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -15,21 +15,21 @@ import (
 // requestRecorder collects what each announced request carried.
 type requestRecorder struct {
 	mu  sync.Mutex
-	got []tts.TTSRequest
+	got []tts.Request
 }
 
 func (r *requestRecorder) attach(b *tts.Base) {
-	event.On(b.Events(), tts.EventTTSRequest, func(_ context.Context, req tts.TTSRequest) {
+	event.On(b.Events(), tts.EventTTSRequest, func(_ context.Context, req tts.Request) {
 		r.mu.Lock()
 		r.got = append(r.got, req)
 		r.mu.Unlock()
 	})
 }
 
-func (r *requestRecorder) requests() []tts.TTSRequest {
+func (r *requestRecorder) requests() []tts.Request {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return append([]tts.TTSRequest(nil), r.got...)
+	return append([]tts.Request(nil), r.got...)
 }
 
 // TestTTSRequestAnnouncesEachUnit checks every unit handed to the provider is

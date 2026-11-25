@@ -208,7 +208,7 @@ func runBot(ctx context.Context, t transport.Transport, args runner.Arguments) e
 		r.Cancel(ctx, "client disconnected")
 	})
 
-	event.On(tts.Events(), ttsservice.EventTTSRequest, func(_ context.Context, r ttsservice.TTSRequest) {
+	event.On(tts.Events(), ttsservice.EventTTSRequest, func(_ context.Context, r ttsservice.Request) {
 		slog.Debug("On TTS request", "context_id", r.ContextID, "text", r.Text)
 	})
 

@@ -42,11 +42,11 @@ type CallData struct {
 // *RunnerArguments.
 type Arguments interface {
 	// Base returns the fields every session has.
-	Base() *RunnerArguments
+	Base() *BaseArguments
 }
 
-// RunnerArguments holds what every session has, whatever its transport.
-type RunnerArguments struct {
+// BaseArguments holds what every session has, whatever its transport.
+type BaseArguments struct {
 	// HandleSigint and HandleSigterm say whether the bot should install its own
 	// signal handlers. The runner handles signals itself, so both are false.
 	HandleSigint  bool
@@ -67,11 +67,11 @@ type RunnerArguments struct {
 }
 
 // Base returns the arguments themselves.
-func (a *RunnerArguments) Base() *RunnerArguments { return a }
+func (a *BaseArguments) Base() *BaseArguments { return a }
 
 // newRunnerArguments returns the fields every session starts with.
-func newRunnerArguments(body json.RawMessage, sessionID string) RunnerArguments {
-	return RunnerArguments{
+func newRunnerArguments(body json.RawMessage, sessionID string) BaseArguments {
+	return BaseArguments{
 		PipelineIdleTimeout: 300 * time.Second,
 		Body:                body,
 		SessionID:           sessionID,
@@ -81,7 +81,7 @@ func newRunnerArguments(body json.RawMessage, sessionID string) RunnerArguments 
 // WebRTCRunnerArguments is a session over a WebRTC peer connection the runner
 // has already answered.
 type WebRTCRunnerArguments struct {
-	RunnerArguments
+	BaseArguments
 	// WebRTCConnection is the session's peer connection.
 	WebRTCConnection *rtc.Connection
 }
@@ -89,7 +89,7 @@ type WebRTCRunnerArguments struct {
 // WebSocketRunnerArguments is a session over a WebSocket the runner has
 // accepted: a telephony provider's media stream, or a plain WebSocket client.
 type WebSocketRunnerArguments struct {
-	RunnerArguments
+	BaseArguments
 	// WebSocket is the accepted connection.
 	WebSocket *websocket.Conn
 	// TransportType is "websocket" for a plain WebSocket client. Empty means a
@@ -110,7 +110,7 @@ type WebSocketRunnerArguments struct {
 
 // LiveKitRunnerArguments is a session in a LiveKit room the bot joins.
 type LiveKitRunnerArguments struct {
-	RunnerArguments
+	BaseArguments
 	// RoomName is the room to join.
 	RoomName string
 	// URL is the LiveKit server URL.
