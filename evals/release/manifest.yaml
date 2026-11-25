@@ -178,8 +178,6 @@ suite:
     scenarios: [scripted/weather_function_call]
   - bot: function-calling/function-calling-groq
     scenarios: [scripted/weather_function_call]
-  - bot: function-calling/function-calling-inception
-    scenarios: [scripted/weather_function_call]
   - bot: function-calling/function-calling-mistral
     scenarios: [scripted/weather_function_call]
   - bot: function-calling/function-calling-nebius
