@@ -100,7 +100,6 @@ VAD. They need the ONNX Runtime, like the getting-started voice agents.
 | [`voice-together`](voice/voice-together) | Together AI speech-to-text, LLM and text-to-speech. |
 | [`voice-xai`](voice/voice-xai) | XAI speech-to-text, Grok and xAI text- to-speech. |
 | [`voice-xai-http`](voice/voice-xai-http) | Deepgram speech-to-text, Grok and xAI text-to-speech over HTTP. |
-| [`voice-xtts`](voice/voice-xtts) | Deepgram speech-to-text, an OpenAI LLM and XTTS text-to-speech. |
 
 ## Function calling
 
@@ -133,7 +132,6 @@ The voice agent with tools the LLM calls, each tool carrying its own handler.
 | [`function-calling-google-vertex`](function-calling/function-calling-google-vertex) | Gemini on Google Vertex AI | Deepgram, ElevenLabs |
 | [`function-calling-grok`](function-calling/function-calling-grok) | xAI Grok | Deepgram, xAI |
 | [`function-calling-groq`](function-calling/function-calling-groq) | Groq | Groq, Cartesia |
-| [`function-calling-inception`](function-calling/function-calling-inception) | Inception | Deepgram, Cartesia |
 | [`function-calling-mistral`](function-calling/function-calling-mistral) | Mistral | Deepgram, Cartesia |
 | [`function-calling-nebius`](function-calling/function-calling-nebius) | Nebius | Deepgram, Cartesia |
 | [`function-calling-novita`](function-calling/function-calling-novita) | Novita AI | Deepgram, Cartesia |

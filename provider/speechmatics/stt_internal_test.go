@@ -22,42 +22,6 @@ import (
 	"github.com/gojargo/jargo/service/stt"
 )
 
-// Ported from upstream (test_resolve_model_*). The model and the deprecated
-// operating_point alias resolve into the one model the session is opened with.
-func TestResolveModel(t *testing.T) {
-	cases := []struct {
-		name, model, operatingPoint, want string
-	}{
-		// test_resolve_model_prefers_model_over_none_operating_point
-		{"model alone", "linden-1", "", "linden-1"},
-		// test_resolve_model_operating_point_only_warns_and_is_used
-		{"operating point alone", "", "linden-1", "linden-1"},
-		// test_resolve_model_defaults_when_neither_given
-		{"neither", "", "", defaultModel},
-		{"both the same", "linden-2", "linden-2", "linden-2"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got, err := resolveModel(tc.model, tc.operatingPoint)
-			if err != nil || got != tc.want {
-				t.Errorf("resolveModel(%q, %q) = %q, %v; want %q", tc.model, tc.operatingPoint, got, err, tc.want)
-			}
-		})
-	}
-}
-
-// Ported from upstream (test_resolve_model_conflicting_values_raise). Two
-// different values is a caller error, not a silent pick.
-func TestResolveModelConflictingValues(t *testing.T) {
-	if _, err := resolveModel("linden-1", "some-other-model"); !errors.Is(err, errModelConflict) {
-		t.Errorf("err = %v, want the conflict reported", err)
-	}
-	cfg := Config{APIKey: "k", Model: "linden-1", OperatingPoint: "some-other-model"}
-	if err := cfg.Validate(); !errors.Is(err, errModelConflict) {
-		t.Errorf("Validate = %v, want the conflict reported", err)
-	}
-}
-
 // Ported from upstream (test_default_turn_detection_mode). The default drives
 // turn events and endpointing, so it is pinned.
 func TestDefaultTurnDetectionMode(t *testing.T) {
@@ -66,15 +30,6 @@ func TestDefaultTurnDetectionMode(t *testing.T) {
 	}
 	if defaultTurnDetectionMode != TurnDetectionExternal {
 		t.Errorf("default = %q, want external", defaultTurnDetectionMode)
-	}
-}
-
-// Ported from upstream (test_operating_point_resolved_into_model). The
-// deprecated operating point is resolved into the model at construction.
-func TestOperatingPointResolvedIntoModel(t *testing.T) {
-	c := conn("", func(c *Config) { c.OperatingPoint = "linden-1" })
-	if got := c.live.Model.Or(""); got != "linden-1" {
-		t.Errorf("model = %q, want linden-1", got)
 	}
 }
 
@@ -210,37 +165,6 @@ func TestUpdateSpeakerFormatDoesNotReconnect(t *testing.T) {
 	}
 	if reopen {
 		t.Error("a speaker format change reopens the session")
-	}
-}
-
-// Ported from upstream (test_update_settings_operating_point_reresolves_into_model).
-// The deprecated operating_point is resolved into the model the session is
-// built from, and the session is reopened.
-func TestUpdateOperatingPointReresolvesIntoModel(t *testing.T) {
-	c := conn("")
-	changed, reopen := applyUpdate(t, c, &Settings{OperatingPoint: settings.Set("linden-2")})
-	if got := c.live.Model.Or(""); got != "linden-2" {
-		t.Errorf("model = %q, want linden-2", got)
-	}
-	if got := c.live.transcriptionConfig()["model"]; got != "linden-2" {
-		t.Errorf("wire model = %v, want linden-2", got)
-	}
-	if !changed.Has("model") {
-		t.Errorf("changed = %v, want the model reported changed", changed)
-	}
-	if !reopen {
-		t.Error("the session is not reopened")
-	}
-}
-
-// Ported from upstream (test_update_settings_operating_point_does_not_clash_with_resolved_model).
-// A lone operating_point update wins on its own instead of clashing with the
-// model already resolved.
-func TestUpdateOperatingPointDoesNotClashWithResolvedModel(t *testing.T) {
-	c := conn("", func(c *Config) { c.Model = "linden-1" })
-	applyUpdate(t, c, &Settings{OperatingPoint: settings.Set("linden-2")})
-	if got := c.live.Model.Or(""); got != "linden-2" {
-		t.Errorf("model = %q, want linden-2", got)
 	}
 }
 

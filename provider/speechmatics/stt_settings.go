@@ -1,6 +1,8 @@
 package speechmatics
 
 import (
+	"cmp"
+
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/service/settings"
 )
@@ -28,11 +30,6 @@ type Settings struct {
 	KnownSpeakers settings.Opt[[]SpeakerIdentifier] `settings:"known_speakers"`
 	// AdditionalVocab are words to bias the engine towards.
 	AdditionalVocab settings.Opt[[]AdditionalVocabEntry] `settings:"additional_vocab"`
-	// OperatingPoint is an alias for the model. A change to it is resolved
-	// into the model.
-	//
-	// Deprecated: use Model.
-	OperatingPoint settings.Opt[string] `settings:"operating_point"`
 	// EnablePartials includes partial segments in the output.
 	EnablePartials settings.Opt[bool] `settings:"enable_partials"`
 	// EmitSentences closes a segment at every end of sentence.
@@ -58,29 +55,13 @@ type Settings struct {
 // changed are resolved, so a new operating_point wins on its own rather than
 // clashing with the model already resolved.
 func (s *Settings) ApplyUpdate(delta any) (settings.Changed, error) {
-	before := s.Model
 	changed, err := settings.ApplyFields(s, delta)
 	if err != nil {
 		return changed, err
 	}
-	modelChanged, operatingPointChanged := changed.Has("model"), changed.Has("operating_point")
-	if !modelChanged && !operatingPointChanged {
-		return changed, nil
-	}
-	var model, operatingPoint string
-	if modelChanged {
-		model = s.Model.Or("")
-	}
-	if operatingPointChanged {
-		operatingPoint = s.OperatingPoint.Or("")
-	}
-	resolved, err := resolveModel(model, operatingPoint)
-	if err != nil {
-		return changed, err
-	}
-	s.Model = settings.Set(resolved)
-	if old, ok := before.Value(); !modelChanged && (!ok || old != resolved) {
-		changed["model"] = before.AsAny()
+	// An empty model asks for the default.
+	if changed.Has("model") && s.Model.Or("") == "" {
+		s.Model = settings.Set(defaultModel)
 	}
 	return changed, nil
 }
@@ -94,13 +75,7 @@ func newSTTSettings(cfg Config) *Settings {
 		lang = language.English
 	}
 	s.Language = settings.Set(string(lang))
-	model, err := resolveModel(cfg.Model, cfg.OperatingPoint)
-	if err != nil {
-		// Validate reports the conflict; the model, being the preferred
-		// field, is what a service built anyway uses.
-		model = cfg.Model
-	}
-	s.Model = settings.Set(model)
+	s.Model = settings.Set(cmp.Or(cfg.Model, defaultModel))
 	mode := cfg.TurnDetectionMode
 	if mode == "" {
 		mode = defaultTurnDetectionMode
@@ -117,9 +92,6 @@ func newSTTSettings(cfg Config) *Settings {
 	}
 	if len(cfg.AdditionalVocab) > 0 {
 		s.AdditionalVocab = settings.Set(cfg.AdditionalVocab)
-	}
-	if cfg.OperatingPoint != "" {
-		s.OperatingPoint = settings.Set(cfg.OperatingPoint)
 	}
 	setOpt(&s.EnablePartials, cfg.EnablePartials)
 	setOpt(&s.EmitSentences, cfg.EmitSentences)

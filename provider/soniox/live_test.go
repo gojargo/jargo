@@ -496,19 +496,6 @@ func TestConnectFailureLeavesNoSession(t *testing.T) {
 	}
 }
 
-// Ported from upstream (test_connect_enables_endpoint_detection_in_both_modes).
-// Endpoint detection is always on: it ends the transcript of speech the VAD
-// missed, so a configuration asking for it off is not followed.
-func TestConnectEnablesEndpointDetection(t *testing.T) {
-	off := false
-	for _, cfg := range []Config{{}, {EnableEndpointDetection: &off}} {
-		_, got := dialSoniox(t, cfg)
-		if on := handshakeOf(t, got)["enable_endpoint_detection"]; on != true {
-			t.Errorf("enable_endpoint_detection = %v, want true", on)
-		}
-	}
-}
-
 // The default model is Soniox's current real-time model.
 func TestConnectUsesTheCurrentModelByDefault(t *testing.T) {
 	r := runSonioxSTT(t, Config{})
@@ -863,5 +850,15 @@ func recvSonioxResults(t *testing.T, s stt.Stream) ([]stt.Result, error) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("Recv returned nothing")
 		return nil, nil
+	}
+}
+
+// Ported from upstream (test_connect_enables_endpoint_detection_in_both_modes).
+// Endpoint detection is always on: it ends the transcript of speech the VAD
+// missed, so a configuration asking for it off is not followed.
+func TestConnectEnablesEndpointDetection(t *testing.T) {
+	_, got := dialSoniox(t, Config{})
+	if on := handshakeOf(t, got)["enable_endpoint_detection"]; on != true {
+		t.Errorf("enable_endpoint_detection = %v, want true", on)
 	}
 }

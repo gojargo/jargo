@@ -58,12 +58,6 @@ type Config struct {
 	LanguageHints []language.Language
 	// SampleRate is the input audio sample rate; 0 uses the transport's rate.
 	SampleRate int
-	// EnableEndpointDetection has no effect: endpoint detection is always on.
-	// A VAD stop finalizes the transcript sooner, and the endpoint still ends
-	// the transcript of speech the VAD missed.
-	//
-	// Deprecated: endpoint detection is always on.
-	EnableEndpointDetection *bool
 
 	// The remaining options may also be changed while the pipeline runs, through
 	// an STTUpdateSettingsFrame. A change reopens the session, since Soniox is

@@ -436,6 +436,15 @@ replacement.
   scenario's `judge.eval:`, `simulator:` and `user.speech:` blocks: name a
   registered `factory` instead. `service: ollama` stays.
 - **The runner's `--folder` flag**: use `--downloads-folder` (or `-f`).
+- **The XTTS and Inception providers** (`provider/xtts`, `provider/inception`)
+  and their examples. The Coqui XTTS streaming server is unmaintained, and
+  Inception stops serving its Mercury API on December 28, 2026.
+- **`perplexity.NewLLM`** and its chat-completions adapter: Perplexity no longer
+  supports Sonar chat completions. Use `perplexity.NewAgentLLM`.
+- **`speechmatics.Config.OperatingPoint`** and `Settings.OperatingPoint`
+  (`Model`), `Config.MaxDelay` (no replacement) and
+  `Config.EndOfUtteranceSilence` (`TurnDetectionMode`).
+- **`soniox.Config.EnableEndpointDetection`**: endpoint detection is always on.
 
 ### Fixed
 

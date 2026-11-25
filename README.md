@@ -104,7 +104,7 @@ Pick any per category; each is a small `Config` + constructor.
   Deepgram, ElevenLabs, Fish, Google Cloud, Gradium, Groq, HeyGen, Inworld,
   Kokoro (local), Kyutai (incl. Pocket TTS), MiniMax, Mistral, Neuphonic, NVIDIA,
   OpenAI, Piper (local), Resemble AI, Rime, Sarvam, Smallest, Soniox, Speechify,
-  Speechmatics, Together, xAI, XTTS (self-hosted), Zoom AI.
+  Speechmatics, Together, xAI, Zoom AI.
 - **Speech-to-speech**: OpenAI Realtime (direct + Azure), Gemini Live (direct + Vertex), AWS Nova Sonic, xAI Realtime, Rime Prism.
 - **Memory**: mem0.
 

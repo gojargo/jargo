@@ -11,8 +11,6 @@ package speechmatics
 
 import (
 	"errors"
-	"fmt"
-	"log/slog"
 	"time"
 
 	"github.com/gojargo/jargo/internal/validate"
@@ -52,12 +50,6 @@ var supportedSampleRates = []int{8000, 16000}
 //
 //nolint:gochecknoglobals // sentinel error
 var errServer = errors.New("speechmatics: server error")
-
-// errModelConflict is reported when Model and the deprecated OperatingPoint
-// name different models.
-//
-//nolint:gochecknoglobals // sentinel error
-var errModelConflict = errors.New("speechmatics: model and operating_point differ")
 
 // TurnDetectionMode is how turn boundaries (the end of speech) are detected.
 type TurnDetectionMode string
@@ -170,21 +162,6 @@ type Config struct {
 	// same speaker. Nil omits it.
 	PreferCurrentSpeaker *bool
 
-	// OperatingPoint is an alias for Model. If both are given they must name
-	// the same model.
-	//
-	// Deprecated: use Model.
-	OperatingPoint string
-	// MaxDelay has no effect: the Agent STT service takes no delay setting.
-	//
-	// Deprecated: no replacement.
-	MaxDelay float64
-	// EndOfUtteranceSilence has no effect: turns are closed as
-	// TurnDetectionMode says.
-	//
-	// Deprecated: use TurnDetectionMode.
-	EndOfUtteranceSilence *float64
-
 	// TTFSP99 overrides the measured transcript latency the turn strategies
 	// size their wait by; nil uses stt.SpeechmaticsTTFSP99, and zero means no wait.
 	TTFSP99 *time.Duration
@@ -195,30 +172,5 @@ type Config struct {
 
 // Validate reports whether the configuration is usable.
 func (c Config) Validate() error {
-	if err := validate.Struct(c); err != nil {
-		return err
-	}
-	_, err := resolveModel(c.Model, c.OperatingPoint)
-	return err
-}
-
-// resolveModel resolves the transcription model from model and the deprecated
-// operatingPoint, either of which may be empty. If both are given they must
-// match; if only one is given it wins; if neither, the default model is used.
-func resolveModel(model, operatingPoint string) (string, error) {
-	if model != "" && operatingPoint != "" && model != operatingPoint {
-		return "", fmt.Errorf("%w: model (%q) and operating_point (%q) differ; pass only model, "+
-			"operating_point is deprecated", errModelConflict, model, operatingPoint)
-	}
-	if model == "" && operatingPoint != "" {
-		slog.Warn("speechmatics stt: operating_point is deprecated, use model instead")
-	}
-	switch {
-	case model != "":
-		return model, nil
-	case operatingPoint != "":
-		return operatingPoint, nil
-	default:
-		return defaultModel, nil
-	}
+	return validate.Struct(c)
 }

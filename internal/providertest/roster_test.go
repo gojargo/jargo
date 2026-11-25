@@ -14,7 +14,6 @@ import (
 	"github.com/gojargo/jargo/provider/deepseek"
 	"github.com/gojargo/jargo/provider/fireworks"
 	"github.com/gojargo/jargo/provider/groq"
-	"github.com/gojargo/jargo/provider/inception" //nolint:staticcheck // the deprecated provider is still on the roster
 	"github.com/gojargo/jargo/provider/mistral"
 	"github.com/gojargo/jargo/provider/nebius"
 	"github.com/gojargo/jargo/provider/novita"
@@ -22,7 +21,6 @@ import (
 	"github.com/gojargo/jargo/provider/ollama"
 	"github.com/gojargo/jargo/provider/openai/chat"
 	"github.com/gojargo/jargo/provider/openrouter"
-	"github.com/gojargo/jargo/provider/perplexity"
 	"github.com/gojargo/jargo/provider/qwen"
 	"github.com/gojargo/jargo/provider/sambanova"
 	"github.com/gojargo/jargo/provider/sarvam"
@@ -51,13 +49,11 @@ func TestDeveloperRoleRoster(t *testing.T) {
 		{"cerebras", cerebras.NewLLM, chat.RoleDeveloper},
 		{"crusoe", crusoe.NewLLM, chat.RoleUser},
 		{"deepseek", deepseekLLM, chat.RoleUser},
-		{"inception", inception.NewLLM, chat.RoleUser}, //nolint:staticcheck // the deprecated provider is still on the roster
 		{"mistral", mistral.NewLLM, chat.RoleUser},
 		{"nebius", nebius.NewLLM, chat.RoleUser},
 		{"ollama", ollama.NewLLM, chat.RoleUser},
 		{"openrouter", openrouter.NewLLM, chat.RoleUser},
 		//nolint:staticcheck // the deprecated Sonar service is still shipped, so still tested
-		{"perplexity", perplexity.NewLLM, chat.RoleUser},
 		{"qwen", qwen.NewLLM, chat.RoleUser},
 		{"sambanova", sambanova.NewLLM, chat.RoleUser},
 		{"sarvam", sarvamLLM, chat.RoleUser},
