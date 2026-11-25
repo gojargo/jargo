@@ -303,6 +303,11 @@ func (p Params) AudioOutFillsSilence() bool {
 // Transport is a source and sink of media for a pipeline. Input and Output
 // return the processors that sit at the head and tail of the pipeline.
 type Transport interface {
+	// transportBase is provided only by BaseTransport: a transport is built by
+	// embedding BaseTransport, which is what lets this interface grow in a minor
+	// release without breaking a transport written outside jargo.
+	transportBase()
+
 	// Input returns the processor that emits frames from received media.
 	Input() processor.Processor
 	// Output returns the processor that sends frames as media.
@@ -348,6 +353,8 @@ type BaseTransport struct {
 
 // GetClientID is the default for a transport with no client ids: it logs a
 // warning and returns "".
+func (BaseTransport) transportBase() {}
+
 func (b BaseTransport) GetClientID(any) string {
 	slog.Warn("getting a client id isn't supported", "transport", b.Name)
 	return ""

@@ -10,6 +10,11 @@ redacting card numbers before they reach the LLM, hanging up on a keyword,
 counting words. A processor is a struct embedding `*processor.Base` with one
 method.
 
+Embedding the base is not only a convenience: `processor.Processor` can only be
+satisfied that way. That is what lets jargo add a method to the interface in a
+minor release (with its default in the base) without breaking your processor.
+The same holds for a transport, which embeds `transport.BaseTransport`.
+
 ## The minimum
 
 ```go

@@ -222,6 +222,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **BREAKING: `processor.Processor` and `transport.Transport` are sealed.** A
+  processor is a type that embeds `processor.Base`, and a transport one that
+  embeds `transport.BaseTransport`: each interface now has an unexported method
+  only the base provides. Every processor and transport built the documented
+  way is unaffected. One that implemented the interface by hand must embed the
+  base instead. This is what lets either interface gain a method later, with its
+  default in the base, without breaking code outside jargo.
 - **BREAKING: names no longer repeat their package.** The package name is
   part of every identifier in Go, so these drop the prefix that said it twice.
   Frame types keep their names.

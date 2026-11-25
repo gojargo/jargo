@@ -136,6 +136,11 @@ type Setup struct {
 // Processor is a node in a pipeline. Concrete processors embed *Base, which
 // provides every method here except a custom ProcessFrame.
 type Processor interface {
+	// processorBase is provided only by Base: a processor is built by embedding
+	// Base, which is what lets this interface grow in a minor release without
+	// breaking a processor written outside jargo.
+	processorBase() *Base
+
 	// ID is a process-unique identifier for this processor.
 	ID() uint64
 	// Name is a human-readable label, "<name>#<id>".
@@ -329,6 +334,9 @@ type Base struct {
 	// travels.
 	usability usability
 }
+
+// processorBase seals Processor: a type is a processor by embedding Base.
+func (b *Base) processorBase() *Base { return b }
 
 // New builds a Base named name. self is the embedding processor, used to
 // dispatch to its ProcessFrame; pass nil for a plain pass-through that does not
