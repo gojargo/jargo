@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"slices"
 	"sync"
 	"time"
 
@@ -150,17 +151,9 @@ func NewUserTurnControllerWithParams(
 	}
 }
 
-// stopStrategiesOf is the stop chain the controller runs. The controller runs
-// the turn's inference, so a deferred strategy is just the strategy it wraps.
+// stopStrategiesOf is the stop chain the controller runs.
 func stopStrategiesOf(strategies UserTurnStrategies) []StopStrategy {
-	out := make([]StopStrategy, 0, len(strategies.Stop))
-	for _, s := range strategies.Stop {
-		if d, ok := s.(*deferredStop); ok {
-			s = d.inner
-		}
-		out = append(out, s)
-	}
-	return out
+	return slices.Clone(strategies.Stop)
 }
 
 // SetHooks installs the upward callbacks. Call before Setup.

@@ -242,23 +242,6 @@ func TestTheStopTimeoutWaitsForAScheduledDecision(t *testing.T) {
 	})
 }
 
-// With the first decision winning, a deferred strategy is the one it wraps, and
-// its decision runs the inference first.
-func TestDeferredWrapperSkipsStoppedInAFirstList(t *testing.T) {
-	wrapped := turns.Deferred( //nolint:staticcheck // the deprecated wrapper is what is tested
-		turns.NewSpeechTimeoutStop(turns.SpeechTimeoutConfig{UserSpeechTimeout: 50 * time.Millisecond}))
-	h := newStopHarness(t, turns.StrategyModeFirst, wrapped)
-
-	h.send(vadStarted(), finalTranscript("Hello!"), vadStopped())
-	time.Sleep(150 * time.Millisecond)
-
-	h.read(func() {
-		if len(h.events) == 0 || h.events[0] != "inference_triggered" {
-			t.Fatalf("events = %v, want the inference first", h.events)
-		}
-	})
-}
-
 // startWithTheMarker opens a turn the user has been decided done with, ahead of
 // the marker strategy.
 func startWithTheMarker(t *testing.T) (*harness, *turns.LLMTurnCompletionStop) {
@@ -548,22 +531,6 @@ func TestEachTurnNeedsItsOwnStopDecisions(t *testing.T) {
 	}
 }
 
-func TestADeferredStrategyDecidesAsTheOneItWraps(t *testing.T) {
-	inner, other := newDecidingStop(), newDecidingStop()
-	h := newStopHarness(t, turns.StrategyModeDefault,
-		turns.Deferred(inner), other) //nolint:staticcheck // the deprecated wrapper is what is tested
-	h.speak()
-
-	h.do(other.decide)
-	if len(h.stops) != 0 {
-		t.Fatal("the turn ended before the wrapped strategy decided")
-	}
-	h.do(inner.decide)
-	if !sameStrategies(h.stoppedBy(), inner) {
-		t.Fatalf("stopped by %v, want the wrapped strategy", h.stoppedBy())
-	}
-}
-
 func TestEveryStopStrategySeesEveryFrame(t *testing.T) {
 	blocking, other := newDecidingStop(), newDecidingStop()
 	blocking.result = turns.Stop
@@ -688,18 +655,6 @@ func TestOneSpeechReportedTwiceResumesTheTurnOnce(t *testing.T) {
 
 	if len(h.resumes) != 1 {
 		t.Fatalf("resumes = %d, want 1", len(h.resumes))
-	}
-}
-
-func TestTheDeprecatedFinalizedTriggerStillDecides(t *testing.T) {
-	strategy := newDecidingStop()
-	h := newStopHarness(t, turns.StrategyModeDefault, strategy)
-	h.speak()
-
-	h.do(strategy.TriggerFinalized) //nolint:staticcheck // the deprecated name is what is tested
-
-	if !sameStrategies(h.stoppedBy(), strategy) {
-		t.Fatalf("stopped by %v, want the strategy", h.stoppedBy())
 	}
 }
 

@@ -1,14 +1,10 @@
 package turns
 
 import (
-	"bytes"
-	"log/slog"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/gojargo/jargo/frames"
-	"github.com/gojargo/jargo/processor"
 )
 
 // Strategies report their decisions, and the controller combines them. These
@@ -157,56 +153,6 @@ func TestEagerStopADecisionAfterSpeechConfirmsNothing(t *testing.T) {
 	}
 	if len(confirms) != 2 || !confirms[0] || confirms[1] {
 		t.Fatalf("confirmations = %v, want [true false]", confirms)
-	}
-}
-
-// specSpy records the speculations and withdrawals a stop strategy signals.
-type specSpy struct {
-	speculations []*UserTurnSpeculation
-	cancels      int
-}
-
-func (s *specSpy) env() strategyEnv {
-	return strategyEnv{
-		inferenceTriggered:  func(_ StopStrategy, sp *UserTurnSpeculation) { s.speculations = append(s.speculations, sp) },
-		speculationCanceled: func(StopStrategy) { s.cancels++ },
-		push:                func(frames.Frame, processor.Direction) {},
-	}
-}
-
-//nolint:staticcheck // the deprecated names are what is tested
-func TestTheDeprecatedSpeculationMethodsStillFire(t *testing.T) {
-	b := &plainStop{}
-	spy := &specSpy{}
-	b.attach(b, spy.env())
-
-	b.TriggerInferenceTriggeredSpeculating(UserTurnSpeculation{Text: "Hello"})
-	b.TriggerSpeculationCanceled()
-
-	if len(spy.speculations) != 1 || spy.speculations[0].Text != "Hello" || spy.cancels != 1 {
-		t.Fatalf("speculations = %v, cancels = %d, want one of each", spy.speculations, spy.cancels)
-	}
-}
-
-//nolint:staticcheck // the deprecated name is what is tested
-func TestAnInferenceWithoutASpeculationWarnsOnceAndIsIgnored(t *testing.T) {
-	var buf bytes.Buffer
-	previous := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
-	t.Cleanup(func() { slog.SetDefault(previous) })
-
-	b := &plainStop{}
-	spy := &specSpy{}
-	b.attach(b, spy.env())
-
-	b.TriggerInferenceTriggered()
-	b.TriggerInferenceTriggered()
-
-	if len(spy.speculations) != 0 {
-		t.Fatalf("speculations = %d, want the call ignored", len(spy.speculations))
-	}
-	if n := strings.Count(buf.String(), "without a speculation"); n != 1 {
-		t.Fatalf("warnings = %d, want 1:\n%s", n, buf.String())
 	}
 }
 

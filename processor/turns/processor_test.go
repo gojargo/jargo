@@ -192,7 +192,7 @@ func TestUserTurnProcessorStopTimeout(t *testing.T) {
 	p := turns.NewUserTurnProcessor(turns.Config{
 		Strategies: turns.UserTurnStrategies{
 			Start: []turns.StartStrategy{turns.NewVADStart()},
-			Stop:  []turns.StopStrategy{turns.NewExternalCompletionStop()},
+			Stop:  []turns.StopStrategy{turns.NewExternalStop(turns.ExternalStopConfig{})},
 		},
 		StopTimeout: 200 * time.Millisecond,
 	})

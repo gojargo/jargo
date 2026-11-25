@@ -1,8 +1,6 @@
 package turns
 
 import (
-	"fmt"
-	"log/slog"
 	"sync"
 	"time"
 
@@ -179,20 +177,6 @@ func (b *StartStrategyBase) ReportStartedOverriding(o StartedOverrides) {
 	})
 }
 
-// TriggerStarted reports that the user started.
-//
-// Deprecated: use ReportStarted. A strategy reports its decision, and the
-// controller decides when the turn starts.
-func (b *StartStrategyBase) TriggerStarted() { b.ReportStarted() }
-
-// TriggerStartedOverriding reports that the user started, overriding the
-// strategy's configured flags for this turn.
-//
-// Deprecated: use ReportStartedOverriding.
-func (b *StartStrategyBase) TriggerStartedOverriding(o StartedOverrides) {
-	b.ReportStartedOverriding(o)
-}
-
 // TriggerResetAggregation asks the user aggregator to drop the in-progress
 // aggregation (e.g. pre-wake-phrase speech).
 func (b *StartStrategyBase) TriggerResetAggregation() {
@@ -257,9 +241,6 @@ type StopStrategyBase struct {
 	env                      strategyEnv
 	// self is the concrete strategy this base belongs to. See StartStrategyBase.
 	self StopStrategy
-	// warnedInferenceWithoutSpeculation records that the deprecated
-	// TriggerInferenceTriggered was called, so it warns once.
-	warnedInferenceWithoutSpeculation bool
 }
 
 func (b *StopStrategyBase) attach(self StopStrategy, env strategyEnv) {
@@ -365,63 +346,6 @@ func (b *StopStrategyBase) CancelSpeculation() {
 	if b.env.speculationCanceled != nil {
 		b.env.speculationCanceled(b.self)
 	}
-}
-
-// TriggerStopped reports that the user is done. It no longer starts the turn's
-// inference, which the controller now runs once the stop strategies have
-// decided.
-//
-// Deprecated: use ReportStopped.
-func (b *StopStrategyBase) TriggerStopped() { b.ReportStopped() }
-
-// TriggerStoppedOverriding reports that the user is done, overriding the
-// strategy's configured flags for this turn.
-//
-// Deprecated: use ReportStoppedOverriding.
-func (b *StopStrategyBase) TriggerStoppedOverriding(o StoppedOverrides) {
-	b.ReportStoppedOverriding(o)
-}
-
-// TriggerInferenceTriggered used to start the turn's inference. It does
-// nothing now, with a warning the first time, since the controller runs the
-// turn's inference once the stop strategies have decided.
-//
-// Deprecated: call ReportStopped when the user is done, and StartSpeculation to
-// answer ahead of that.
-func (b *StopStrategyBase) TriggerInferenceTriggered() {
-	if b.warnedInferenceWithoutSpeculation {
-		return
-	}
-	b.warnedInferenceWithoutSpeculation = true
-	slog.Warn("turns: TriggerInferenceTriggered without a speculation does nothing, since "+
-		"the controller runs the turn's inference once the stop strategies have decided; "+
-		"call ReportStopped when the user is done", "strategy", fmt.Sprintf("%T", b.self))
-}
-
-// TriggerInferenceTriggeredSpeculating starts a speculative inference.
-//
-// Deprecated: use StartSpeculation.
-func (b *StopStrategyBase) TriggerInferenceTriggeredSpeculating(s UserTurnSpeculation) {
-	b.StartSpeculation(s)
-}
-
-// TriggerSpeculationCanceled withdraws the speculation this strategy has in
-// flight.
-//
-// Deprecated: use CancelSpeculation.
-func (b *StopStrategyBase) TriggerSpeculationCanceled() { b.CancelSpeculation() }
-
-// TriggerFinalized reports that the user is done.
-//
-// Deprecated: use ReportStopped, which reports the same decision.
-func (b *StopStrategyBase) TriggerFinalized() { b.ReportStopped() }
-
-// TriggerFinalizedOverriding reports that the user is done, overriding the
-// strategy's configured flags for this turn.
-//
-// Deprecated: use ReportStoppedOverriding, which reports the same decision.
-func (b *StopStrategyBase) TriggerFinalizedOverriding(o StoppedOverrides) {
-	b.ReportStoppedOverriding(o)
 }
 
 // Push sends a frame to the neighbor in dir.

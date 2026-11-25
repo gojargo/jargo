@@ -409,6 +409,20 @@ replacement.
   speaking and function-call observers, which keep no window of frames.
 - **`tts.PauseOptions.WatchdogTimeout`**, which had no effect.
 - **`settings.ErrMismatch`**, which nothing returned any more.
+- **The `Trigger*` names on turn strategies**: `TriggerStarted`,
+  `TriggerStartedOverriding`, `TriggerStopped`, `TriggerStoppedOverriding`,
+  `TriggerFinalized` and `TriggerFinalizedOverriding` are `ReportStarted`,
+  `ReportStartedOverriding`, `ReportStopped` and `ReportStoppedOverriding`;
+  `TriggerSpeculationCanceled` is `CancelSpeculation`,
+  `TriggerInferenceTriggeredSpeculating` is `StartSpeculation`, and
+  `TriggerInferenceTriggered` has no replacement.
+- **`turns.ExternalCompletionStop`** and `NewExternalCompletionStop`: use
+  `ExternalStop`, or `LLMTurnCompletionStop` for the LLM's verdict.
+- **`turns.Deferred`**: pass the wrapped strategy itself.
+- **`voicemail.Config.LLM` and `CustomSystemPrompt`**: build an
+  `llmclassifier` classifier and pass it as `Classifier`.
+- **`rtvi.BotOutputTransformer.AggregatedBy`** (`TextType`) and
+  **`rtvi.ObserverParams.SkipAggregatorTypes`** (`SkipTextTypes`).
 
 ### Fixed
 

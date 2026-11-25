@@ -114,7 +114,7 @@ func TestWatchdogForceStop(t *testing.T) {
 		Strategies: turns.UserTurnStrategies{
 			Start: []turns.StartStrategy{turns.NewVADStart()},
 			// A stop strategy that never fires on its own.
-			Stop: []turns.StopStrategy{turns.NewExternalCompletionStop()},
+			Stop: []turns.StopStrategy{turns.NewExternalStop(turns.ExternalStopConfig{})},
 		},
 		StopTimeout: 40 * time.Millisecond,
 	}
@@ -205,44 +205,13 @@ func TestTurnAnalyzerClearedOnStopNotStart(t *testing.T) {
 	finish(t, task, done)
 }
 
-// TestDeferredFinalization covers deferred(): the wrapped detector triggers
-// inference but cannot finalize; only the completion strategy finalizes.
-func TestDeferredFinalization(t *testing.T) {
-	cfg := turns.Config{
-		Strategies: turns.UserTurnStrategies{
-			Start: []turns.StartStrategy{turns.NewVADStart()},
-			Stop: []turns.StopStrategy{
-				turns.Deferred(turns.NewTurnAnalyzerStop(turns.TurnAnalyzerConfig{Analyzer: fakeTurn{}})),
-				turns.NewExternalCompletionStop(),
-			},
-		},
-		StopTimeout: 2 * time.Second,
-	}
-	rec, task, done := runTurns(t, cfg)
-
-	task.QueueFrame(frames.NewVADUserStartedSpeakingFrame(0.2, time.Now()))
-	rec.expect(t, "started")
-	rec.expect(t, "interruption")
-
-	// The analyzer would finalize, but it is deferred — no stop yet.
-	task.QueueFrame(frames.NewVADUserStoppedSpeakingFrame(0.2, time.Now()))
-	task.QueueFrame(finalTranscript("hello"))
-	rec.expectNone(t, 150*time.Millisecond)
-
-	// The completion gate finalizes.
-	task.QueueFrame(frames.NewUserTurnInferenceCompletedFrame())
-	rec.expect(t, "stopped")
-
-	finish(t, task, done)
-}
-
 // TestMuteSuppressesDuringBotSpeech covers an AlwaysUserMute strategy dropping a
 // barge-in while the bot speaks and allowing it once the bot stops.
 func TestMuteSuppressesDuringBotSpeech(t *testing.T) {
 	cfg := turns.Config{
 		Strategies: turns.UserTurnStrategies{
 			Start: []turns.StartStrategy{turns.NewVADStart()},
-			Stop:  []turns.StopStrategy{turns.NewExternalCompletionStop()},
+			Stop:  []turns.StopStrategy{turns.NewExternalStop(turns.ExternalStopConfig{})},
 		},
 		MuteStrategies: []turns.MuteStrategy{turns.NewAlwaysUserMute()},
 		StopTimeout:    2 * time.Second,
@@ -266,7 +235,7 @@ func TestIdleFires(t *testing.T) {
 	cfg := turns.Config{
 		Strategies: turns.UserTurnStrategies{
 			Start: []turns.StartStrategy{turns.NewVADStart()},
-			Stop:  []turns.StopStrategy{turns.NewExternalCompletionStop()},
+			Stop:  []turns.StopStrategy{turns.NewExternalStop(turns.ExternalStopConfig{})},
 		},
 		IdleTimeout: 30 * time.Millisecond,
 		OnIdle: func(context.Context, *turns.UserIdleController) error {
@@ -452,7 +421,7 @@ func TestNoFinalizeWhileUserIsSpeaking(t *testing.T) {
 	cfg := turns.Config{
 		Strategies: turns.UserTurnStrategies{
 			Start: []turns.StartStrategy{turns.NewVADStart()},
-			Stop:  []turns.StopStrategy{turns.NewExternalCompletionStop()},
+			Stop:  []turns.StopStrategy{turns.NewExternalStop(turns.ExternalStopConfig{})},
 		},
 		StopTimeout: 150 * time.Millisecond,
 	}

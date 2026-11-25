@@ -128,10 +128,6 @@ type BotOutputTransformer struct {
 	// TextType is the text type this rewrite applies to. frames.AnyTextType
 	// applies it to every type.
 	TextType frames.TextType
-	// AggregatedBy is the former name of TextType, read when TextType is empty.
-	//
-	// Deprecated: use TextType.
-	AggregatedBy frames.TextType
 	// Transform rewrites the segment.
 	Transform BotOutputTransform
 }
@@ -231,11 +227,6 @@ type ObserverParams struct {
 	// model's own text, so turn BotLLMEnabled off alongside this when that is
 	// what the list is for.
 	SkipTextTypes []frames.TextType
-	// SkipAggregatorTypes is the former name of SkipTextTypes, read when
-	// SkipTextTypes is empty.
-	//
-	// Deprecated: use SkipTextTypes.
-	SkipAggregatorTypes []frames.TextType
 	// IgnoredSources are processors whose frames the observer says nothing
 	// about. It keeps a secondary branch of the pipeline out of the client's
 	// view: an evaluation model answering alongside the real one has a whole
@@ -310,9 +301,6 @@ func NewObserver(sink *Processor) *Observer {
 // NewObserverWithParams builds an observer that sends through sink and reports
 // what params allows.
 func NewObserverWithParams(sink *Processor, params ObserverParams) *Observer {
-	if len(params.SkipTextTypes) == 0 {
-		params.SkipTextTypes = params.SkipAggregatorTypes //nolint:staticcheck // the deprecated field is honored
-	}
 	o := &Observer{
 		sink:   sink,
 		params: params,
@@ -336,9 +324,6 @@ func (o *Observer) AddBotOutputTransformer(t BotOutputTransformer) TransformID {
 	o.transformMu.Lock()
 	defer o.transformMu.Unlock()
 	o.nextTransID++
-	if t.TextType == "" {
-		t.TextType = t.AggregatedBy //nolint:staticcheck // the deprecated field is honored
-	}
 	o.transforms = append(o.transforms, registeredTransform{id: o.nextTransID, BotOutputTransformer: t})
 	return o.nextTransID
 }

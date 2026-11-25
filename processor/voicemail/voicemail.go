@@ -19,12 +19,10 @@ import (
 	"time"
 
 	"github.com/gojargo/jargo/classifier"
-	"github.com/gojargo/jargo/classifier/llmclassifier"
 	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/processor/notify"
-	"github.com/gojargo/jargo/service/llm"
 )
 
 // The events a Detector raises. Each handler receives the detector as its
@@ -91,17 +89,6 @@ type Config struct {
 	// person stays quiet, so a verdict on a fragment such as "hi, this is Sam" is
 	// not acted on until the caller has really stopped.
 	DecisionTimeout *time.Duration `validate:"omitnil,min=0"`
-
-	// LLM is a service to build the classifier from, when Classifier is nil.
-	//
-	// Deprecated: build a classifier/llmclassifier classifier and pass it as Classifier.
-	LLM llm.Inferencer
-	// CustomSystemPrompt is put ahead of the classifier's own instructions for
-	// the LLM.
-	//
-	// Deprecated: build a classifier/llmclassifier classifier with the instructions you
-	// want and pass it as Classifier.
-	CustomSystemPrompt string
 }
 
 // Detector decides whether a person answered an outbound call or it went to
@@ -168,21 +155,7 @@ func New(cfg Config) (*Detector, error) {
 	}
 	c := cfg.Classifier
 	if c == nil {
-		if cfg.LLM == nil {
-			return nil, errNoClassifier
-		}
-		slog.Warn("voicemail: Config.LLM is deprecated, pass a classifier instead")
-		// The classifier's own instructions, which ask for a JSON object, come
-		// last and win.
-		var instructions string
-		if cfg.CustomSystemPrompt != "" {
-			instructions = cfg.CustomSystemPrompt + "\n\n" + llmclassifier.DefaultInstructions
-		}
-		built, err := llmclassifier.New(llmclassifier.Config{LLM: cfg.LLM, Instructions: instructions})
-		if err != nil {
-			return nil, err
-		}
-		c = built
+		return nil, errNoClassifier
 	}
 	d := &Detector{
 		cfg:          cfg,

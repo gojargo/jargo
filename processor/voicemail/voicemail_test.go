@@ -16,7 +16,6 @@ import (
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/processor/voicemail"
-	llmservice "github.com/gojargo/jargo/service/llm"
 )
 
 const (
@@ -491,26 +490,9 @@ func TestHandlerEndsTheWorker(t *testing.T) {
 
 // Deprecated LLM path
 
-type silentLLM struct{}
-
-func (silentLLM) RunInference(context.Context, *frames.LLMContext, llmservice.InferenceOptions) (string, error) {
-	return "", nil
-}
-
 func TestNeedsAClassifierOrAnLLM(t *testing.T) {
 	if _, err := voicemail.New(voicemail.Config{}); err == nil {
 		t.Fatal("a detector with nothing to decide with was built")
-	}
-}
-
-func TestLLMBuildsAnLLMClassifier(t *testing.T) {
-	//nolint:staticcheck // the deprecated path is what is under test
-	d, err := voicemail.New(voicemail.Config{LLM: silentLLM{}, CustomSystemPrompt: "Extra"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.HasPrefix(d.Classifier().Name(), "LLMClassifier#") {
-		t.Fatalf("classifier = %s, want an LLM classifier", d.Classifier().Name())
 	}
 }
 

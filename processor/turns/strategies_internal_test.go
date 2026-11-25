@@ -1130,57 +1130,6 @@ func TestFilterIncompleteUserTurnStrategies(t *testing.T) {
 	})
 }
 
-// TestDeferredStopSuppressesFinalization: attached on its own, the deprecated
-// wrapper still drops the inner strategy's decision. The controller unwraps it.
-func TestDeferredStopSuppressesFinalization(t *testing.T) {
-	inner := NewExternalStop(ExternalStopConfig{Timeout: 10 * time.Millisecond})
-	d := Deferred(inner) //nolint:staticcheck // the deprecated wrapper is what is tested
-	spy := attachStop(d)
-	defer d.Cleanup()
-
-	spy.sendStop(d, transcript("done"))
-	spy.sendStop(d, frames.NewUserStoppedSpeakingFrame())
-	time.Sleep(50 * time.Millisecond)
-
-	spy.mu.Lock()
-	defer spy.mu.Unlock()
-	if len(spy.stopped) != 0 {
-		t.Errorf("deferred strategy must not finalize the turn: stops = %d", len(spy.stopped))
-	}
-}
-
-// TestDeferredStopDelegates checks the per-turn hooks reach the inner strategy.
-func TestDeferredStopDelegates(t *testing.T) {
-	inner := NewExternalStop(ExternalStopConfig{Timeout: time.Minute})
-	d := Deferred(inner)
-	spy := attachStop(d)
-
-	spy.sendStop(d, transcript("text"))
-	spy.mu.Lock()
-	if inner.text != "text" {
-		spy.mu.Unlock()
-		t.Fatal("Process should reach the inner strategy")
-	}
-	d.TurnStarted()
-	if inner.text != "" {
-		spy.mu.Unlock()
-		t.Error("TurnStarted should reach the inner strategy")
-	}
-
-	inner.text = "text"
-	d.TurnStopped()
-	if inner.text != "" {
-		spy.mu.Unlock()
-		t.Error("TurnStopped should reach the inner strategy")
-	}
-	if d.ResolvesProposedTurnStopFrames() != inner.ResolvesProposedTurnStopFrames() {
-		spy.mu.Unlock()
-		t.Error("deferring changes when the turn ends, not who decides it")
-	}
-	spy.mu.Unlock()
-	d.Cleanup()
-}
-
 // TestLLMTurnCompletionStopConfiguresTheLLM checks the gate turns the marker
 // protocol on when the pipeline starts. Nothing else configures the LLM, so a
 // gate that failed to send this would leave the model answering without the
@@ -1244,29 +1193,6 @@ func TestDefaultTurnParams(t *testing.T) {
 	if got := DefaultStoppedParams(); !got.EnableUserSpeakingFrames {
 		t.Errorf("DefaultStoppedParams = %+v, want speaking frames enabled", got)
 	}
-}
-
-// TestStrategyBaseNoOps checks the embedded defaults are safe to call, including
-// on a strategy that was never attached to a controller.
-func TestStrategyBaseNoOps(t *testing.T) {
-	t.Run("start base without an env", func(t *testing.T) {
-		var b StartStrategyBase
-		b.TurnStarted()
-		b.TurnStopped()
-		b.Cleanup()
-		b.TriggerStarted()
-		b.TriggerResetAggregation()
-	})
-
-	t.Run("stop base without an env", func(t *testing.T) {
-		var b StopStrategyBase
-		b.TurnStarted()
-		b.TurnStopped()
-		b.Cleanup()
-		b.TriggerStopped()
-		b.Push(frames.NewUserSpeakingFrame(), processor.Downstream)
-		b.Broadcast(func() frames.Frame { return frames.NewUserSpeakingFrame() })
-	})
 }
 
 // TestStopStrategyBaseEmits covers the frame-emitting helpers a stop strategy
