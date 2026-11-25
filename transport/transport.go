@@ -351,10 +351,14 @@ type BaseTransport struct {
 	Name string
 }
 
-// GetClientID is the default for a transport with no client ids: it logs a
-// warning and returns "".
+// transportBase seals Transport: a type is a transport by embedding
+// BaseTransport.
+//
+//nolint:unused // satisfies the unexported method of Transport
 func (BaseTransport) transportBase() {}
 
+// GetClientID is the default for a transport with no client ids: it logs a
+// warning and returns "".
 func (b BaseTransport) GetClientID(any) string {
 	slog.Warn("getting a client id isn't supported", "transport", b.Name)
 	return ""

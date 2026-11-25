@@ -261,7 +261,8 @@ func TestConflictingRuntimeUpdateIsRejectedWhole(t *testing.T) {
 		t.Fatalf("%d errors reported, want 1", len(got))
 	}
 	ef := got[0]
-	if ef.Fatal || ef.Category != errclass.Application || !strings.Contains(ef.Err.Error(), "preferred_language requires") {
+	if ef.Fatal || ef.Category != errclass.Application ||
+		!strings.Contains(ef.Err.Error(), "preferred_language requires") {
 		t.Errorf("error = %v (%v, fatal %v), want a non-fatal application error naming preferred_language",
 			ef.Err, ef.Category, ef.Fatal)
 	}

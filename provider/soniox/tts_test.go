@@ -227,10 +227,11 @@ func TestToWordTimesKeepsStreamsApart(t *testing.T) {
 	if p := s.partials["s2"]; p != (partialWord{word: "wor", start: 1.0}) {
 		t.Errorf("s2 partial = %+v", p)
 	}
-	if got := s.toWordTimes("s1", timings("lo ", 0.3)); !slices.Equal(got, []align.WordTiming{{Word: "Hello", Offset: 0}}) {
+	got := s.toWordTimes("s1", timings("lo ", 0.3))
+	if !slices.Equal(got, []align.WordTiming{{Word: "Hello", Offset: 0}}) {
 		t.Errorf("s1 words = %v", got)
 	}
-	got := s.toWordTimes("s2", timings("ld ", 1.3))
+	got = s.toWordTimes("s2", timings("ld ", 1.3))
 	if !slices.Equal(got, []align.WordTiming{{Word: "world", Offset: 1.0}}) {
 		t.Errorf("s2 words = %v", got)
 	}

@@ -107,7 +107,8 @@ func (a *api) post(ctx context.Context, payload map[string]any) ([]byte, error) 
 	defer func() { _ = resp.Body.Close() }()
 	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
 	if resp.StatusCode != http.StatusOK {
-		return nil, errclass.NewHTTPStatusError(resp.StatusCode, fmt.Errorf("%w %d: %s", errStatus, resp.StatusCode, respBody))
+		err := fmt.Errorf("%w %d: %s", errStatus, resp.StatusCode, respBody)
+		return nil, errclass.NewHTTPStatusError(resp.StatusCode, err)
 	}
 	return respBody, nil
 }
