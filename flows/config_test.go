@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	"github.com/gojargo/jargo/internal/yamlutil"
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 // Tests for loading and validating a FlowConfig.

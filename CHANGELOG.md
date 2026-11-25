@@ -222,6 +222,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **BREAKING: YAML comes from `go.yaml.in/yaml/v3`.** `gopkg.in/yaml.v3` is
+  archived and no longer maintained; its maintained successor has the same
+  API. The `yaml.Node` values the eval package takes and returns are now
+  `go.yaml.in/yaml/v3` nodes: change the import.
 - **BREAKING: `processor.Processor` and `transport.Transport` are sealed.** A
   processor is a type that embeds `processor.Base`, and a transport one that
   embeds `transport.BaseTransport`: each interface now has an unexported method

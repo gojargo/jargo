@@ -24,7 +24,7 @@ import (
 	"github.com/gojargo/jargo/service/llm"
 	"github.com/gojargo/jargo/service/stt"
 	"github.com/gojargo/jargo/service/tts"
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 // The fakes the factories under test build.

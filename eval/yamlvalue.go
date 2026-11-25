@@ -11,7 +11,7 @@ import (
 	"strings"
 
 	"github.com/gojargo/jargo/internal/yamlutil"
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 // ScenarioError is a scenario file that is malformed, or a scenario in it that

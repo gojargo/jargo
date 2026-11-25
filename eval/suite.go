@@ -20,7 +20,7 @@ import (
 	"time"
 
 	"github.com/gojargo/jargo/event"
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 // The multi-bot eval suite.

@@ -1,7 +1,7 @@
 package eval
 
 import (
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 // UserConfig is a scenario's `user:` block: how the user's turns reach the

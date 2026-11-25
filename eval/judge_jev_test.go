@@ -13,7 +13,7 @@ import (
 
 	"github.com/gojargo/jargo/classifier/jev"
 	"github.com/gojargo/jargo/eval"
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 // jevRequest is one request the stand-in Jev was sent.

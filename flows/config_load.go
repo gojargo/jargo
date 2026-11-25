@@ -15,7 +15,7 @@ import (
 	"strings"
 
 	"github.com/gojargo/jargo/internal/yamlutil"
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 // errJSONTrailingData reports JSON text with something after its value.
