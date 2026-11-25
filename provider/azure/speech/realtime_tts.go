@@ -8,7 +8,7 @@ import (
 	"sync"
 	"unicode"
 
-	ttsadapter "github.com/gojargo/jargo/adapter/tts"
+	"github.com/gojargo/jargo/expressive"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/language"
@@ -209,7 +209,7 @@ func (s *realtimeSynthesizer) Metadata() tts.Metadata {
 
 // ExpressionAdapter implements tts.ExpressionAdapterProvider: style markers on
 // HD voices, and none on the others.
-func (s *realtimeSynthesizer) ExpressionAdapter() ttsadapter.ExpressionAdapter {
+func (s *realtimeSynthesizer) ExpressionAdapter() expressive.ExpressionAdapter {
 	return voiceExpressionAdapter(s.live.Voice.Or(""))
 }
 

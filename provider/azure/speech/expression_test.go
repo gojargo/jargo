@@ -4,19 +4,18 @@ import (
 	"reflect"
 	"testing"
 
-	ttsadapter "github.com/gojargo/jargo/adapter/tts"
-	ttsazure "github.com/gojargo/jargo/adapter/tts/azure"
+	"github.com/gojargo/jargo/expressive"
 )
 
 func TestExpressionAdapterFollowsTheVoice(t *testing.T) {
 	for _, tt := range []struct {
 		voice   string
-		adapter ttsadapter.ExpressionAdapter
+		adapter expressive.ExpressionAdapter
 	}{
-		{"en-US-Ava:DragonHDLatestNeural", ttsazure.AzureHDExpressionAdapter{}},
-		{"en-US-Ava:DragonHDOmniLatestNeural", ttsazure.AzureHDExpressionAdapter{}},
-		{"en-US-Tiana:DragonHDFlashLatestNeural", ttsadapter.BaseExpressionAdapter{}},
-		{"en-US-SaraNeural", ttsadapter.BaseExpressionAdapter{}},
+		{"en-US-Ava:DragonHDLatestNeural", HDExpressionAdapter{}},
+		{"en-US-Ava:DragonHDOmniLatestNeural", HDExpressionAdapter{}},
+		{"en-US-Tiana:DragonHDFlashLatestNeural", expressive.BaseExpressionAdapter{}},
+		{"en-US-SaraNeural", expressive.BaseExpressionAdapter{}},
 	} {
 		s := &ttsSynthesizer{cfg: TTSConfig{Voice: tt.voice}}
 		if got := s.ExpressionAdapter(); reflect.TypeOf(got) != reflect.TypeOf(tt.adapter) {

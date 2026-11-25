@@ -1,7 +1,6 @@
 package perplexity
 
 import (
-	perplexityadapter "github.com/gojargo/jargo/adapter/perplexity"
 	"github.com/gojargo/jargo/provider/openai/chat"
 )
 
@@ -20,6 +19,6 @@ func NewLLM(cfg chat.LLMConfig) *chat.LLMService {
 		NoDeveloperRole: true,
 		// The endpoint has no max_completion_tokens field.
 		NoMaxCompletionTokens: true,
-		Adapter:               &perplexityadapter.Adapter{},
+		Adapter:               &Adapter{},
 	}, cfg)
 }

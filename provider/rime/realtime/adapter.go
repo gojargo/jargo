@@ -5,8 +5,8 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/gojargo/jargo/adapter"
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/service/llm/adapter"
 )
 
 // prismAdapter converts the conversation and its tools to what a Prism session

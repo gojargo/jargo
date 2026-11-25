@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gojargo/jargo/adapter/openai"
+	"github.com/gojargo/jargo/provider/openai/chat"
 )
 
 // TestTheDefaultBaseURLIsResolvedPerModel checks each model is addressed under
@@ -32,8 +32,8 @@ func TestTheDefaultBaseURLIsResolvedPerModel(t *testing.T) {
 // tool_choice alongside tools, so this guards what another adapter could build.
 func TestAToolChoiceRequiresNonEmptyTools(t *testing.T) {
 	s := &LLMSettings{}
-	err := s.checkRequest(openai.Params{
-		Messages:   []openai.Message{{Role: openai.RoleUser, Content: "Hello"}},
+	err := s.checkRequest(chat.Params{
+		Messages:   []chat.Message{{Role: chat.RoleUser, Content: "Hello"}},
 		ToolChoice: "required",
 	})
 	if err == nil || !strings.Contains(err.Error(), "requires non-empty `tools`") {

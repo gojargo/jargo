@@ -5,8 +5,7 @@ import (
 	"reflect"
 	"testing"
 
-	ttsadapter "github.com/gojargo/jargo/adapter/tts"
-	ttselevenlabs "github.com/gojargo/jargo/adapter/tts/elevenlabs"
+	"github.com/gojargo/jargo/expressive"
 )
 
 // The expression adapter follows the model: audio tags on Eleven v3 and v4,
@@ -14,12 +13,12 @@ import (
 func TestHTTPExpressionAdapterFollowsTheModel(t *testing.T) {
 	for _, tt := range []struct {
 		model   string
-		adapter ttsadapter.ExpressionAdapter
+		adapter expressive.ExpressionAdapter
 	}{
-		{"eleven_flash_v2_5", ttsadapter.BaseExpressionAdapter{}},
-		{"eleven_multilingual_v2", ttsadapter.BaseExpressionAdapter{}},
-		{"eleven_v3", ttselevenlabs.ElevenLabsAudioTagExpressionAdapter{}},
-		{"eleven_v4_turbo", ttselevenlabs.ElevenLabsAudioTagExpressionAdapter{}},
+		{"eleven_flash_v2_5", expressive.BaseExpressionAdapter{}},
+		{"eleven_multilingual_v2", expressive.BaseExpressionAdapter{}},
+		{"eleven_v3", AudioTagExpressionAdapter{}},
+		{"eleven_v4_turbo", AudioTagExpressionAdapter{}},
 	} {
 		s := &synthesizer{cfg: Config{Model: tt.model}}
 		if got := s.ExpressionAdapter(); reflect.TypeOf(got) != reflect.TypeOf(tt.adapter) {

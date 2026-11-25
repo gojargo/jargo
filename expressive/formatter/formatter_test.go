@@ -7,20 +7,19 @@ import (
 	"strings"
 	"testing"
 
-	ttsadapter "github.com/gojargo/jargo/adapter/tts"
-	ttscartesia "github.com/gojargo/jargo/adapter/tts/cartesia"
-	ttselevenlabs "github.com/gojargo/jargo/adapter/tts/elevenlabs"
-	ttsminimax "github.com/gojargo/jargo/adapter/tts/minimax"
 	"github.com/gojargo/jargo/expressive"
 	"github.com/gojargo/jargo/expressive/formatter"
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/provider/cartesia"
+	"github.com/gojargo/jargo/provider/elevenlabs"
+	"github.com/gojargo/jargo/provider/minimax"
 	"github.com/gojargo/jargo/utils/text"
 )
 
 // declaredAdapter declares sounds and delivery, and formats delivery as
 // <delivery> where it changes.
 type declaredAdapter struct {
-	ttsadapter.BaseExpressionAdapter
+	expressive.BaseExpressionAdapter
 	sounds   []string
 	delivery []string
 	scope    expressive.DeliveryScope
@@ -64,7 +63,7 @@ func (a *declaredAdapter) FormatEnd(delivery []string) string {
 }
 
 func newFormatter(a *declaredAdapter) *formatter.ExpressionFormatter {
-	return formatter.NewExpressionFormatter(func() ttsadapter.ExpressionAdapter { return a }, "tts")
+	return formatter.NewExpressionFormatter(func() expressive.ExpressionAdapter { return a }, "tts")
 }
 
 // shape is a segment compared without its position.
@@ -527,13 +526,13 @@ func TestTagsAreStrippedToTheWordsClientsAreShown(t *testing.T) {
 	}
 }
 
-func formattedWith(a ttsadapter.ExpressionAdapter, unit string) formatter.FormattedRequest {
-	p := formatter.NewExpressionFormatter(func() ttsadapter.ExpressionAdapter { return a }, "tts")
+func formattedWith(a expressive.ExpressionAdapter, unit string) formatter.FormattedRequest {
+	p := formatter.NewExpressionFormatter(func() expressive.ExpressionAdapter { return a }, "tts")
 	return p.Format(p.Parse(unit, false), frames.TextTypeSentence, same, asIs)
 }
 
 func TestAUniversalDeliveryIsSentByTheServicesName(t *testing.T) {
-	formatted := formattedWith(ttselevenlabs.ElevenLabsAudioTagExpressionAdapter{}, "<<warm>> Hi there.")
+	formatted := formattedWith(elevenlabs.AudioTagExpressionAdapter{}, "<<warm>> Hi there.")
 
 	if formatted.Text != "[warmly] Hi there." {
 		t.Fatalf("request = %q", formatted.Text)
@@ -545,7 +544,7 @@ func TestAUniversalDeliveryIsSentByTheServicesName(t *testing.T) {
 }
 
 func TestAUniversalSoundIsSentByTheServicesName(t *testing.T) {
-	formatted := formattedWith(ttscartesia.CartesiaExpressionAdapter{}, "Ha [[laugh]] okay.")
+	formatted := formattedWith(cartesia.ExpressionAdapter{}, "Ha [[laugh]] okay.")
 
 	if !strings.Contains(formatted.Text, "[laughter]") {
 		t.Fatalf("request = %q", formatted.Text)
@@ -557,7 +556,7 @@ func TestAUniversalSoundIsSentByTheServicesName(t *testing.T) {
 }
 
 func TestADeliverySentAsASettingIsNamedAsTheServiceNamesIt(t *testing.T) {
-	formatted := formattedWith(ttsminimax.MiniMaxExpressionAdapter{}, "<<warm>> Hi there.")
+	formatted := formattedWith(minimax.ExpressionAdapter{}, "<<warm>> Hi there.")
 
 	if formatted.Settings["emotion"] != "happy" {
 		t.Fatalf("settings = %v", formatted.Settings)
@@ -568,7 +567,7 @@ func TestADeliverySentAsASettingIsNamedAsTheServiceNamesIt(t *testing.T) {
 }
 
 func TestANameOfTheServicesOwnIsSentAsWritten(t *testing.T) {
-	formatted := formattedWith(ttselevenlabs.ElevenLabsAudioTagExpressionAdapter{}, "<<mischievously>> Hi there.")
+	formatted := formattedWith(elevenlabs.AudioTagExpressionAdapter{}, "<<mischievously>> Hi there.")
 
 	if formatted.Text != "[mischievously] Hi there." {
 		t.Fatalf("request = %q", formatted.Text)
@@ -579,7 +578,7 @@ func TestANameOfTheServicesOwnIsSentAsWritten(t *testing.T) {
 }
 
 func TestAUniversalDeliveryAFixedListLacksIsLeftOut(t *testing.T) {
-	formatted := formattedWith(ttsminimax.MiniMaxExpressionAdapter{}, "<<grateful>> Thanks so much.")
+	formatted := formattedWith(minimax.ExpressionAdapter{}, "<<grateful>> Thanks so much.")
 
 	if _, ok := formatted.Settings["emotion"]; ok {
 		t.Fatalf("settings = %v", formatted.Settings)
@@ -590,7 +589,7 @@ func TestAUniversalDeliveryAFixedListLacksIsLeftOut(t *testing.T) {
 }
 
 func TestAUniversalNameIsPerformedByTheFirstNameTheServicePerforms(t *testing.T) {
-	c := ttscartesia.CartesiaExpressionAdapter{}.Capabilities()
+	c := cartesia.ExpressionAdapter{}.Capabilities()
 
 	for _, tt := range []struct{ name, want string }{
 		{"warm", "content"}, {"calm", "calm"}, {"grateful", "grateful"},
@@ -608,8 +607,8 @@ func TestAUniversalNameIsPerformedByTheFirstNameTheServicePerforms(t *testing.T)
 }
 
 func TestAUniversalNameKeepsItsKindInTheOtherBrackets(t *testing.T) {
-	p := formatter.NewExpressionFormatter(func() ttsadapter.ExpressionAdapter {
-		return ttselevenlabs.ElevenLabsAudioTagExpressionAdapter{}
+	p := formatter.NewExpressionFormatter(func() expressive.ExpressionAdapter {
+		return elevenlabs.AudioTagExpressionAdapter{}
 	}, "tts")
 
 	checkShapes(t, shapes(p.Parse("[[warm]] Hi. <<laugh>>", false)), []shape{

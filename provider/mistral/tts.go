@@ -19,8 +19,7 @@ import (
 	"net/http"
 	"strings"
 
-	ttsadapter "github.com/gojargo/jargo/adapter/tts"
-	ttsmistral "github.com/gojargo/jargo/adapter/tts/mistral"
+	"github.com/gojargo/jargo/expressive"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/service/tts"
@@ -75,11 +74,11 @@ func (s *ttsSynthesizer) SampleRate() int { return ttsSampleRate }
 
 // ExpressionAdapter implements tts.ExpressionAdapterProvider: emotion tags on
 // Voxtral 3 models, and none on the others.
-func (s *ttsSynthesizer) ExpressionAdapter() ttsadapter.ExpressionAdapter {
+func (s *ttsSynthesizer) ExpressionAdapter() expressive.ExpressionAdapter {
 	if strings.HasPrefix(s.cfg.Model, "voxtral-mini-tts-3") {
-		return ttsmistral.MistralExpressionAdapter{}
+		return ExpressionAdapter{}
 	}
-	return ttsadapter.BaseExpressionAdapter{}
+	return expressive.BaseExpressionAdapter{}
 }
 
 // Synthesize requests streaming speech for text and streams the converted PCM

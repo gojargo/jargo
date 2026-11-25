@@ -281,8 +281,9 @@ declares it or accepts free text.
 
 ## Providers
 
-Each provider performs expression through an expression adapter, in a package
-under `adapter/tts`. A provider without one speaks only the words.
+Each provider performs expression through an expression adapter, its
+`ExpressionAdapter` (such as `cartesia.ExpressionAdapter`). A provider without one
+speaks only the words.
 
 | Provider | Performs expression on | Delivery |
 |---|---|---|
@@ -295,7 +296,7 @@ under `adapter/tts`. A provider without one speaks only the words.
 | Mistral | Voxtral 3 (`voxtral-mini-tts-3*`) | emotion and pace tags |
 | Azure | DragonHD and DragonHD Omni voices | style markers |
 
-The Gemini 3.8 adapter (`adapter/tts/gemini`) is there for a Gemini API TTS
+The Gemini 3.8 adapter (`gemini.TTSExpressionAdapter`) is there for a Gemini API TTS
 service, which jargo does not have yet.
 
 A provider whose expression depends on its settings chooses the adapter for
@@ -305,8 +306,8 @@ alters what it can perform.
 ## Writing an adapter
 
 A provider of your own implements `tts.ExpressionAdapterProvider` on its
-synthesizer, returning an adapter that embeds `BaseExpressionAdapter` from
-`adapter/tts` and overrides what the provider performs: `Capabilities`, and the methods that
+synthesizer, returning an adapter that embeds `expressive.BaseExpressionAdapter`
+and overrides what the provider performs: `Capabilities`, and the methods that
 format words in their delivery, sounds, pauses and the end of a request. One that
 takes delivery as a request setting returns it from `RequestSettings`, and reads
 it back with `tts.Base.ExpressionSettings` while it builds the request.

@@ -3,9 +3,8 @@ package chat
 import (
 	"testing"
 
-	"github.com/gojargo/jargo/adapter"
-	openaiadapter "github.com/gojargo/jargo/adapter/openai"
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/service/llm/adapter"
 )
 
 // bodyOf runs one generation against a recording server and returns the request
@@ -43,16 +42,16 @@ func messagesOf(t *testing.T, body map[string]any) []map[string]any {
 // message of its own, standing in for an endpoint that constrains the shape of
 // a conversation beyond what OpenAI's schema says.
 type shapingAdapter struct {
-	openaiadapter.Adapter
+	Adapter
 	saw *[]string
 }
 
 func (a *shapingAdapter) LLMInvocationParams(
 	convo *frames.LLMContext, opts adapter.Options,
-) (openaiadapter.Params, error) {
+) (Params, error) {
 	p, err := a.Adapter.LLMInvocationParams(convo, opts)
 	if err != nil {
-		return openaiadapter.Params{}, err
+		return Params{}, err
 	}
 	for _, m := range p.Messages {
 		*a.saw = append(*a.saw, m.Role)

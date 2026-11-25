@@ -15,8 +15,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	ttsadapter "github.com/gojargo/jargo/adapter/tts"
-	ttsazure "github.com/gojargo/jargo/adapter/tts/azure"
+	"github.com/gojargo/jargo/expressive"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/providertest"
 	"github.com/gojargo/jargo/pipeline"
@@ -233,12 +232,12 @@ func TestConstructSSMLEscapesTheText(t *testing.T) {
 func TestRealtimeTTSExpressionAdapterFollowsTheVoice(t *testing.T) {
 	for _, tt := range []struct {
 		voice   string
-		adapter ttsadapter.ExpressionAdapter
+		adapter expressive.ExpressionAdapter
 	}{
-		{"en-US-Ava:DragonHDLatestNeural", ttsazure.AzureHDExpressionAdapter{}},
-		{"en-US-Ava:DragonHDOmniLatestNeural", ttsazure.AzureHDExpressionAdapter{}},
-		{"en-US-Tiana:DragonHDFlashLatestNeural", ttsadapter.BaseExpressionAdapter{}},
-		{"en-US-SaraNeural", ttsadapter.BaseExpressionAdapter{}},
+		{"en-US-Ava:DragonHDLatestNeural", HDExpressionAdapter{}},
+		{"en-US-Ava:DragonHDOmniLatestNeural", HDExpressionAdapter{}},
+		{"en-US-Tiana:DragonHDFlashLatestNeural", expressive.BaseExpressionAdapter{}},
+		{"en-US-SaraNeural", expressive.BaseExpressionAdapter{}},
 	} {
 		_, s := newRealtimeTTS(RealtimeTTSConfig{APIKey: "key", Region: "eastus", Voice: tt.voice})
 		if got := s.ExpressionAdapter(); reflect.TypeOf(got) != reflect.TypeOf(tt.adapter) {

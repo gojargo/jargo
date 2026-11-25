@@ -3,8 +3,7 @@ package speech
 import (
 	"strings"
 
-	ttsadapter "github.com/gojargo/jargo/adapter/tts"
-	ttsazure "github.com/gojargo/jargo/adapter/tts/azure"
+	"github.com/gojargo/jargo/expressive"
 )
 
 const (
@@ -145,9 +144,9 @@ func hdVoice(voice string) bool {
 
 // voiceExpressionAdapter is the expression adapter for a voice: style markers on
 // HD voices, and none on the others.
-func voiceExpressionAdapter(voice string) ttsadapter.ExpressionAdapter {
+func voiceExpressionAdapter(voice string) expressive.ExpressionAdapter {
 	if hdVoice(voice) {
-		return ttsazure.AzureHDExpressionAdapter{}
+		return HDExpressionAdapter{}
 	}
-	return ttsadapter.BaseExpressionAdapter{}
+	return expressive.BaseExpressionAdapter{}
 }

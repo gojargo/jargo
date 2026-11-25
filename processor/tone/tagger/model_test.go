@@ -8,10 +8,10 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/gojargo/jargo/adapter/tts/cartesia"
-	"github.com/gojargo/jargo/adapter/tts/elevenlabs"
 	"github.com/gojargo/jargo/expressive"
 	"github.com/gojargo/jargo/internal/onnxrt"
+	"github.com/gojargo/jargo/provider/cartesia"
+	"github.com/gojargo/jargo/provider/elevenlabs"
 )
 
 // referenceLabels is a sentence's labels as the reference implementation, in
@@ -125,8 +125,8 @@ func (c referenceCase) turn(t *testing.T) (TurnContext, layout) {
 		}
 	}
 	capabilities := map[string]*expressive.ExpressionCapabilities{
-		"elevenlabs": elevenlabs.ElevenLabsAudioTagExpressionAdapter{}.Capabilities(),
-		"cartesia":   cartesia.CartesiaExpressionAdapter{}.Capabilities(),
+		"elevenlabs": elevenlabs.AudioTagExpressionAdapter{}.Capabilities(),
+		"cartesia":   cartesia.ExpressionAdapter{}.Capabilities(),
 	}[c.TTS]
 	turn := TurnContext{Space: ResolveLabelSpace(capabilities, policy, c.ServiceName, c.Vocabulary), Policy: policy}
 	for _, m := range c.Messages {

@@ -58,7 +58,7 @@ func runBot(ctx context.Context, t transport.Transport, args runner.Arguments) e
 	})
 
 	// With expressive conversation on, the LLM is taught the expression tags the TTS
-	// performs. Cartesia has many more emotions (see CartesiaEmotion), but offered
+	// performs. Cartesia has many more emotions (see cartesia.Emotion), but offered
 	// more than about 15, the LLM starts inventing names of its own as a
 	// conversation goes on, so the policy offers the ones this conversation calls
 	// for, and says which to use for feelings that have none.

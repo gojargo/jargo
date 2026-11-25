@@ -1,7 +1,6 @@
 package deepseek
 
 import (
-	deepseekadapter "github.com/gojargo/jargo/adapter/deepseek"
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/provider/openai/chat"
 )
@@ -60,6 +59,6 @@ func NewLLM(cfg LLMConfig) *chat.LLMService {
 		NoResponseSchema: true,
 		// Supplies the reasoning_content DeepSeek requires on assistant
 		// messages in thinking mode.
-		Adapter: &deepseekadapter.Adapter{},
+		Adapter: &Adapter{},
 	}, compat)
 }

@@ -10,20 +10,19 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gojargo/jargo/adapter"
-	novasonicadapter "github.com/gojargo/jargo/adapter/novasonic"
 	"github.com/gojargo/jargo/audio/resample"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/service/llm"
+	"github.com/gojargo/jargo/service/llm/adapter"
 	"github.com/google/uuid"
 )
 
 // The roles and text stages Nova Sonic reports content with.
 const (
-	roleSystem    = novasonicadapter.RoleSystem
-	roleUser      = novasonicadapter.RoleUser
-	roleAssistant = novasonicadapter.RoleAssistant
+	roleSystem    = RoleSystem
+	roleUser      = RoleUser
+	roleAssistant = RoleAssistant
 
 	// stageFinal is text that has been said; stageSpeculative is text the
 	// model plans to say, which arrives ahead of its audio.
@@ -68,7 +67,7 @@ type Service struct {
 	live    *Settings
 	audio   AudioConfig
 	tools   frames.ToolsSchema
-	adapter *novasonicadapter.Adapter
+	adapter *Adapter
 	sc      *sessionContinuation
 
 	// newClient builds the client sessions are opened with; a test replaces it.
@@ -127,7 +126,7 @@ func New(cfg Config) *Service {
 		live:               newSettings(cfg),
 		audio:              audio,
 		tools:              cfg.Tools,
-		adapter:            &novasonicadapter.Adapter{},
+		adapter:            &Adapter{},
 		newClient:          newBedrockClient,
 		triggerAudio:       readyAudio(),
 		completedToolCalls: map[string]bool{},
@@ -313,7 +312,7 @@ func (s *Service) finishConnectingIfContextAvailable(ctx context.Context) {
 
 	// The history, except a last message from the user, which is sent as the
 	// one to answer once the audio block is open.
-	var lastUser *novasonicadapter.HistoryMessage
+	var lastUser *HistoryMessage
 	for i, m := range params.Messages {
 		if i == len(params.Messages)-1 && m.Role == roleUser {
 			lastUser = &params.Messages[i]
@@ -680,7 +679,7 @@ func (s *Service) sendAudioInputStartEvent(ctx context.Context) {
 // sendTextEvent sends text on the current session. interactive text is sent
 // during the audio, for the model to answer; the rest (the system instruction,
 // the history) is sent ahead of it.
-func (s *Service) sendTextEvent(ctx context.Context, text string, role novasonicadapter.Role, interactive bool) {
+func (s *Service) sendTextEvent(ctx context.Context, text string, role Role, interactive bool) {
 	stream, prompt, _ := s.current()
 	if stream == nil || prompt == "" || text == "" {
 		return

@@ -4,18 +4,17 @@ import (
 	"reflect"
 	"testing"
 
-	ttsadapter "github.com/gojargo/jargo/adapter/tts"
-	ttsmistral "github.com/gojargo/jargo/adapter/tts/mistral"
+	"github.com/gojargo/jargo/expressive"
 )
 
 func TestExpressionAdapterFollowsTheModel(t *testing.T) {
 	for _, tt := range []struct {
 		model   string
-		adapter ttsadapter.ExpressionAdapter
+		adapter expressive.ExpressionAdapter
 	}{
-		{"voxtral-mini-tts-3-0", ttsmistral.MistralExpressionAdapter{}},
-		{"voxtral-mini-tts-3", ttsmistral.MistralExpressionAdapter{}},
-		{"voxtral-mini-tts-2603", ttsadapter.BaseExpressionAdapter{}},
+		{"voxtral-mini-tts-3-0", ExpressionAdapter{}},
+		{"voxtral-mini-tts-3", ExpressionAdapter{}},
+		{"voxtral-mini-tts-2603", expressive.BaseExpressionAdapter{}},
 	} {
 		s := &ttsSynthesizer{cfg: TTSConfig{Model: tt.model}}
 		if got := s.ExpressionAdapter(); reflect.TypeOf(got) != reflect.TypeOf(tt.adapter) {

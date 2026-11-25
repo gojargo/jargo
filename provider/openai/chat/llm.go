@@ -12,13 +12,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gojargo/jargo/adapter"
-	"github.com/gojargo/jargo/adapter/openai"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/provider/openai/internal/apierror"
 	"github.com/gojargo/jargo/provider/openai/internal/sdkretry"
 	"github.com/gojargo/jargo/service/llm"
+	"github.com/gojargo/jargo/service/llm/adapter"
 	errs "github.com/gojargo/jargo/utils/errors"
 )
 
@@ -27,16 +26,6 @@ const (
 	// defaultRetryTimeout bounds the first attempt when a service was built to
 	// retry a request that times out.
 	defaultRetryTimeout = 5 * time.Second
-)
-
-// The message roles the chat-completions API defines. They are aliases of the
-// adapter's own, which is where the wire format lives.
-const (
-	RoleSystem    = openai.RoleSystem
-	RoleUser      = openai.RoleUser
-	RoleAssistant = openai.RoleAssistant
-	RoleTool      = openai.RoleTool
-	RoleDeveloper = openai.RoleDeveloper
 )
 
 // LLMConfig configures an OpenAI (or OpenAI-compatible) LLM service. The
@@ -122,7 +111,7 @@ type LLMService struct {
 	http   *http.Client
 	shaper RequestShaper
 	// adapter converts the conversation into the request this endpoint takes.
-	adapter adapter.LLMAdapter[openai.Params, openai.Tool]
+	adapter adapter.LLMAdapter[Params, Tool]
 	// How this endpoint departs from OpenAI's own API, fixed at construction.
 	noDeveloperRole  bool
 	noResponseSchema bool
@@ -137,7 +126,7 @@ type LLMService struct {
 	// own settings that embed it.
 	store any
 	// checkRequest rejects a request the endpoint cannot serve, or is nil.
-	checkRequest func(openai.Params) error
+	checkRequest func(Params) error
 	// editRequest edits each request body before it is sent, or is nil.
 	editRequest func(body map[string]any)
 }
@@ -224,7 +213,7 @@ type Compat struct {
 	// is for an endpoint that constrains the shape of a conversation beyond what
 	// OpenAI's schema says: such an adapter embeds the OpenAI one and rewrites
 	// what it produced. Nil converts the conversation as OpenAI itself takes it.
-	Adapter adapter.LLMAdapter[openai.Params, openai.Tool]
+	Adapter adapter.LLMAdapter[Params, Tool]
 	// Settings, when set, is the runtime settings of an endpoint that has some of
 	// its own: a pointer to a struct embedding LLMSettings. The service seeds the
 	// embedded LLMSettings from the config, merges every update into the whole
@@ -236,7 +225,7 @@ type Compat struct {
 	// is not sent. A streamed turn fails with that error; a one-shot inference
 	// reports it as a non-fatal error and returns no answer. It runs with the
 	// settings read-locked, so it reads them directly.
-	CheckRequest func(p openai.Params) error
+	CheckRequest func(p Params) error
 	// Request, when set, edits each request body before it is sent: a field the
 	// endpoint names differently, one it rejects, or one of its own. It sees the
 	// body as OpenAI's request would carry it, before the Extra fields are merged
@@ -274,7 +263,7 @@ func NewCompatLLM(c Compat, cfg LLMConfig) *LLMService {
 	}
 	a := c.Adapter
 	if a == nil {
-		a = &openai.Adapter{}
+		a = &Adapter{}
 	}
 	live := newLLMSettings(cfg)
 	var store any = live
@@ -303,36 +292,22 @@ func NewCompatLLM(c Compat, cfg LLMConfig) *LLMService {
 	return s
 }
 
-// The chat-completions wire types. They live in the adapter, which is what
-// converts a conversation into them; these aliases keep them reachable under
-// this package's name.
-type (
-	// Message is one message of the conversation as the chat-completions API
-	// takes it.
-	Message = openai.Message
-	// ToolCall is an assistant tool-call entry on a message.
-	ToolCall = openai.ToolCall
-	// ToolCallFunction is the function a tool call invokes, with its arguments as
-	// the raw JSON string the model produced.
-	ToolCallFunction = openai.ToolCallFunction
-)
-
 type chatRequest struct {
-	Model               string                 `json:"model"`
-	Messages            []Message              `json:"messages"`
-	Stream              bool                   `json:"stream"`
-	StreamOptions       *streamOptions         `json:"stream_options,omitempty"`
-	MaxTokens           int                    `json:"max_tokens,omitempty"`
-	MaxCompletionTokens *int                   `json:"max_completion_tokens,omitempty"`
-	Temperature         *float64               `json:"temperature,omitempty"`
-	TopP                *float64               `json:"top_p,omitempty"`
-	FrequencyPenalty    *float64               `json:"frequency_penalty,omitempty"`
-	PresencePenalty     *float64               `json:"presence_penalty,omitempty"`
-	Seed                *int                   `json:"seed,omitempty"`
-	ServiceTier         string                 `json:"service_tier,omitempty"`
-	Tools               []openai.Tool          `json:"tools,omitempty"`
-	ToolChoice          string                 `json:"tool_choice,omitempty"`
-	ResponseFormat      *openai.ResponseFormat `json:"response_format,omitempty"`
+	Model               string          `json:"model"`
+	Messages            []Message       `json:"messages"`
+	Stream              bool            `json:"stream"`
+	StreamOptions       *streamOptions  `json:"stream_options,omitempty"`
+	MaxTokens           int             `json:"max_tokens,omitempty"`
+	MaxCompletionTokens *int            `json:"max_completion_tokens,omitempty"`
+	Temperature         *float64        `json:"temperature,omitempty"`
+	TopP                *float64        `json:"top_p,omitempty"`
+	FrequencyPenalty    *float64        `json:"frequency_penalty,omitempty"`
+	PresencePenalty     *float64        `json:"presence_penalty,omitempty"`
+	Seed                *int            `json:"seed,omitempty"`
+	ServiceTier         string          `json:"service_tier,omitempty"`
+	Tools               []Tool          `json:"tools,omitempty"`
+	ToolChoice          string          `json:"tool_choice,omitempty"`
+	ResponseFormat      *ResponseFormat `json:"response_format,omitempty"`
 	// extra are the settings' request fields the request does not model,
 	// merged over the modeled ones when it is encoded.
 	extra map[string]any
@@ -350,7 +325,7 @@ func encodeBody(req chatRequest, extra map[string]any) ([]byte, error) {
 	if len(extra) == 0 {
 		return json.Marshal(req)
 	}
-	return openai.MergeExtra(req, extra)
+	return MergeExtra(req, extra)
 }
 
 // encode marshals the request as this endpoint takes it: edited by the
@@ -383,7 +358,7 @@ func (e *requestRejectedError) Unwrap() error { return e.err }
 
 // check runs the endpoint's CheckRequest, if it has one, on what a request would
 // carry.
-func (s *LLMService) check(p openai.Params) error {
+func (s *LLMService) check(p Params) error {
 	if s.checkRequest == nil {
 		return nil
 	}
@@ -770,7 +745,7 @@ func (s *LLMService) RunInference(
 		}
 	}
 	if schema := s.CheckResponseSchema(ctx, opts.ResponseSchema); schema != nil {
-		reqBody.ResponseFormat = openai.JSONSchemaFormat(schema)
+		reqBody.ResponseFormat = JSONSchemaFormat(schema)
 	}
 	body, err := s.encode(reqBody)
 	if err != nil {
@@ -803,7 +778,7 @@ func (s *LLMService) RunInference(
 // params converts the conversation into what this endpoint takes.
 func (s *LLMService) params(
 	convo *frames.LLMContext, opts adapter.Options,
-) (openai.Params, error) {
+) (Params, error) {
 	opts.ConvertDeveloperToUser = s.noDeveloperRole
 	return s.adapter.LLMInvocationParams(convo, opts)
 }
@@ -839,7 +814,7 @@ func (s *LLMService) SupportsResponseSchema() bool { return !s.noResponseSchema 
 // ModelSupportsResponseSchema implements llm.ResponseSchemaSupporter. OpenAI
 // models before gpt-4o-mini and gpt-4o-2024-08-06 cannot enforce a schema.
 func (s *LLMService) ModelSupportsResponseSchema(model string) bool {
-	return openai.ModelSupportsResponseSchema(model)
+	return ModelSupportsResponseSchema(model)
 }
 
 // ClassifyError implements processor.ErrorClassifier: a content filter's

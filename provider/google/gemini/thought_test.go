@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	geminiadapter "github.com/gojargo/jargo/adapter/gemini"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/utils/events"
@@ -117,7 +116,7 @@ func TestTextSignatureIsKeptWithTheTextSoFar(t *testing.T) {
 	if sig != "c2lnLXRleHQ=" {
 		t.Errorf("signature = %v, want it kept as sent", sig)
 	}
-	if bookmark[geminiadapter.BookmarkText] != "We have tea." {
+	if bookmark[BookmarkText] != "We have tea." {
 		t.Errorf("bookmark = %v, want the answer text so far", bookmark)
 	}
 }
@@ -139,11 +138,11 @@ func TestFunctionCallSignatureIsKeptByTheCallID(t *testing.T) {
 		t.Fatalf("frames = %v, want a kept signature per call", got)
 	}
 	sig, bookmark := keptSignature(t, got[0])
-	if sig != "c2lnLWNhbGw=" || bookmark[geminiadapter.BookmarkFunctionCall] != "fc-1" {
+	if sig != "c2lnLWNhbGw=" || bookmark[BookmarkFunctionCall] != "fc-1" {
 		t.Errorf("first = %v %v, want the signature bookmarked by the call's own id", sig, bookmark)
 	}
 	_, bookmark = keptSignature(t, got[1])
-	if id, _ := bookmark[geminiadapter.BookmarkFunctionCall].(string); id == "" || id == "fc-1" {
+	if id, _ := bookmark[BookmarkFunctionCall].(string); id == "" || id == "fc-1" {
 		t.Errorf("second bookmark = %v, want the fresh id the call was given", bookmark)
 	}
 }

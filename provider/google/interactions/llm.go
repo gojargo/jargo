@@ -15,14 +15,12 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/gojargo/jargo/adapter"
-	geminiadapter "github.com/gojargo/jargo/adapter/gemini"
-	interactionsadapter "github.com/gojargo/jargo/adapter/geminiinteractions"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/provider/google/gemini"
 	"github.com/gojargo/jargo/provider/google/internal/stream"
 	"github.com/gojargo/jargo/service/llm"
+	"github.com/gojargo/jargo/service/llm/adapter"
 	errs "github.com/gojargo/jargo/utils/errors"
 )
 
@@ -70,7 +68,7 @@ func (s apiKeyShaper) Authorize(_ context.Context, req *http.Request) error {
 type Service struct {
 	*llm.Base
 	// adapter converts the conversation into the steps the API takes.
-	adapter interactionsadapter.Adapter
+	adapter Adapter
 	cfg     Config
 	// live is what an LLMUpdateSettingsFrame may change while the pipeline runs.
 	live   *LLMSettings
@@ -180,7 +178,7 @@ func (s *Service) RunInference(
 	}
 	var text strings.Builder
 	for _, step := range result.Steps {
-		if step.Type != interactionsadapter.StepModelOutput {
+		if step.Type != StepModelOutput {
 			continue
 		}
 		for _, item := range step.Content {
@@ -280,7 +278,7 @@ func decodeEvent(data string) (event, bool) {
 
 // buildRequest builds an Interactions request from the conversation's
 // invocation params and the settings as they stand.
-func (s *Service) buildRequest(cfg requestSettings, params interactionsadapter.Params) map[string]any {
+func (s *Service) buildRequest(cfg requestSettings, params Params) map[string]any {
 	request := map[string]any{"model": cfg.Model, "input": params.Input, "store": false}
 
 	if params.SystemInstruction != "" {
@@ -291,7 +289,7 @@ func (s *Service) buildRequest(cfg requestSettings, params interactionsadapter.P
 	case len(params.Tools) > 0:
 		request["tools"] = params.Tools
 	case len(cfg.Tools) > 0:
-		request["tools"] = interactionsadapter.ToInteractionsTools(cfg.Tools)
+		request["tools"] = ToInteractionsTools(cfg.Tools)
 	}
 
 	if generation := s.generationConfigFor(cfg); len(generation) > 0 {
@@ -577,7 +575,7 @@ func (s *Service) handleStepStart(ctx context.Context, ev event, response *respo
 	// first step.
 	s.StopTTFBMetrics(ctx)
 	response.steps[ev.Index] = ev.Step.Type
-	if ev.Step.Type == interactionsadapter.StepFunctionCall {
+	if ev.Step.Type == StepFunctionCall {
 		// A turn that only calls tools produces no answer text, so the call
 		// itself is what the caller gets and TTFAT ends here rather than going
 		// unmeasured.
@@ -596,7 +594,7 @@ func (s *Service) handleStepStop(ctx context.Context, ev event, response *respon
 		return nil
 	}
 	if response.textBookmarkIndex != nil && *response.textBookmarkIndex == ev.Index {
-		return s.storeSignature(ctx, response, geminiadapter.BookmarkText, response.text[ev.Index])
+		return s.storeSignature(ctx, response, gemini.BookmarkText, response.text[ev.Index])
 	}
 	return nil
 }
@@ -698,9 +696,9 @@ func (s *Service) bookmarkPendingSignature(ctx context.Context, response *respon
 		return nil
 	}
 	switch response.steps[index] {
-	case interactionsadapter.StepFunctionCall:
-		return s.storeSignature(ctx, response, geminiadapter.BookmarkFunctionCall, response.calls[index].id)
-	case interactionsadapter.StepModelOutput:
+	case StepFunctionCall:
+		return s.storeSignature(ctx, response, gemini.BookmarkFunctionCall, response.calls[index].id)
+	case StepModelOutput:
 		response.textBookmarkIndex = &index
 	}
 	return nil
@@ -719,7 +717,7 @@ func (s *Service) storeSignature(
 		return nil
 	}
 	bookmark := map[string]any{bookmarkKey: bookmarkValue}
-	msg := geminiadapter.NewThoughtSignature(decodeSignature(*signature), bookmark)
+	msg := gemini.NewThoughtSignature(decodeSignature(*signature), bookmark)
 	return s.PushFrame(ctx, frames.NewLLMMessagesAppendFrame([]frames.Message{msg}), processor.Downstream)
 }
 

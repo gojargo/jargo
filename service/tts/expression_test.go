@@ -15,7 +15,6 @@ import (
 	"testing"
 	"time"
 
-	ttsadapter "github.com/gojargo/jargo/adapter/tts"
 	"github.com/gojargo/jargo/expressive"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
@@ -37,7 +36,7 @@ func reply() []string {
 // bracketAdapter formats delivery as <delivery> where it changes, sounds as
 // <name>, pauses as <Nms>, set apart.
 type bracketAdapter struct {
-	ttsadapter.BaseExpressionAdapter
+	expressive.BaseExpressionAdapter
 }
 
 func (bracketAdapter) Capabilities() *expressive.ExpressionCapabilities {
@@ -76,7 +75,7 @@ func itoa(n int) string {
 
 // pushTextSynth speaks without word timestamps, answering with its audio.
 type pushTextSynth struct {
-	adapter ttsadapter.ExpressionAdapter
+	adapter expressive.ExpressionAdapter
 }
 
 func (s *pushTextSynth) SampleRate() int { return orderingSampleRate }
@@ -85,7 +84,7 @@ func (s *pushTextSynth) RunTTS(_ context.Context, _, _ string, yield func(frames
 	return yield(frames.NewTTSAudioRawFrame(make([]byte, orderingChunkBytes), orderingSampleRate, 1))
 }
 
-func (s *pushTextSynth) ExpressionAdapter() ttsadapter.ExpressionAdapter { return s.adapter }
+func (s *pushTextSynth) ExpressionAdapter() expressive.ExpressionAdapter { return s.adapter }
 
 //nolint:gochecknoglobals // test fixtures
 var (
@@ -104,7 +103,7 @@ func wordsOf(text string) []string {
 // included, as ElevenLabs' alignment does; dropLast leaves the last words
 // unreported, as a provider can drop events.
 type timedSynth struct {
-	adapter   ttsadapter.ExpressionAdapter
+	adapter   expressive.ExpressionAdapter
 	reporting bool
 	dropLast  int
 }
@@ -137,7 +136,7 @@ func (s *timedSynth) RunTTSTimed(
 	return yield(frames.NewTTSAudioRawFrame(make([]byte, orderingChunkBytes), orderingSampleRate, 1))
 }
 
-func (s *timedSynth) ExpressionAdapter() ttsadapter.ExpressionAdapter { return s.adapter }
+func (s *timedSynth) ExpressionAdapter() expressive.ExpressionAdapter { return s.adapter }
 
 type serviceCase struct {
 	name string
@@ -717,7 +716,7 @@ func TestAPauseIsKeptWithinTheServicesRange(t *testing.T) {
 
 // styleAdapter is for a service that takes delivery with each request.
 type styleAdapter struct {
-	ttsadapter.BaseExpressionAdapter
+	expressive.BaseExpressionAdapter
 }
 
 func (styleAdapter) Capabilities() *expressive.ExpressionCapabilities {
@@ -842,7 +841,7 @@ func TestARequestIsSpokenInTheDeliveryItsWordsStartIn(t *testing.T) {
 // markupAdapter formats tags as bracketed markup, which its service reports
 // back with its words.
 type markupAdapter struct {
-	ttsadapter.BaseExpressionAdapter
+	expressive.BaseExpressionAdapter
 }
 
 func (markupAdapter) Capabilities() *expressive.ExpressionCapabilities {
@@ -1065,7 +1064,7 @@ func (s *streamingSynth) SetAudioContextHost(h tts.AudioContextHost) {
 	s.mu.Unlock()
 }
 
-func (s *streamingSynth) ExpressionAdapter() ttsadapter.ExpressionAdapter { return bracketAdapter{} }
+func (s *streamingSynth) ExpressionAdapter() expressive.ExpressionAdapter { return bracketAdapter{} }
 
 func (s *streamingSynth) RunTTS(context.Context, string, string, func(frames.Frame) error) error {
 	return nil
@@ -1118,7 +1117,7 @@ type declaringSynth struct {
 }
 
 type declaringAdapter struct {
-	ttsadapter.BaseExpressionAdapter
+	expressive.BaseExpressionAdapter
 	capabilities *expressive.ExpressionCapabilities
 }
 
@@ -1130,7 +1129,7 @@ func (s *declaringSynth) RunTTS(context.Context, string, string, func(frames.Fra
 	return nil
 }
 
-func (s *declaringSynth) ExpressionAdapter() ttsadapter.ExpressionAdapter {
+func (s *declaringSynth) ExpressionAdapter() expressive.ExpressionAdapter {
 	return declaringAdapter{capabilities: s.capabilities}
 }
 
@@ -1182,13 +1181,13 @@ func TestAServiceBroadcastsTheExpressionItDeclares(t *testing.T) {
 // audio tags on Eleven v3 alone.
 type modelSynth struct{ settingsSynth }
 
-func (s *modelSynth) ExpressionAdapter() ttsadapter.ExpressionAdapter {
+func (s *modelSynth) ExpressionAdapter() expressive.ExpressionAdapter {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if model, _ := s.store.Model.Value(); model == "expressive" {
 		return bracketAdapter{}
 	}
-	return ttsadapter.BaseExpressionAdapter{}
+	return expressive.BaseExpressionAdapter{}
 }
 
 func TestAModelChangeToOneWithoutExpressionIsBroadcast(t *testing.T) {

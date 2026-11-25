@@ -11,8 +11,7 @@ import (
 	"testing"
 	"time"
 
-	ttsadapter "github.com/gojargo/jargo/adapter/tts"
-	ttsinworld "github.com/gojargo/jargo/adapter/tts/inworld"
+	"github.com/gojargo/jargo/expressive"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 )
@@ -20,11 +19,11 @@ import (
 func TestExpressionAdapterFollowsTheModel(t *testing.T) {
 	for _, tt := range []struct {
 		model   string
-		adapter ttsadapter.ExpressionAdapter
+		adapter expressive.ExpressionAdapter
 	}{
-		{"inworld-tts-2", ttsinworld.InworldExpressionAdapter{}},
-		{"inworld-tts-2-flash", ttsinworld.InworldFlashExpressionAdapter{}},
-		{"inworld-tts-1.5-max", ttsadapter.BaseExpressionAdapter{}},
+		{"inworld-tts-2", ExpressionAdapter{}},
+		{"inworld-tts-2-flash", FlashExpressionAdapter{}},
+		{"inworld-tts-1.5-max", expressive.BaseExpressionAdapter{}},
 	} {
 		s := &synthesizer{cfg: Config{Model: tt.model}}
 		if got := s.ExpressionAdapter(); reflect.TypeOf(got) != reflect.TypeOf(tt.adapter) {

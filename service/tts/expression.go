@@ -5,7 +5,7 @@ import (
 	"maps"
 	"strings"
 
-	ttsadapter "github.com/gojargo/jargo/adapter/tts"
+	"github.com/gojargo/jargo/expressive"
 	"github.com/gojargo/jargo/expressive/formatter"
 	"github.com/gojargo/jargo/expressive/spoken"
 	"github.com/gojargo/jargo/frames"
@@ -28,19 +28,19 @@ import (
 // A Synthesizer that does not implement it performs none, and speaks only the
 // words.
 type ExpressionAdapterProvider interface {
-	ExpressionAdapter() ttsadapter.ExpressionAdapter
+	ExpressionAdapter() expressive.ExpressionAdapter
 }
 
 // ExpressionAdapter is the adapter that formats this service's expression tags:
 // its provider's, or the base adapter, which performs nothing. Part of
 // expressive conversation (alpha).
-func (b *Base) ExpressionAdapter() ttsadapter.ExpressionAdapter {
+func (b *Base) ExpressionAdapter() expressive.ExpressionAdapter {
 	if p, ok := b.syn.(ExpressionAdapterProvider); ok {
 		if a := p.ExpressionAdapter(); a != nil {
 			return a
 		}
 	}
-	return ttsadapter.BaseExpressionAdapter{}
+	return expressive.BaseExpressionAdapter{}
 }
 
 // ExpressiveConversation reports whether the pipeline has expressive
@@ -50,7 +50,7 @@ func (b *Base) ExpressiveConversation() bool { return b.exprFormatter != nil }
 
 // ExpressionSettings is the settings to send with the request being
 // synthesized, set before each request from the service's expression adapter
-// (ttsadapter.ExpressionAdapter.RequestSettings), for a provider that takes
+// (expressive.ExpressionAdapter.RequestSettings), for a provider that takes
 // some of its expression as request settings rather than as markup in its
 // text. Empty for none. Part of expressive conversation (alpha).
 func (b *Base) ExpressionSettings() map[string]any {

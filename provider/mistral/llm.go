@@ -3,7 +3,6 @@ package mistral
 import (
 	"log/slog"
 
-	mistraladapter "github.com/gojargo/jargo/adapter/mistral"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/provider/openai/chat"
 	"github.com/gojargo/jargo/service/llm"
@@ -24,7 +23,7 @@ func NewLLM(cfg chat.LLMConfig) *chat.LLMService {
 		NoDeveloperRole: true,
 		// The endpoint has no max_completion_tokens field.
 		NoMaxCompletionTokens: true,
-		Adapter:               &mistraladapter.Adapter{},
+		Adapter:               &Adapter{},
 		Base:                  []llm.Option{llm.WithFunctionCallFilter(dropAnsweredCalls)},
 		Request:               mistralRequest,
 	}, cfg)

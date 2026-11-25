@@ -65,7 +65,6 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	ttsadapter "github.com/gojargo/jargo/adapter/tts"
 	"github.com/gojargo/jargo/expressive"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/utils/text"
@@ -321,7 +320,7 @@ type FormattedRequest struct {
 // in order, then [ExpressionFormatter.Format] to build its request. What the
 // service can't perform is left out of the request, with one warning per tag.
 //
-//	f := formatter.NewExpressionFormatter(func() ttsadapter.ExpressionAdapter { return adapter }, "tts")
+//	f := formatter.NewExpressionFormatter(func() expressive.ExpressionAdapter { return adapter }, "tts")
 //
 //	segments := f.Parse("<<warm>> It's [[laugh]] ^^back^^ up.", false)
 //	// [Text{" It's ", ["warm"], 8, 14},
@@ -342,7 +341,7 @@ type FormattedRequest struct {
 // It is not safe for concurrent use: the service calls it from its frame
 // goroutine.
 type ExpressionFormatter struct {
-	adapter func() ttsadapter.ExpressionAdapter
+	adapter func() expressive.ExpressionAdapter
 	owner   string
 	// activeDelivery is the delivery the next words of the response are
 	// spoken in.
@@ -356,7 +355,7 @@ type ExpressionFormatter struct {
 // NewExpressionFormatter builds a formatter. adapter returns the service's
 // adapter, which may depend on its settings, such as its model; owner names
 // the service in warnings.
-func NewExpressionFormatter(adapter func() ttsadapter.ExpressionAdapter, owner string) *ExpressionFormatter {
+func NewExpressionFormatter(adapter func() expressive.ExpressionAdapter, owner string) *ExpressionFormatter {
 	return &ExpressionFormatter{adapter: adapter, owner: owner, unperformed: map[string]struct{}{}}
 }
 
@@ -837,7 +836,7 @@ func (f *ExpressionFormatter) warnUnperformed(tag string) {
 //	formatter.StripExpressionTags("<<warm>> It's [[laugh]] ^^back^^ up.") // "It's back up."
 func StripExpressionTags(unit string) string {
 	parser := NewExpressionFormatter(
-		func() ttsadapter.ExpressionAdapter { return ttsadapter.BaseExpressionAdapter{} },
+		func() expressive.ExpressionAdapter { return expressive.BaseExpressionAdapter{} },
 		"StripExpressionTags")
 	return ShownText(parser.Parse(unit, true), frames.TextTypeSentence)
 }

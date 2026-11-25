@@ -12,8 +12,7 @@ import (
 	"net/http"
 	"strings"
 
-	ttsadapter "github.com/gojargo/jargo/adapter/tts"
-	ttsinworld "github.com/gojargo/jargo/adapter/tts/inworld"
+	"github.com/gojargo/jargo/expressive"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/service/tts"
@@ -51,20 +50,20 @@ func (s *synthesizer) SampleRate() int { return s.cfg.SampleRate }
 
 // ExpressionAdapter implements tts.ExpressionAdapterProvider: audio markup on
 // TTS-2 models, and none on the older ones.
-func (s *synthesizer) ExpressionAdapter() ttsadapter.ExpressionAdapter {
+func (s *synthesizer) ExpressionAdapter() expressive.ExpressionAdapter {
 	return tts2ExpressionAdapter(s.cfg.Model)
 }
 
 // tts2ExpressionAdapter is the expression adapter for a model: audio markup on
 // TTS-2 models, and none on the older ones.
-func tts2ExpressionAdapter(model string) ttsadapter.ExpressionAdapter {
+func tts2ExpressionAdapter(model string) expressive.ExpressionAdapter {
 	switch {
 	case strings.HasPrefix(model, "inworld-tts-2-flash"):
-		return ttsinworld.InworldFlashExpressionAdapter{}
+		return FlashExpressionAdapter{}
 	case strings.HasPrefix(model, "inworld-tts-2"):
-		return ttsinworld.InworldExpressionAdapter{}
+		return ExpressionAdapter{}
 	default:
-		return ttsadapter.BaseExpressionAdapter{}
+		return expressive.BaseExpressionAdapter{}
 	}
 }
 

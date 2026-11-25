@@ -11,14 +11,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gojargo/jargo/adapter/tts/cartesia"
-	"github.com/gojargo/jargo/adapter/tts/elevenlabs"
 	"github.com/gojargo/jargo/expressive"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/modelcache"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor/rtvi"
 	"github.com/gojargo/jargo/processor/tone/internal/tonetest"
+	"github.com/gojargo/jargo/provider/cartesia"
+	"github.com/gojargo/jargo/provider/elevenlabs"
 )
 
 var (
@@ -31,13 +31,13 @@ var expressiveParams = pipeline.Params{EnableExpressiveConversation: true}
 
 func cartesiaMetadata() *frames.TTSMetadataFrame {
 	f := frames.NewTTSMetadataFrame("tts")
-	f.Expression = cartesia.CartesiaExpressionAdapter{}.Capabilities()
+	f.Expression = cartesia.ExpressionAdapter{}.Capabilities()
 	return f
 }
 
 func elevenLabsMetadata() *frames.TTSMetadataFrame {
 	f := frames.NewTTSMetadataFrame("tts")
-	f.Expression = elevenlabs.ElevenLabsAudioTagExpressionAdapter{}.Capabilities()
+	f.Expression = elevenlabs.AudioTagExpressionAdapter{}.Capabilities()
 	return f
 }
 
@@ -501,7 +501,7 @@ func TestASentenceIsReadAsTheTextTheModelWasTrainedOn(t *testing.T) {
 	heard := []expressive.PerceptionSignal{{Name: "tone", Labels: []expressive.PerceptionLabel{
 		{Label: "frustrated", Confidence: 0.62}, {Label: "neutral", Confidence: 0.3},
 	}}}
-	space := ResolveLabelSpace(elevenlabs.ElevenLabsAudioTagExpressionAdapter{}.Capabilities(), policy,
+	space := ResolveLabelSpace(elevenlabs.AudioTagExpressionAdapter{}.Capabilities(), policy,
 		"ElevenLabsTTSService#0", nil)
 	turn := TurnContext{
 		Messages: []Message{
@@ -536,7 +536,7 @@ func TestASentenceIsReadAsTheTextTheModelWasTrainedOn(t *testing.T) {
 }
 
 func TestAServiceTheModelWasntTrainedWithIsReadAsOther(t *testing.T) {
-	capabilities := elevenlabs.ElevenLabsAudioTagExpressionAdapter{}.Capabilities()
+	capabilities := elevenlabs.AudioTagExpressionAdapter{}.Capabilities()
 	policy := expressive.ExpressionPolicy{}
 
 	if got := ResolveLabelSpace(capabilities, policy, "ElevenLabsTTSService#0", nil).TTS; got != "elevenlabs" {

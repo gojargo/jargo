@@ -1,0 +1,151 @@
+package adapter_test
+
+import (
+	"errors"
+	"testing"
+
+	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/service/llm/adapter"
+)
+
+// names returns the name of each tool, which is what these tests compare.
+func names(tools []frames.Tool) []string {
+	out := make([]string, 0, len(tools))
+	for _, t := range tools {
+		out = append(out, t.Name)
+	}
+	return out
+}
+
+// wantNames fails unless the tools carry exactly the given names in order.
+func wantNames(t *testing.T, tools []frames.Tool, want ...string) {
+	t.Helper()
+	got := names(tools)
+	if len(got) != len(want) {
+		t.Fatalf("tools = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("tool %d = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+// TestBuiltinsFollowTheConversationsOwn checks a tool the service implements is
+// sent after the ones the application advertised, so what the application asked
+// for reaches the model in the order it stated.
+func TestBuiltinsFollowTheConversationsOwn(t *testing.T) {
+	var b adapter.Base
+	b.SetBuiltin(adapter.Builtin{Tool: frames.Tool{Name: "cancel"}})
+
+	wantNames(t, b.WithBuiltins(frames.ToolsSchema{Standard: []frames.Tool{{Name: "watch"}}}).Standard, "watch", "cancel")
+}
+
+// TestBuiltinsKeepTheirOrder checks two built-in tools are sent the same way
+// twice running. A request that reorders them would rewrite a cached prompt
+// prefix on every turn and never read one back.
+func TestBuiltinsKeepTheirOrder(t *testing.T) {
+	var b adapter.Base
+	b.SetBuiltin(adapter.Builtin{Tool: frames.Tool{Name: "first"}})
+	b.SetBuiltin(adapter.Builtin{Tool: frames.Tool{Name: "second"}})
+
+	for range 3 {
+		wantNames(t, b.WithBuiltins(frames.ToolsSchema{}).Standard, "first", "second")
+	}
+}
+
+// TestSetBuiltinReplacesWithoutReordering checks re-registering a tool updates
+// it in place rather than moving it to the end.
+func TestSetBuiltinReplacesWithoutReordering(t *testing.T) {
+	var b adapter.Base
+	b.SetBuiltin(adapter.Builtin{Tool: frames.Tool{Name: "first"}})
+	b.SetBuiltin(adapter.Builtin{Tool: frames.Tool{Name: "second"}})
+	b.SetBuiltin(adapter.Builtin{Tool: frames.Tool{Name: "first", Description: "updated"}})
+
+	tools := b.WithBuiltins(frames.ToolsSchema{}).Standard
+	wantNames(t, tools, "first", "second")
+	if tools[0].Description != "updated" {
+		t.Errorf("description = %q, want the re-registered tool's", tools[0].Description)
+	}
+}
+
+// TestRemoveBuiltin checks a withdrawn tool stops being sent, and that
+// withdrawing one that was never registered says so.
+func TestRemoveBuiltin(t *testing.T) {
+	var b adapter.Base
+	b.SetBuiltin(adapter.Builtin{Tool: frames.Tool{Name: "cancel"}})
+
+	if !b.RemoveBuiltin("cancel") {
+		t.Error("RemoveBuiltin said there was no such tool, want it removed")
+	}
+	wantNames(t, b.WithBuiltins(frames.ToolsSchema{Standard: []frames.Tool{{Name: "watch"}}}).Standard, "watch")
+
+	if b.RemoveBuiltin("cancel") {
+		t.Error("RemoveBuiltin said it removed a tool that was not registered")
+	}
+}
+
+// TestWithBuiltinsLeavesTheConversationAlone checks the merge does not write
+// into the slice it was given, which the conversation still holds.
+func TestWithBuiltinsLeavesTheConversationAlone(t *testing.T) {
+	var b adapter.Base
+	b.SetBuiltin(adapter.Builtin{Tool: frames.Tool{Name: "cancel"}})
+
+	tools := []frames.Tool{{Name: "watch"}}
+	b.WithBuiltins(frames.ToolsSchema{Standard: tools})
+	wantNames(t, tools, "watch")
+}
+
+// TestConversionErrorCarriesItsCause checks the failure a conversion wrapped is
+// still reachable, so what actually went wrong can be read off it.
+func TestConversionErrorCarriesItsCause(t *testing.T) {
+	cause := testError{}
+	err := &adapter.ConversionError{Cause: cause}
+	if !errors.Is(err.Unwrap(), cause) {
+		t.Errorf("Unwrap = %v, want the cause", err.Unwrap())
+	}
+	if got := err.Error(); got == "" {
+		t.Error("Error() is empty, want it to name the failure")
+	}
+}
+
+// testError is a stand-in cause for the wrapping test.
+type testError struct{}
+
+func (testError) Error() string { return "boom" }
+
+// TestRealtimeSessionTools checks the toolset a realtime session settles on:
+// the conversation's own tools win over the service's configured ones, the
+// configured ones stand in when the conversation advertises none, and the
+// built-in tools ride along either way, alone when there is neither.
+func TestRealtimeSessionTools(t *testing.T) {
+	var b adapter.Base
+	b.SetBuiltin(adapter.Builtin{Tool: frames.Tool{Name: "delegate"}})
+	fromContext := frames.ToolsSchema{Standard: []frames.Tool{{Name: "from_context"}}}
+	service := frames.ToolsSchema{Standard: []frames.Tool{{Name: "sample"}}}
+
+	wantNames(t, b.RealtimeSessionTools(fromContext, service).Standard, "from_context", "delegate")
+	wantNames(t, b.RealtimeSessionTools(frames.ToolsSchema{}, service).Standard, "sample", "delegate")
+	wantNames(t, b.RealtimeSessionTools(frames.ToolsSchema{}, frames.ToolsSchema{}).Standard, "delegate")
+
+	var bare adapter.Base
+	if got := bare.RealtimeSessionTools(frames.ToolsSchema{}, frames.ToolsSchema{}); !got.Empty() {
+		t.Errorf("tools = %v, want none", got)
+	}
+}
+
+// TestRealtimeSessionToolsCountsCustomToolsAsTheConversations checks a
+// conversation advertising only tools in a provider's own format still
+// advertises tools, so the configured ones are not used.
+func TestRealtimeSessionToolsCountsCustomToolsAsTheConversations(t *testing.T) {
+	var b adapter.Base
+	custom := frames.ToolsSchema{Custom: map[frames.AdapterType][]any{
+		frames.AdapterTypeGemini: {map[string]any{"google_search": map[string]any{}}},
+	}}
+	service := frames.ToolsSchema{Standard: []frames.Tool{{Name: "sample"}}}
+
+	got := b.RealtimeSessionTools(custom, service)
+	if len(got.Standard) != 0 || len(got.CustomFor(frames.AdapterTypeGemini)) != 1 {
+		t.Errorf("tools = %+v, want the conversation's custom tool alone", got)
+	}
+}

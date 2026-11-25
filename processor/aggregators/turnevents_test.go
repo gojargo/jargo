@@ -6,12 +6,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gojargo/jargo/adapter"
-	anthropicadapter "github.com/gojargo/jargo/adapter/anthropic"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor/aggregators"
 	"github.com/gojargo/jargo/processor/turns"
+	"github.com/gojargo/jargo/provider/anthropic"
+	"github.com/gojargo/jargo/service/llm/adapter"
 	"github.com/gojargo/jargo/utils/events"
 )
 
@@ -434,7 +434,7 @@ func TestAThoughtRoundTripsToAnthropic(t *testing.T) {
 	<-runDone
 	settle()
 
-	params, err := (&anthropicadapter.Adapter{}).LLMInvocationParams(convo, adapter.Options{})
+	params, err := (&anthropic.Adapter{}).LLMInvocationParams(convo, adapter.Options{})
 	if err != nil {
 		t.Fatalf("LLMInvocationParams: %v", err)
 	}

@@ -11,11 +11,10 @@ import (
 
 	sdk "github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
-	"github.com/gojargo/jargo/adapter"
-	anthropicadapter "github.com/gojargo/jargo/adapter/anthropic"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/service/llm"
+	"github.com/gojargo/jargo/service/llm/adapter"
 )
 
 // Service is a streaming Anthropic LLM processor.
@@ -26,7 +25,7 @@ type Service struct {
 	// It is seeded from the config, and is what every request is built from.
 	live *LLMSettings
 	// adapter converts the conversation into the request Anthropic takes.
-	adapter anthropicadapter.Adapter
+	adapter Adapter
 	// omitInterleavedThinking leaves the interleaved-thinking beta off every
 	// request, for a backend that does not take it.
 	omitInterleavedThinking bool

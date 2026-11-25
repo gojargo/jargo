@@ -17,6 +17,9 @@ import (
 	"github.com/google/uuid"
 )
 
+// keyType is the JSON key naming the type of an event, a content block or a schema.
+const keyType = "type"
+
 // The Nova Sonic wire protocol: a session is a stream of JSON events, each an
 // object naming one event. The client opens the session (sessionStart), opens a
 // prompt declaring the output and the tools (promptStart), and then sends
@@ -211,7 +214,7 @@ func contentStart(prompt, content, typ, role string, interactive bool, extra map
 	body := map[string]any{
 		keyPromptName:  prompt,
 		keyContentName: content,
-		"type":         typ,
+		keyType:        typ,
 		"interactive":  interactive,
 		"role":         role,
 	}
@@ -276,7 +279,7 @@ func toolResultEvents(prompt, toolCallID, result string) []map[string]any {
 		contentStart(prompt, content, "TOOL", "TOOL", false, map[string]any{
 			"toolResultInputConfiguration": map[string]any{
 				"toolUseId":              toolCallID,
-				"type":                   contentTypeTxt,
+				keyType:                  contentTypeTxt,
 				"textInputConfiguration": map[string]any{keyMediaType: mediaTypeText},
 			},
 		}),

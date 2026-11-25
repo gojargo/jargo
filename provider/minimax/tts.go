@@ -13,8 +13,7 @@ import (
 	"net/url"
 	"strings"
 
-	ttsadapter "github.com/gojargo/jargo/adapter/tts"
-	ttsminimax "github.com/gojargo/jargo/adapter/tts/minimax"
+	"github.com/gojargo/jargo/expressive"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/service/tts"
 	errs "github.com/gojargo/jargo/utils/errors"
@@ -53,11 +52,11 @@ func (s *synthesizer) SampleRate() int { return s.cfg.SampleRate }
 
 // ExpressionAdapter implements tts.ExpressionAdapterProvider: speech-2.8 models
 // perform expression, and the others none.
-func (s *synthesizer) ExpressionAdapter() ttsadapter.ExpressionAdapter {
+func (s *synthesizer) ExpressionAdapter() expressive.ExpressionAdapter {
 	if strings.HasPrefix(s.cfg.Model, "speech-2.8") {
-		return ttsminimax.MiniMaxExpressionAdapter{}
+		return ExpressionAdapter{}
 	}
-	return ttsadapter.BaseExpressionAdapter{}
+	return expressive.BaseExpressionAdapter{}
 }
 
 // Synthesize requests speech for text and streams the hex-decoded PCM

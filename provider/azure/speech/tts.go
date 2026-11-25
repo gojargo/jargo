@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"strings"
 
-	ttsadapter "github.com/gojargo/jargo/adapter/tts"
+	"github.com/gojargo/jargo/expressive"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/service/tts"
 )
@@ -35,7 +35,7 @@ func (s *ttsSynthesizer) SampleRate() int { return s.cfg.SampleRate }
 // ExpressionAdapter implements tts.ExpressionAdapterProvider: style markers on
 // DragonHD and DragonHD Omni voices, and none on the others. DragonHD Flash
 // voices each have styles of their own, so they perform none.
-func (s *ttsSynthesizer) ExpressionAdapter() ttsadapter.ExpressionAdapter {
+func (s *ttsSynthesizer) ExpressionAdapter() expressive.ExpressionAdapter {
 	return voiceExpressionAdapter(s.cfg.Voice)
 }
 

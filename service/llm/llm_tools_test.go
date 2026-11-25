@@ -11,12 +11,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gojargo/jargo/adapter"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/processor/aggregators"
 	"github.com/gojargo/jargo/service/llm"
+	"github.com/gojargo/jargo/service/llm/adapter"
 	"github.com/gojargo/jargo/utils/events"
 )
 

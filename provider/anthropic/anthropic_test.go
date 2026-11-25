@@ -8,8 +8,8 @@ import (
 	"testing"
 
 	sdk "github.com/anthropics/anthropic-sdk-go"
-	"github.com/gojargo/jargo/adapter"
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/service/llm/adapter"
 	errs "github.com/gojargo/jargo/utils/errors"
 )
 

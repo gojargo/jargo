@@ -15,8 +15,7 @@ import (
 	"io"
 	"net/http"
 
-	ttsadapter "github.com/gojargo/jargo/adapter/tts"
-	ttscartesia "github.com/gojargo/jargo/adapter/tts/cartesia"
+	"github.com/gojargo/jargo/expressive"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/language"
@@ -152,8 +151,8 @@ func (s *httpSynthesizer) ServiceLanguage(l language.Language) string {
 
 // ExpressionAdapter implements tts.ExpressionAdapterProvider: Cartesia's
 // emotions, laughter and pauses.
-func (s *httpSynthesizer) ExpressionAdapter() ttsadapter.ExpressionAdapter {
-	return ttscartesia.CartesiaExpressionAdapter{}
+func (s *httpSynthesizer) ExpressionAdapter() expressive.ExpressionAdapter {
+	return ExpressionAdapter{}
 }
 
 // SampleRate reports the requested PCM output rate.

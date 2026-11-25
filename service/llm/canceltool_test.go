@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gojargo/jargo/adapter"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/service/llm"
+	"github.com/gojargo/jargo/service/llm/adapter"
 )
 
 // advertisingGen exposes the adapter the service adds its built-in tools to, so

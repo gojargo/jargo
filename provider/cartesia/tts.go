@@ -16,8 +16,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/coder/websocket"
-	ttsadapter "github.com/gojargo/jargo/adapter/tts"
-	ttscartesia "github.com/gojargo/jargo/adapter/tts/cartesia"
+	"github.com/gojargo/jargo/expressive"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/processor"
@@ -165,8 +164,8 @@ func (s *synthesizer) SetAudioContextHost(h tts.AudioContextHost) { s.host = h }
 
 // ExpressionAdapter implements tts.ExpressionAdapterProvider: Cartesia's
 // emotions, laughter and pauses.
-func (s *synthesizer) ExpressionAdapter() ttsadapter.ExpressionAdapter {
-	return ttscartesia.CartesiaExpressionAdapter{}
+func (s *synthesizer) ExpressionAdapter() expressive.ExpressionAdapter {
+	return ExpressionAdapter{}
 }
 
 // generationConfig is a request's generation config: the settings', with what

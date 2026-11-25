@@ -5,7 +5,6 @@ import (
 	"strings"
 	"testing"
 
-	responsesadapter "github.com/gojargo/jargo/adapter/responses"
 	"github.com/gojargo/jargo/frames"
 )
 
@@ -64,9 +63,9 @@ func TestReasoningSummaryStreamedAndItemPersisted(t *testing.T) {
 		t.Fatalf("appended %d frames, want the reasoning item once", len(appends))
 	}
 	msg := appends[0].Messages[0]
-	want := responsesadapter.InputItem{
+	want := InputItem{
 		Type: "reasoning", ID: "rs_1",
-		Summary:          []responsesadapter.SummaryPart{{Type: "summary_text", Text: "Thinking..."}},
+		Summary:          []SummaryPart{{Type: "summary_text", Text: "Thinking..."}},
 		EncryptedContent: "ENCRYPTED",
 	}
 	if msg.LLM != "openai_responses" || !reflect.DeepEqual(msg.Native, want) {

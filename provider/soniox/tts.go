@@ -14,8 +14,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	ttsadapter "github.com/gojargo/jargo/adapter/tts"
-	ttssoniox "github.com/gojargo/jargo/adapter/tts/soniox"
+	"github.com/gojargo/jargo/expressive"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/language"
@@ -323,11 +322,11 @@ func (s *ttsSynthesizer) SampleRate() int { return s.cfg.SampleRate }
 
 // ExpressionAdapter implements tts.ExpressionAdapterProvider: audio tags on
 // tts-rt-v2, and none on the other models.
-func (s *ttsSynthesizer) ExpressionAdapter() ttsadapter.ExpressionAdapter {
+func (s *ttsSynthesizer) ExpressionAdapter() expressive.ExpressionAdapter {
 	if strings.HasPrefix(s.live.Model.Or(""), "tts-rt-v2") {
-		return ttssoniox.SonioxExpressionAdapter{}
+		return ExpressionAdapter{}
 	}
-	return ttsadapter.BaseExpressionAdapter{}
+	return expressive.BaseExpressionAdapter{}
 }
 
 // Metadata reports the Soniox model and voice synthesis is billed against.

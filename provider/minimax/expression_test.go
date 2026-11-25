@@ -10,8 +10,7 @@ import (
 	"testing"
 	"time"
 
-	ttsadapter "github.com/gojargo/jargo/adapter/tts"
-	ttsminimax "github.com/gojargo/jargo/adapter/tts/minimax"
+	"github.com/gojargo/jargo/expressive"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 )
@@ -19,11 +18,11 @@ import (
 func TestExpressionAdapterFollowsTheModel(t *testing.T) {
 	for _, tt := range []struct {
 		model   string
-		adapter ttsadapter.ExpressionAdapter
+		adapter expressive.ExpressionAdapter
 	}{
-		{"speech-2.8-turbo", ttsminimax.MiniMaxExpressionAdapter{}},
-		{"speech-2.8-hd", ttsminimax.MiniMaxExpressionAdapter{}},
-		{"speech-2.6-turbo", ttsadapter.BaseExpressionAdapter{}},
+		{"speech-2.8-turbo", ExpressionAdapter{}},
+		{"speech-2.8-hd", ExpressionAdapter{}},
+		{"speech-2.6-turbo", expressive.BaseExpressionAdapter{}},
 	} {
 		s := &synthesizer{cfg: Config{Model: tt.model}}
 		if got := s.ExpressionAdapter(); reflect.TypeOf(got) != reflect.TypeOf(tt.adapter) {

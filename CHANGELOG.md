@@ -222,6 +222,33 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **BREAKING: the `adapter` packages moved next to what they serve.** Each
+  provider's LLM adapter and TTS expression adapter now lives in that
+  provider's package, so no public package shares its name with a provider any
+  more. The conversion code is unchanged. Update imports and qualifiers:
+
+  | Before | After |
+  |---|---|
+  | `adapter` | `service/llm/adapter` |
+  | `adapter/openai` | `provider/openai/chat` |
+  | `adapter/anthropic`, `adapter/deepseek`, `adapter/mistral`, `adapter/perplexity` | `provider/anthropic`, `provider/deepseek`, `provider/mistral`, `provider/perplexity` |
+  | `adapter/gemini`, `adapter/geminiinteractions`, `adapter/geminilive` | `provider/google/gemini`, `provider/google/interactions`, `provider/google/live` |
+  | `adapter/novasonic` | `provider/aws/novasonic` |
+  | `adapter/realtime`, `adapter/responses` | `provider/openai/realtime`, `provider/openai/responses` |
+  | `adapter/tts` (`ExpressionAdapter`, `BaseExpressionAdapter`, `DeliveryTags`) | `expressive` |
+  | `adapter/tts/cartesia`: `CartesiaExpressionAdapter`, `CartesiaEmotion`, `CartesiaSpeeds` | `cartesia.ExpressionAdapter`, `cartesia.Emotion`, `cartesia.Speeds` |
+  | `adapter/tts/elevenlabs`: `ElevenLabsAudioTagExpressionAdapter` | `elevenlabs.AudioTagExpressionAdapter` |
+  | `adapter/tts/fish`: `FishAudioS2ExpressionAdapter` | `fish.S2ExpressionAdapter` |
+  | `adapter/tts/inworld`: `InworldExpressionAdapter`, `InworldFlashExpressionAdapter` | `inworld.ExpressionAdapter`, `inworld.FlashExpressionAdapter` |
+  | `adapter/tts/minimax`: `MiniMaxExpressionAdapter`, `MiniMaxSpeeds` | `minimax.ExpressionAdapter`, `minimax.Speeds` |
+  | `adapter/tts/soniox`, `adapter/tts/mistral`: `SonioxExpressionAdapter`, `MistralExpressionAdapter` | `soniox.ExpressionAdapter`, `mistral.ExpressionAdapter` |
+  | `adapter/tts/azure`: `AzureHDExpressionAdapter` | `speech.HDExpressionAdapter` (in `provider/azure/speech`) |
+  | `adapter/tts/gemini`: `Gemini38ExpressionAdapter` | `gemini.TTSExpressionAdapter` (in `provider/google/gemini`) |
+
+  The aliases that re-exported adapter types are gone, since the types are now
+  declared where the aliases were: `chat.Message`, `chat.ToolCall`,
+  `chat.ToolCallFunction`, the `chat.Role*` constants, and `cartesia.Emotion`
+  with the `cartesia.Emotion*` constants keep their names.
 - **Turn completion is an LLM extension.** `llm.LLMTurnCompletionLLMExtension`
   is installed by `turns.LLMTurnCompletionStop` over a settings update, one per
   service. The async-tool guidance and `cancel_<name>` tools come from

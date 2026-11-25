@@ -4,7 +4,6 @@ import (
 	"strconv"
 	"strings"
 
-	ttscartesia "github.com/gojargo/jargo/adapter/tts/cartesia"
 	"github.com/gojargo/jargo/utils/text"
 )
 
@@ -16,75 +15,6 @@ import (
 // what the conversation records stay free of it. Text handed over with markup in
 // it works too, and the service holds off on a sentence boundary inside a spell
 // tag either way.
-
-// Emotion guides the emotional tone of the speech. Cartesia recognizes the set
-// below; the recommended voices for it are Leo, Jace, Kyle, Gavin, Maya, Tessa,
-// Dana and Marian. It is the emotion its expression adapter performs in an
-// expressive conversation.
-type Emotion = ttscartesia.CartesiaEmotion
-
-// The emotions Cartesia recognizes.
-const (
-	EmotionNeutral       = ttscartesia.EmotionNeutral
-	EmotionAngry         = ttscartesia.EmotionAngry
-	EmotionExcited       = ttscartesia.EmotionExcited
-	EmotionContent       = ttscartesia.EmotionContent
-	EmotionSad           = ttscartesia.EmotionSad
-	EmotionScared        = ttscartesia.EmotionScared
-	EmotionHappy         = ttscartesia.EmotionHappy
-	EmotionEnthusiastic  = ttscartesia.EmotionEnthusiastic
-	EmotionElated        = ttscartesia.EmotionElated
-	EmotionEuphoric      = ttscartesia.EmotionEuphoric
-	EmotionTriumphant    = ttscartesia.EmotionTriumphant
-	EmotionAmazed        = ttscartesia.EmotionAmazed
-	EmotionSurprised     = ttscartesia.EmotionSurprised
-	EmotionFlirtatious   = ttscartesia.EmotionFlirtatious
-	EmotionJokingComedic = ttscartesia.EmotionJokingComedic
-	EmotionCurious       = ttscartesia.EmotionCurious
-	EmotionPeaceful      = ttscartesia.EmotionPeaceful
-	EmotionSerene        = ttscartesia.EmotionSerene
-	EmotionCalm          = ttscartesia.EmotionCalm
-	EmotionGrateful      = ttscartesia.EmotionGrateful
-	EmotionAffectionate  = ttscartesia.EmotionAffectionate
-	EmotionTrust         = ttscartesia.EmotionTrust
-	EmotionSympathetic   = ttscartesia.EmotionSympathetic
-	EmotionAnticipation  = ttscartesia.EmotionAnticipation
-	EmotionMysterious    = ttscartesia.EmotionMysterious
-	EmotionMad           = ttscartesia.EmotionMad
-	EmotionOutraged      = ttscartesia.EmotionOutraged
-	EmotionFrustrated    = ttscartesia.EmotionFrustrated
-	EmotionAgitated      = ttscartesia.EmotionAgitated
-	EmotionThreatened    = ttscartesia.EmotionThreatened
-	EmotionDisgusted     = ttscartesia.EmotionDisgusted
-	EmotionContempt      = ttscartesia.EmotionContempt
-	EmotionEnvious       = ttscartesia.EmotionEnvious
-	EmotionSarcastic     = ttscartesia.EmotionSarcastic
-	EmotionIronic        = ttscartesia.EmotionIronic
-	EmotionDejected      = ttscartesia.EmotionDejected
-	EmotionMelancholic   = ttscartesia.EmotionMelancholic
-	EmotionDisappointed  = ttscartesia.EmotionDisappointed
-	EmotionHurt          = ttscartesia.EmotionHurt
-	EmotionGuilty        = ttscartesia.EmotionGuilty
-	EmotionBored         = ttscartesia.EmotionBored
-	EmotionTired         = ttscartesia.EmotionTired
-	EmotionRejected      = ttscartesia.EmotionRejected
-	EmotionNostalgic     = ttscartesia.EmotionNostalgic
-	EmotionWistful       = ttscartesia.EmotionWistful
-	EmotionApologetic    = ttscartesia.EmotionApologetic
-	EmotionHesitant      = ttscartesia.EmotionHesitant
-	EmotionInsecure      = ttscartesia.EmotionInsecure
-	EmotionConfused      = ttscartesia.EmotionConfused
-	EmotionResigned      = ttscartesia.EmotionResigned
-	EmotionAnxious       = ttscartesia.EmotionAnxious
-	EmotionPanicked      = ttscartesia.EmotionPanicked
-	EmotionAlarmed       = ttscartesia.EmotionAlarmed
-	EmotionProud         = ttscartesia.EmotionProud
-	EmotionConfident     = ttscartesia.EmotionConfident
-	EmotionDistant       = ttscartesia.EmotionDistant
-	EmotionSkeptical     = ttscartesia.EmotionSkeptical
-	EmotionContemplative = ttscartesia.EmotionContemplative
-	EmotionDetermined    = ttscartesia.EmotionDetermined
-)
 
 // Spell wraps text so Cartesia reads it out character by character, which is how
 // a reference number or a code is said aloud.

@@ -10,10 +10,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gojargo/jargo/adapter"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/providertest"
 	"github.com/gojargo/jargo/service/llm"
+	"github.com/gojargo/jargo/service/llm/adapter"
 )
 
 // sse renders data lines as streamGenerateContent delivers them with alt=sse.

@@ -14,12 +14,11 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/gojargo/jargo/adapter"
-	geminiadapter "github.com/gojargo/jargo/adapter/gemini"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/provider/google/internal/stream"
 	"github.com/gojargo/jargo/service/llm"
+	"github.com/gojargo/jargo/service/llm/adapter"
 	"github.com/gojargo/jargo/service/settings"
 	errs "github.com/gojargo/jargo/utils/errors"
 	"github.com/google/uuid"
@@ -59,7 +58,7 @@ func (s apiKeyShaper) Authorize(_ context.Context, req *http.Request) error {
 type Service struct {
 	*llm.Base
 	// adapter converts the conversation into the request Gemini takes.
-	adapter geminiadapter.Adapter
+	adapter Adapter
 	cfg     Config
 	// live is what an LLMUpdateSettingsFrame may change while the pipeline runs.
 	// It is seeded from cfg, and is what every request is built from.
@@ -597,19 +596,19 @@ func (r *responseStream) keepThoughtSignature(p genPart, callID string) error {
 	var bookmark map[string]any
 	switch {
 	case p.FunctionCall != nil:
-		bookmark = map[string]any{geminiadapter.BookmarkFunctionCall: callID}
+		bookmark = map[string]any{BookmarkFunctionCall: callID}
 	case p.InlineData != nil && p.InlineData.Data != "":
-		bookmark = map[string]any{geminiadapter.BookmarkInlineData: map[string]any{
+		bookmark = map[string]any{BookmarkInlineData: map[string]any{
 			"mimeType": p.InlineData.MimeType, "data": p.InlineData.Data,
 		}}
 	case p.Text != nil:
-		bookmark = map[string]any{geminiadapter.BookmarkText: r.accumulated.String()}
+		bookmark = map[string]any{BookmarkText: r.accumulated.String()}
 	default:
 		slog.WarnContext(r.ctx, "thought signature found on an unhandled part type",
 			"service", r.s.Name())
 		return nil
 	}
-	msg := geminiadapter.NewThoughtSignature(p.ThoughtSignature, bookmark)
+	msg := NewThoughtSignature(p.ThoughtSignature, bookmark)
 	return r.s.PushFrame(r.ctx,
 		frames.NewLLMMessagesAppendFrame([]frames.Message{msg}), processor.Downstream)
 }

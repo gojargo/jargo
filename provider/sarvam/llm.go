@@ -7,7 +7,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/gojargo/jargo/adapter/openai"
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/provider/openai/chat"
 	"github.com/gojargo/jargo/service/settings"
@@ -179,7 +178,7 @@ func (s *LLMSettings) editRequest(body map[string]any) {
 // checkRequest refuses a turn the model cannot serve, naming why, so the error
 // says what to change rather than the request failing on Sarvam's side or the
 // setting being dropped without a word.
-func (s *LLMSettings) checkRequest(p openai.Params) error {
+func (s *LLMSettings) checkRequest(p chat.Params) error {
 	if err := checkToolParameters(p); err != nil {
 		return err
 	}
@@ -190,7 +189,7 @@ func (s *LLMSettings) checkRequest(p openai.Params) error {
 }
 
 // checkToolParameters refuses a tool_choice sent without tools to choose from.
-func checkToolParameters(p openai.Params) error {
+func checkToolParameters(p chat.Params) error {
 	if p.ToolChoice != "" && len(p.Tools) == 0 {
 		return errToolChoiceWithoutTools
 	}
@@ -198,7 +197,7 @@ func checkToolParameters(p openai.Params) error {
 }
 
 // checkVisionSupport refuses an image sent to a model that cannot see.
-func (s *LLMSettings) checkVisionSupport(p openai.Params) error {
+func (s *LLMSettings) checkVisionSupport(p chat.Params) error {
 	model := s.Model.Or("")
 	if slices.Contains(visionModels, model) {
 		return nil

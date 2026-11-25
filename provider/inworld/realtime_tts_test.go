@@ -15,8 +15,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	ttsadapter "github.com/gojargo/jargo/adapter/tts"
-	ttsinworld "github.com/gojargo/jargo/adapter/tts/inworld"
+	"github.com/gojargo/jargo/expressive"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/pipeline"
@@ -629,11 +628,11 @@ func TestRealtimeTTSATurnStartingWhileReconnectingDoesNotOpenASecondConnection(t
 func TestRealtimeTTSExpressionAdapterFollowsTheModel(t *testing.T) {
 	for _, tt := range []struct {
 		model   string
-		adapter ttsadapter.ExpressionAdapter
+		adapter expressive.ExpressionAdapter
 	}{
-		{"inworld-tts-2", ttsinworld.InworldExpressionAdapter{}},
-		{"inworld-tts-2-flash", ttsinworld.InworldFlashExpressionAdapter{}},
-		{"inworld-tts-1.5-max", ttsadapter.BaseExpressionAdapter{}},
+		{"inworld-tts-2", ExpressionAdapter{}},
+		{"inworld-tts-2-flash", FlashExpressionAdapter{}},
+		{"inworld-tts-1.5-max", expressive.BaseExpressionAdapter{}},
 	} {
 		_, s := newRealtimeTTS(RealtimeTTSConfig{APIKey: "key", Model: tt.model})
 		if got := s.ExpressionAdapter(); reflect.TypeOf(got) != reflect.TypeOf(tt.adapter) {

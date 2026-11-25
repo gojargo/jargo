@@ -10,7 +10,6 @@ import (
 	"slices"
 	"strings"
 
-	responsesadapter "github.com/gojargo/jargo/adapter/responses"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/service/llm"
 )
@@ -390,13 +389,13 @@ func (s *streamState) reasoningDone(item *outputItem) error {
 	if item.EncryptedContent == "" {
 		return nil
 	}
-	summary := make([]responsesadapter.SummaryPart, 0, len(item.Summary))
+	summary := make([]SummaryPart, 0, len(item.Summary))
 	for _, part := range item.Summary {
-		summary = append(summary, responsesadapter.SummaryPart{
-			Type: responsesadapter.SummaryTypeText, Text: part.Text,
+		summary = append(summary, SummaryPart{
+			Type: SummaryTypeText, Text: part.Text,
 		})
 	}
-	msg := responsesadapter.NewReasoningMessage(item.ID, summary, item.EncryptedContent)
+	msg := NewReasoningMessage(item.ID, summary, item.EncryptedContent)
 	return s.push(frames.NewLLMMessagesAppendFrame([]frames.Message{msg}))
 }
 

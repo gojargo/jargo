@@ -14,13 +14,12 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/gojargo/jargo/adapter"
-	"github.com/gojargo/jargo/adapter/openai"
-	responsesadapter "github.com/gojargo/jargo/adapter/responses"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
+	"github.com/gojargo/jargo/provider/openai/chat"
 	"github.com/gojargo/jargo/provider/openai/internal/apierror"
 	"github.com/gojargo/jargo/service/llm"
+	"github.com/gojargo/jargo/service/llm/adapter"
 	"github.com/gojargo/jargo/service/wsutil"
 	errs "github.com/gojargo/jargo/utils/errors"
 )
@@ -108,7 +107,7 @@ type Service struct {
 	// adapter converts each conversation into a request. It is held rather than
 	// built per request, since it carries the tools the service implements
 	// itself.
-	adapter responsesadapter.Adapter
+	adapter Adapter
 	// http answers a one-shot inference. It is a plain request, so it does not
 	// go near the connection this service holds open for its turns.
 	http *http.Client
@@ -250,7 +249,7 @@ func (s *Service) SupportsResponseSchema() bool { return true }
 // ModelSupportsResponseSchema implements llm.ResponseSchemaSupporter. OpenAI
 // models before gpt-4o-mini and gpt-4o-2024-08-06 cannot enforce a schema.
 func (s *Service) ModelSupportsResponseSchema(model string) bool {
-	return openai.ModelSupportsResponseSchema(model)
+	return chat.ModelSupportsResponseSchema(model)
 }
 
 // Cleanup closes the connection and tears the processor down.
@@ -611,7 +610,7 @@ func startsWithResponseOutput(items []inputItem, output []responseOutput) bool {
 		case itemMessage:
 			role := out.Role
 			if role == "" {
-				role = responsesadapter.RoleAssistant
+				role = RoleAssistant
 			}
 			if in.Role != role || in.Content != out.text() {
 				return false

@@ -18,8 +18,7 @@ import (
 	"strings"
 	"sync"
 
-	ttsadapter "github.com/gojargo/jargo/adapter/tts"
-	ttselevenlabs "github.com/gojargo/jargo/adapter/tts/elevenlabs"
+	"github.com/gojargo/jargo/expressive"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/service/tts"
@@ -217,11 +216,11 @@ func (s *synthesizer) OnTurnContextCompleted(context.Context, string) { s.resetT
 
 // ExpressionAdapter implements tts.ExpressionAdapterProvider: audio tags on
 // Eleven v3 and v4, and none on the other models.
-func (s *synthesizer) ExpressionAdapter() ttsadapter.ExpressionAdapter {
+func (s *synthesizer) ExpressionAdapter() expressive.ExpressionAdapter {
 	if strings.HasPrefix(s.cfg.Model, "eleven_v3") || strings.HasPrefix(s.cfg.Model, "eleven_v4") {
-		return ttselevenlabs.ElevenLabsAudioTagExpressionAdapter{}
+		return AudioTagExpressionAdapter{}
 	}
-	return ttsadapter.BaseExpressionAdapter{}
+	return expressive.BaseExpressionAdapter{}
 }
 
 // Metadata reports the ElevenLabs model and voice synthesis is billed against.

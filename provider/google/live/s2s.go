@@ -15,14 +15,12 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/gojargo/jargo/adapter"
-	geminiadapter "github.com/gojargo/jargo/adapter/gemini"
-	"github.com/gojargo/jargo/adapter/geminilive"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
 	googleframes "github.com/gojargo/jargo/provider/google/frames"
 	"github.com/gojargo/jargo/provider/google/gemini"
 	"github.com/gojargo/jargo/service/llm"
+	"github.com/gojargo/jargo/service/llm/adapter"
 	"github.com/gojargo/jargo/service/settings"
 	"github.com/gojargo/jargo/service/wsutil"
 	textutil "github.com/gojargo/jargo/utils/text"
@@ -33,7 +31,7 @@ import (
 type Service struct {
 	// adapter converts the conversation into what the session takes: the
 	// system instruction, the history, and the tools it carries.
-	adapter geminilive.Adapter
+	adapter Adapter
 	*llm.Base
 	cfg Config
 	// live is what the service holds of its configuration while the pipeline
@@ -579,7 +577,7 @@ func (s *Service) sessionInstructionAndTools() (string, []map[string]any, error)
 
 // sessionParams converts the conversation against what the service was
 // configured with.
-func (s *Service) sessionParams(convo *frames.LLMContext) (geminiadapter.Params, error) {
+func (s *Service) sessionParams(convo *frames.LLMContext) (gemini.Params, error) {
 	return s.adapter.LLMInvocationParams(convo, adapter.Options{
 		SystemInstruction: s.SystemInstruction(),
 		ServiceTools:      s.cfg.Tools,
@@ -1148,7 +1146,7 @@ func (s *Service) sendToolResult(ctx context.Context, toolCallID, result string)
 // result; it is told to stay silent otherwise, so the result is context it can
 // draw on if the conversation turns that way.
 func (s *Service) sendToolResultAs(ctx context.Context, toolCallID, name, result string, final, spoken bool) {
-	payload := geminiadapter.FunctionResponseDict(result)
+	payload := gemini.FunctionResponseDict(result)
 	slog.DebugContext(ctx, "sending a tool result to the live session",
 		"service", s.Name(), "tool_call_id", toolCallID, "function", name)
 	response := map[string]any{

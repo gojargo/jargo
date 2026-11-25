@@ -9,19 +9,18 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gojargo/jargo/adapter"
-	responsesadapter "github.com/gojargo/jargo/adapter/responses"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/providertest"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/service/llm"
+	"github.com/gojargo/jargo/service/llm/adapter"
 	"github.com/gojargo/jargo/utils/events"
 )
 
 // mustRequest builds a request and fails the test if the conversion did.
 func mustRequest(t *testing.T, cfg Config, convo *frames.LLMContext) request {
 	t.Helper()
-	req, err := cfg.newRequest(&responsesadapter.Adapter{}, convo, adapter.Options{}, false)
+	req, err := cfg.newRequest(&Adapter{}, convo, adapter.Options{}, false)
 	if err != nil {
 		t.Fatalf("newRequest: %v", err)
 	}

@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/gojargo/jargo/adapter"
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/service/llm/adapter"
 )
 
 // errCallNotRunning reports a cancellation aimed at a call that has already

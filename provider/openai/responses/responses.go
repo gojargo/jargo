@@ -27,13 +27,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gojargo/jargo/adapter"
-	responsesadapter "github.com/gojargo/jargo/adapter/responses"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/provider/openai/internal/apierror"
 	"github.com/gojargo/jargo/provider/openai/internal/sdkretry"
 	"github.com/gojargo/jargo/service/llm"
+	"github.com/gojargo/jargo/service/llm/adapter"
 	"github.com/gojargo/jargo/service/wsservice"
 )
 
@@ -52,7 +51,7 @@ const (
 const (
 	itemMessage    = "message"
 	itemFuncCall   = "function_call"
-	itemReasoning  = responsesadapter.ItemReasoning
+	itemReasoning  = ItemReasoning
 	itemFuncOutput = "function_call_output"
 )
 
@@ -336,9 +335,9 @@ func warnIfReasoningUnsupported(name string, cfg Config) {
 // package's name.
 type (
 	// inputItem is one entry of a Responses request's input list.
-	inputItem = responsesadapter.InputItem
+	inputItem = InputItem
 	// responsesTool is a function tool advertised on the request.
-	responsesTool = responsesadapter.Tool
+	responsesTool = Tool
 )
 
 // request is a Responses API request.
@@ -373,7 +372,7 @@ const includeEncryptedReasoning = "reasoning.encrypted_content"
 // newRequest builds the request for a conversation, without the streaming or
 // continuation fields the transports set themselves.
 func (c Config) newRequest(
-	a *responsesadapter.Adapter, convo *frames.LLMContext, opts adapter.Options, withTools bool,
+	a *Adapter, convo *frames.LLMContext, opts adapter.Options, withTools bool,
 ) (request, error) {
 	p, err := a.LLMInvocationParams(convo, opts)
 	if err != nil {
@@ -423,7 +422,7 @@ type textFormat struct {
 // the service has already checked it can enforce, and opts.SystemInstruction
 // the instruction to send: the call's own, or else the service's.
 func runInference(
-	ctx context.Context, cfg Config, a *responsesadapter.Adapter, client *http.Client,
+	ctx context.Context, cfg Config, a *Adapter, client *http.Client,
 	convo *frames.LLMContext, opts llm.InferenceOptions, encode func(request) ([]byte, error),
 ) (string, error) {
 	body, err := cfg.newRequest(

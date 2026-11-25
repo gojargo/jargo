@@ -16,21 +16,20 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/gojargo/jargo/adapter"
-	realtimeadapter "github.com/gojargo/jargo/adapter/realtime"
 	"github.com/gojargo/jargo/audio/resample"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/processor/turns"
 	"github.com/gojargo/jargo/provider/openai/realtime/events"
 	"github.com/gojargo/jargo/service/llm"
+	"github.com/gojargo/jargo/service/llm/adapter"
 	"github.com/gojargo/jargo/service/wsutil"
 )
 
 // Service is the Realtime speech-to-speech processor.
 type Service struct {
 	// adapter converts the conversation into what a session takes from it.
-	adapter realtimeadapter.Adapter
+	adapter Adapter
 	*llm.Base
 	cfg Config
 
@@ -542,7 +541,7 @@ func (s *Service) sendToolResult(ctx context.Context, toolCallID, result string)
 func (s *Service) sendMessageItem(ctx context.Context, text, role string) {
 	item := events.NewConversationItem(events.ItemMessage)
 	item.Role = role
-	item.Content = []events.ItemContent{{Type: "input_text", Text: text}}
+	item.Content = []events.ItemContent{{Type: contentInputText, Text: text}}
 	s.sendEvent(ctx, events.NewConversationItemCreateEvent(item))
 }
 

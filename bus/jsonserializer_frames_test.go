@@ -11,12 +11,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gojargo/jargo/adapter"
-	"github.com/gojargo/jargo/adapter/openai"
 	"github.com/gojargo/jargo/bus"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
+	"github.com/gojargo/jargo/provider/openai/chat"
+	"github.com/gojargo/jargo/service/llm/adapter"
 	"github.com/gojargo/jargo/service/settings"
 )
 
@@ -232,12 +232,12 @@ func TestVADFrameCrosses(t *testing.T) {
 // object it is, and its adapter still reads it.
 func TestSpecificMessageCrosses(t *testing.T) {
 	c := frames.NewLLMContext("")
-	c.AddMessage(frames.NewLLMSpecificMessage("openai", openai.Message{Role: "user", Content: "hi"}))
+	c.AddMessage(frames.NewLLMSpecificMessage("openai", chat.Message{Role: "user", Content: "hi"}))
 	got := crossedFrame[*frames.LLMContextFrame](t, frames.NewLLMContextFrame(c)).Context.Messages()
 	if len(got) != 1 {
 		t.Fatalf("messages = %+v, want the one sent", got)
 	}
-	native, err := adapter.NativeMessage[openai.Message](got[0])
+	native, err := adapter.NativeMessage[chat.Message](got[0])
 	if err != nil {
 		t.Fatalf("the adapter cannot read the native message (%T): %v", got[0].Native, err)
 	}

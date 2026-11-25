@@ -16,7 +16,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	ttsadapter "github.com/gojargo/jargo/adapter/tts"
+	"github.com/gojargo/jargo/expressive"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/language"
@@ -269,7 +269,7 @@ func (s *realtimeSynthesizer) Metadata() tts.Metadata {
 
 // ExpressionAdapter implements tts.ExpressionAdapterProvider: audio markup on
 // TTS-2 models, and none on the older ones.
-func (s *realtimeSynthesizer) ExpressionAdapter() ttsadapter.ExpressionAdapter {
+func (s *realtimeSynthesizer) ExpressionAdapter() expressive.ExpressionAdapter {
 	return tts2ExpressionAdapter(s.live.Model.Or(""))
 }
 
