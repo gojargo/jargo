@@ -14,7 +14,6 @@ import (
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/processor/aggregators"
-	"github.com/gojargo/jargo/processor/dtmf"
 	"github.com/gojargo/jargo/processor/rtvi"
 )
 
@@ -139,7 +138,7 @@ func buildFakeBot(in, out processor.Processor) *pipeline.Worker {
 func buildDTMFBot(in, out processor.Processor) *pipeline.Worker {
 	agg := aggregators.New(frames.NewLLMContext("test system"))
 	rtviProc := rtvi.NewProcessor()
-	keys := dtmf.NewAggregator(dtmf.AggregatorConfig{})
+	keys := aggregators.NewDTMFAggregator(aggregators.DTMFAggregatorConfig{})
 	return pipeline.NewWorker(pipeline.New(
 		rtviProc, in, keys, agg.User(), newFakeLLM(), out, agg.Assistant(),
 	), pipeline.WorkerConfig{

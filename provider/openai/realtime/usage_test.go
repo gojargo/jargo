@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/gojargo/jargo/frames"
-	"github.com/gojargo/jargo/provider/openai/realtime/events"
+	"github.com/gojargo/jargo/provider/openai/realtime/protocol"
 )
 
 // TestResponseDoneUsageParsing feeds a response.done event and asserts the token
@@ -32,7 +32,7 @@ func TestResponseDoneUsageParsing(t *testing.T) {
 		}
 	}`
 
-	var ev events.ServerEvent
+	var ev protocol.ServerEvent
 	if err := json.Unmarshal([]byte(raw), &ev); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -60,7 +60,7 @@ func TestResponseDoneUsageParsing(t *testing.T) {
 // the usage nil, so the service does not report spurious token usage.
 func TestNonResponseEventHasNoUsage(t *testing.T) {
 	raw := `{"type": "response.output_audio.delta", "delta": "AAAA"}`
-	var ev events.ServerEvent
+	var ev protocol.ServerEvent
 	if err := json.Unmarshal([]byte(raw), &ev); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}

@@ -16,7 +16,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	llmclassifier "github.com/gojargo/jargo/classifier/llm"
+	"github.com/gojargo/jargo/classifier/llmclassifier"
 	"github.com/gojargo/jargo/eval"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"

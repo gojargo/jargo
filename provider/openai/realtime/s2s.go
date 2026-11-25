@@ -20,7 +20,7 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/processor/turns"
-	"github.com/gojargo/jargo/provider/openai/realtime/events"
+	"github.com/gojargo/jargo/provider/openai/realtime/protocol"
 	"github.com/gojargo/jargo/service/llm"
 	"github.com/gojargo/jargo/service/llm/adapter"
 	"github.com/gojargo/jargo/service/wsutil"
@@ -356,7 +356,7 @@ func (s *Service) sendSessionUpdate(ctx context.Context) {
 	} else {
 		sp.WireTools = s.adapter.ToProviderToolsFormat(s.adapter.WithBuiltins(sp.Tools))
 	}
-	s.sendEvent(ctx, events.NewSessionUpdateEvent(s.stripUnsupportedReasoning(sp)))
+	s.sendEvent(ctx, protocol.NewSessionUpdateEvent(s.stripUnsupportedReasoning(sp)))
 }
 
 // PushFrame pushes a frame, delivering function call outcomes to the session on
@@ -531,18 +531,18 @@ func (s *Service) sendToolResult(ctx context.Context, toolCallID, result string)
 	s.mu.Lock()
 	delete(s.openCalls, toolCallID)
 	s.mu.Unlock()
-	item := events.NewConversationItem(events.ItemFunctionCallOutput)
+	item := protocol.NewConversationItem(protocol.ItemFunctionCallOutput)
 	item.CallID, item.Output = toolCallID, result
-	s.sendEvent(ctx, events.NewConversationItemCreateEvent(item))
+	s.sendEvent(ctx, protocol.NewConversationItemCreateEvent(item))
 }
 
 // sendMessageItem puts text into the conversation for the model to take in,
 // without answering it.
 func (s *Service) sendMessageItem(ctx context.Context, text, role string) {
-	item := events.NewConversationItem(events.ItemMessage)
+	item := protocol.NewConversationItem(protocol.ItemMessage)
 	item.Role = role
-	item.Content = []events.ItemContent{{Type: contentInputText, Text: text}}
-	s.sendEvent(ctx, events.NewConversationItemCreateEvent(item))
+	item.Content = []protocol.ItemContent{{Type: contentInputText, Text: text}}
+	s.sendEvent(ctx, protocol.NewConversationItemCreateEvent(item))
 }
 
 // handleFunctionCallResult sends one function call result to the session as it
@@ -629,7 +629,7 @@ func (s *Service) createResponse(ctx context.Context) {
 			s.mu.Lock()
 			s.addedManually[item.ID] = true
 			s.mu.Unlock()
-			s.sendEvent(ctx, events.NewConversationItemCreateEvent(item))
+			s.sendEvent(ctx, protocol.NewConversationItemCreateEvent(item))
 		}
 		s.sendSessionUpdate(ctx)
 		s.mu.Lock()
@@ -646,19 +646,19 @@ func (s *Service) createResponse(ctx context.Context) {
 	_ = s.PushFrame(ctx, frames.NewLLMFullResponseStartFrame(), processor.Downstream)
 	s.StartProcessingMetrics()
 	s.StartTTFBMetrics()
-	s.sendEvent(ctx, events.NewResponseCreateEvent(&events.ResponseProperties{
+	s.sendEvent(ctx, protocol.NewResponseCreateEvent(&protocol.ResponseProperties{
 		OutputModalities: s.enabledModalities(),
 	}))
 }
 
 // enabledModalities is what a response is made of: audio when the session
 // responds with it, text otherwise. The API takes one modality per response.
-func (s *Service) enabledModalities() []events.Modality {
+func (s *Service) enabledModalities() []protocol.Modality {
 	modalities := s.sessionProperties().OutputModalities
-	if len(modalities) == 0 || slices.Contains(modalities, events.ModalityAudio) {
-		return []events.Modality{events.ModalityAudio}
+	if len(modalities) == 0 || slices.Contains(modalities, protocol.ModalityAudio) {
+		return []protocol.Modality{protocol.ModalityAudio}
 	}
-	return []events.Modality{events.ModalityText}
+	return []protocol.Modality{protocol.ModalityText}
 }
 
 // ResetConversation starts the conversation over: the session is closed and
@@ -679,7 +679,7 @@ func (s *Service) ResetConversation(ctx context.Context) error {
 
 // retrieval is the outcome of retrieving a conversation item.
 type retrieval struct {
-	item *events.ConversationItem
+	item *protocol.ConversationItem
 	err  error
 }
 
@@ -688,14 +688,14 @@ var errRetrieve = errors.New("openairealtime: retrieving a conversation item")
 
 // RetrieveConversationItem asks the server for a conversation item and waits
 // for it. Callers asking for the same item share one request.
-func (s *Service) RetrieveConversationItem(ctx context.Context, itemID string) (*events.ConversationItem, error) {
+func (s *Service) RetrieveConversationItem(ctx context.Context, itemID string) (*protocol.ConversationItem, error) {
 	ch := make(chan retrieval, 1)
 	s.mu.Lock()
 	inFlight := len(s.retrievals[itemID]) > 0
 	s.retrievals[itemID] = append(s.retrievals[itemID], ch)
 	s.mu.Unlock()
 	if !inFlight {
-		ev := events.NewConversationItemRetrieveEvent(itemID)
+		ev := protocol.NewConversationItemRetrieveEvent(itemID)
 		// The id names the item, so a failed retrieval can be traced back to it.
 		ev.EventID = "rci_" + itemID
 		s.sendEvent(ctx, ev)
@@ -728,7 +728,7 @@ func (s *Service) sendAudio(ctx context.Context, audio frames.AudioRawData) {
 	if len(pcm) == 0 {
 		return
 	}
-	s.sendEvent(ctx, events.NewInputAudioBufferAppendEvent(base64.StdEncoding.EncodeToString(pcm)))
+	s.sendEvent(ctx, protocol.NewInputAudioBufferAppendEvent(base64.StdEncoding.EncodeToString(pcm)))
 
 	// With the server's turn detection off, the most recent audio is kept, so
 	// an interruption that clears the input buffer can put back the speech that
@@ -763,7 +763,7 @@ func (s *Service) replayPreroll(ctx context.Context) {
 	if len(pcm) == 0 {
 		return
 	}
-	s.sendEvent(ctx, events.NewInputAudioBufferAppendEvent(base64.StdEncoding.EncodeToString(pcm)))
+	s.sendEvent(ctx, protocol.NewInputAudioBufferAppendEvent(base64.StdEncoding.EncodeToString(pcm)))
 }
 
 // handleUserStoppedSpeaking commits the user's turn and asks for a response,
@@ -772,8 +772,8 @@ func (s *Service) handleUserStoppedSpeaking(ctx context.Context) {
 	if !s.turnDetectionDisabled() {
 		return
 	}
-	s.sendEvent(ctx, events.NewInputAudioBufferCommitEvent())
-	s.sendEvent(ctx, events.NewResponseCreateEvent(nil))
+	s.sendEvent(ctx, protocol.NewInputAudioBufferCommitEvent())
+	s.sendEvent(ctx, protocol.NewResponseCreateEvent(nil))
 }
 
 // handleSpeechControlParams sizes the pre-roll from the start delay of the
@@ -891,7 +891,7 @@ func (s *Service) disconnect() {
 }
 
 // tokenUsage converts the wire accounting into the framework's usage shape.
-func tokenUsage(u *events.Usage) frames.LLMTokenUsage {
+func tokenUsage(u *protocol.Usage) frames.LLMTokenUsage {
 	out := frames.LLMTokenUsage{
 		PromptTokens:     valueOr(u.InputTokens),
 		CompletionTokens: valueOr(u.OutputTokens),
@@ -931,7 +931,7 @@ func (s *Service) readLoop(conn *wsutil.Conn, connCtx context.Context) {
 			}
 			return
 		}
-		ev, err := events.ParseServerEvent(data)
+		ev, err := protocol.ParseServerEvent(data)
 		if err != nil {
 			s.PushError(connCtx, "openai realtime: reading a server event", err, false)
 			return
@@ -947,7 +947,7 @@ func (s *Service) readLoop(conn *wsutil.Conn, connCtx context.Context) {
 
 // handleEvent maps a server event onto pipeline frames, reporting whether the
 // session has failed in a way that ends the read loop.
-func (s *Service) handleEvent(ctx context.Context, ev *events.ServerEvent) bool {
+func (s *Service) handleEvent(ctx context.Context, ev *protocol.ServerEvent) bool {
 	switch {
 	case s.handleTurnEvent(ctx, ev):
 		return false
@@ -993,7 +993,7 @@ func (s *Service) handleEvent(ctx context.Context, ev *events.ServerEvent) bool 
 // service recommends decide the turn from it and broadcast the interruption,
 // which comes back here as the frame that truncates what the model believes it
 // said.
-func (s *Service) handleTurnEvent(ctx context.Context, ev *events.ServerEvent) bool {
+func (s *Service) handleTurnEvent(ctx context.Context, ev *protocol.ServerEvent) bool {
 	switch ev.Type {
 	case "input_audio_buffer.speech_started":
 		// The model has stopped speaking as far as the caller is concerned, so
@@ -1018,7 +1018,7 @@ func (s *Service) handleTurnEvent(ctx context.Context, ev *events.ServerEvent) b
 // audio, the transcript of that audio, the same answer in text from a session
 // answering in that modality, and the end of the response. It reports whether it
 // took the event.
-func (s *Service) handleResponseEvent(ctx context.Context, ev *events.ServerEvent) bool {
+func (s *Service) handleResponseEvent(ctx context.Context, ev *protocol.ServerEvent) bool {
 	switch ev.Type {
 	case "response.created":
 		// The response takes in everything delivered before it.
@@ -1057,7 +1057,7 @@ func (s *Service) handleResponseEvent(ctx context.Context, ev *events.ServerEven
 // response opens the spoken answer; a chunk of the next output item of the same
 // response continues it, the item being tracked anew so an interruption cuts
 // back the item the caller was hearing.
-func (s *Service) handleAudioDelta(ctx context.Context, ev *events.ServerEvent) {
+func (s *Service) handleAudioDelta(ctx context.Context, ev *protocol.ServerEvent) {
 	s.ReportTTFBMetrics(ctx)
 	s.mu.Lock()
 	started := false
@@ -1093,7 +1093,7 @@ func (s *Service) handleAudioDelta(ctx context.Context, ev *events.ServerEvent) 
 // handleResponseDone closes the response: its usage is reported, a spoken
 // answer is closed with a TTS stop and the response with its end, a response
 // owed behind it is created, and one that failed is reported as an error.
-func (s *Service) handleResponseDone(ctx context.Context, ev *events.ServerEvent) {
+func (s *Service) handleResponseDone(ctx context.Context, ev *protocol.ServerEvent) {
 	s.reportUsage(ctx, ev)
 	s.StopProcessingMetrics(ctx)
 	s.mu.Lock()
@@ -1141,9 +1141,9 @@ func (s *Service) handleInterruption(ctx context.Context) {
 		// The pipeline detected the turn, so the session is told: what it has
 		// buffered is cleared, the speech that started the turn is put back, and
 		// the response is canceled.
-		s.sendEvent(ctx, events.NewInputAudioBufferClearEvent())
+		s.sendEvent(ctx, protocol.NewInputAudioBufferClearEvent())
 		s.replayPreroll(ctx)
-		s.sendEvent(ctx, events.NewResponseCancelEvent())
+		s.sendEvent(ctx, protocol.NewResponseCancelEvent())
 	}
 	s.truncateAudioResponse(ctx)
 	s.StopAllMetrics(ctx)
@@ -1153,7 +1153,7 @@ func (s *Service) handleInterruption(ctx context.Context) {
 	s.mu.Unlock()
 	if responding {
 		_ = s.PushFrame(ctx, frames.NewLLMFullResponseEndFrame(), processor.Downstream)
-		if slices.Contains(s.outputModalities(), events.ModalityAudio) {
+		if slices.Contains(s.outputModalities(), protocol.ModalityAudio) {
 			_ = s.PushFrame(ctx, frames.NewTTSStoppedFrame(), processor.Downstream)
 		}
 	}
@@ -1161,11 +1161,11 @@ func (s *Service) handleInterruption(ctx context.Context) {
 
 // outputModalities are what the session responds with: audio and text unless
 // the session properties say otherwise.
-func (s *Service) outputModalities() []events.Modality {
+func (s *Service) outputModalities() []protocol.Modality {
 	if m := s.sessionProperties().OutputModalities; len(m) > 0 {
 		return m
 	}
-	return []events.Modality{events.ModalityAudio, events.ModalityText}
+	return []protocol.Modality{protocol.ModalityAudio, protocol.ModalityText}
 }
 
 // handleTranscriptEvent takes what the session heard the user say, reporting
@@ -1173,7 +1173,7 @@ func (s *Service) outputModalities() []events.Modality {
 //
 // A transcript travels upstream, where the user aggregator is: it is the user's
 // message, and everything downstream of this service is the reply to it.
-func (s *Service) handleTranscriptEvent(ctx context.Context, ev *events.ServerEvent) bool {
+func (s *Service) handleTranscriptEvent(ctx context.Context, ev *protocol.ServerEvent) bool {
 	switch ev.Type {
 	case "conversation.item.input_audio_transcription.delta":
 		_ = s.PushFrame(ctx, frames.NewInterimTranscriptionFrame(ev.Delta, "", frames.NowTimestamp()),
@@ -1195,7 +1195,7 @@ func (s *Service) handleTranscriptEvent(ctx context.Context, ev *events.ServerEv
 // what was wanted. So is asking for a response while one is running. Both are
 // logged and the session carries on; anything else is reported and ends the read
 // loop, since the session cannot be relied on afterwards.
-func (s *Service) handleServerError(ctx context.Context, ev *events.ServerEvent) bool {
+func (s *Service) handleServerError(ctx context.Context, ev *protocol.ServerEvent) bool {
 	if ev.Error == nil {
 		return false
 	}
@@ -1237,13 +1237,13 @@ func (s *Service) truncateAudioResponse(ctx context.Context) {
 	endMS := max(0, min(elapsedMS, audioMS))
 	slog.DebugContext(ctx, "truncating the interrupted response", "service", s.Name(),
 		"item_id", resp.itemID, "audio_ms", audioMS, "elapsed_ms", elapsedMS, "end_ms", endMS)
-	s.sendEvent(ctx, events.NewConversationItemTruncateEvent(resp.itemID, resp.contentIndex, int(endMS)))
+	s.sendEvent(ctx, protocol.NewConversationItemTruncateEvent(resp.itemID, resp.contentIndex, int(endMS)))
 }
 
 // handleItemAdded takes an item added to the session's conversation: a tool
 // call the model announced is tracked, and the echo of an item this service put
 // in is recognized as such.
-func (s *Service) handleItemAdded(ctx context.Context, item *events.ConversationItem) {
+func (s *Service) handleItemAdded(ctx context.Context, item *protocol.ConversationItem) {
 	if item == nil {
 		return
 	}
@@ -1265,7 +1265,7 @@ func (s *Service) handleItemAdded(ctx context.Context, item *events.Conversation
 // trackToolCall records a tool call the model has announced. The call is named
 // here and its arguments finish arriving later, so the name has to be kept until
 // they do.
-func (s *Service) trackToolCall(item *events.ConversationItem) {
+func (s *Service) trackToolCall(item *protocol.ConversationItem) {
 	if item == nil || item.Type != "function_call" || item.CallID == "" {
 		return
 	}
@@ -1283,7 +1283,7 @@ func (s *Service) trackToolCall(item *events.ConversationItem) {
 //
 // It runs on the arguments rather than waiting for the response to complete,
 // because a response that only calls a tool may never report itself done.
-func (s *Service) runToolCall(ctx context.Context, ev *events.ServerEvent) {
+func (s *Service) runToolCall(ctx context.Context, ev *protocol.ServerEvent) {
 	s.mu.Lock()
 	name, tracked := s.pendingCalls[ev.CallID]
 	// Taken out first, so a repeated event cannot run the same call twice.
@@ -1323,7 +1323,7 @@ func (s *Service) runToolCall(ctx context.Context, ev *events.ServerEvent) {
 // reportUsage reports the token accounting the completed response was billed
 // on. It arrives with the response it belongs to and is reported before the
 // response is closed.
-func (s *Service) reportUsage(ctx context.Context, ev *events.ServerEvent) {
+func (s *Service) reportUsage(ctx context.Context, ev *protocol.ServerEvent) {
 	if ev.Response == nil || ev.Response.Usage == nil {
 		return
 	}
@@ -1363,7 +1363,7 @@ func (s *Service) ServiceMetadataFrame() frames.ServiceMetadata {
 // The events the service raises about the session's conversation items, each
 // with a ConversationItemEvent.
 //
-//	events.On(svc.Events(), realtime.EventConversationItemUpdated,
+//	protocol.On(svc.Events(), realtime.EventConversationItemUpdated,
 //	    func(ctx context.Context, e realtime.ConversationItemEvent) { … })
 const (
 	// EventConversationItemCreated fires when an item is added to the
@@ -1377,5 +1377,5 @@ const (
 // ConversationItemEvent names a conversation item, and carries it when known.
 type ConversationItemEvent struct {
 	ItemID string
-	Item   *events.ConversationItem
+	Item   *protocol.ConversationItem
 }

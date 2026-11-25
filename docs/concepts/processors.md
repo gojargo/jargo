@@ -210,7 +210,7 @@ recognize the pair and report the event once instead of twice.
 | `processor/aggregators` | `User` / `Assistant` | Build the conversation context. |
 | `processor/rtvi` | RTVI | Bridges pipeline events to an RTVI client. |
 | `processor/audiobuffer` | Audio buffer | Records the conversation. |
-| `processor/dtmf` | DTMF | Telephony keypress handling and aggregation. |
+| `processor/aggregators` | DTMF | `DTMFAggregator` aggregates telephony keypresses. |
 | `processor/ivr` | IVR | IVR navigation. |
 | `processor/voicemail` | Voicemail | Voicemail detection. |
 | `processor/langchain` | LangChain | LangChain-backed LLM bridge. |

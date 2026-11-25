@@ -10,7 +10,7 @@ import (
 	"github.com/gojargo/jargo/audio/vad"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
-	"github.com/gojargo/jargo/provider/openai/realtime/events"
+	"github.com/gojargo/jargo/provider/openai/realtime/protocol"
 )
 
 // Ports of tests/test_openai_realtime_user_audio.py: with the server's turn
@@ -25,13 +25,13 @@ func (r *sentEvents) kinds() []string {
 	out := make([]string, 0, len(r.events))
 	for _, e := range r.events {
 		switch ev := e.(type) {
-		case events.InputAudioBufferAppendEvent:
+		case protocol.InputAudioBufferAppendEvent:
 			out = append(out, ev.Type)
-		case events.ClientEvent:
+		case protocol.ClientEvent:
 			out = append(out, ev.Type)
-		case events.ConversationItemTruncateEvent:
+		case protocol.ConversationItemTruncateEvent:
 			out = append(out, ev.Type)
-		case events.ResponseCreateEvent:
+		case protocol.ResponseCreateEvent:
 			out = append(out, ev.Type)
 		}
 	}
@@ -44,7 +44,7 @@ func (r *sentEvents) appendPayloads() []string {
 	defer r.mu.Unlock()
 	var out []string
 	for _, e := range r.events {
-		if ev, ok := e.(events.InputAudioBufferAppendEvent); ok {
+		if ev, ok := e.(protocol.InputAudioBufferAppendEvent); ok {
 			out = append(out, ev.Audio)
 		}
 	}
@@ -63,8 +63,8 @@ func userAudioService(t *testing.T, manual bool, prerollSecs *float64) (*Service
 	t.Helper()
 	cfg := Config{UserAudioPrerollSecs: prerollSecs}
 	if manual {
-		cfg.SessionProperties = events.SessionProperties{
-			Audio: &events.AudioConfiguration{Input: &events.AudioInput{TurnDetection: events.NoTurnDetection()}},
+		cfg.SessionProperties = protocol.SessionProperties{
+			Audio: &protocol.AudioConfiguration{Input: &protocol.AudioInput{TurnDetection: protocol.NoTurnDetection()}},
 		}
 	}
 	s, sent := offlineService(t, cfg)

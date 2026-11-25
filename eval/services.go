@@ -12,7 +12,7 @@ import (
 	"sync"
 
 	"github.com/gojargo/jargo/classifier"
-	llmclassifier "github.com/gojargo/jargo/classifier/llm"
+	"github.com/gojargo/jargo/classifier/llmclassifier"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/provider/cartesia"
 	"github.com/gojargo/jargo/provider/kokoro"
@@ -416,9 +416,9 @@ func cartesiaService(cfg *SpeechConfig) (*tts.Base, error) {
 // ClassifierFromConfig builds the classifier a `judge.eval:` block names.
 //
 // A factory builds it, and may return a classifier.Classifier or an LLM
-// service (an llm.Inferencer), which a classifier/llm classifier then asks.
+// service (an llm.Inferencer), which a classifier/llmclassifier classifier then asks.
 // Otherwise the block names an LLM, as LLMServiceFromConfig reads it, and a
-// classifier/llm classifier asks that. where is the block's name in the file,
+// classifier/llmclassifier classifier asks that. where is the block's name in the file,
 // for the errors; a nil cfg uses all the defaults.
 func ClassifierFromConfig(cfg *LLMServiceConfig, where string) (classifier.Classifier, error) {
 	if cfg == nil {

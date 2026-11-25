@@ -5,7 +5,7 @@ import (
 	"reflect"
 	"testing"
 
-	googleframes "github.com/gojargo/jargo/provider/google/frames"
+	googleframes "github.com/gojargo/jargo/provider/google/grounding"
 )
 
 // These tests are not ports of upstream tests: upstream has none for the

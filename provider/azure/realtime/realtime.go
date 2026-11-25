@@ -19,7 +19,7 @@ import (
 
 	"github.com/gojargo/jargo/internal/validate"
 	openairealtime "github.com/gojargo/jargo/provider/openai/realtime"
-	"github.com/gojargo/jargo/provider/openai/realtime/events"
+	"github.com/gojargo/jargo/provider/openai/realtime/protocol"
 )
 
 // TokenProvider supplies a Microsoft Entra ID bearer token, for the
@@ -47,7 +47,7 @@ type Config struct {
 	Instructions string
 	// SessionProperties configure the session; see the OpenAI Realtime
 	// service's Config.
-	SessionProperties events.SessionProperties
+	SessionProperties protocol.SessionProperties
 	// StartAudioPaused and UserAudioPrerollSecs are the OpenAI Realtime
 	// service's; see its Config.
 	StartAudioPaused     bool

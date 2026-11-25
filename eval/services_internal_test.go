@@ -15,7 +15,7 @@ import (
 
 	"github.com/gojargo/jargo/audio/resample"
 	"github.com/gojargo/jargo/classifier"
-	llmclassifier "github.com/gojargo/jargo/classifier/llm"
+	"github.com/gojargo/jargo/classifier/llmclassifier"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/onnxrt"
 	"github.com/gojargo/jargo/language"

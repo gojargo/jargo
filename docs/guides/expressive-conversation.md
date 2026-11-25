@@ -142,7 +142,7 @@ position on the scale.
 
 ```go
 frustration, err := perception.NewSource(perception.SourceConfig{
-	Classifier: judge, // a classifier.Classifier, such as classifier/llm or classifier/jev
+	Classifier: judge, // a classifier.Classifier, such as classifier/llmclassifier or classifier/jev
 	Questions: []perception.NamedQuestion{{
 		Name: "frustration",
 		Question: perception.Question{

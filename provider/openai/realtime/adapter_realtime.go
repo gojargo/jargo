@@ -12,7 +12,7 @@ import (
 
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/provider/openai/chat"
-	"github.com/gojargo/jargo/provider/openai/realtime/events"
+	"github.com/gojargo/jargo/provider/openai/realtime/protocol"
 	"github.com/gojargo/jargo/service/llm/adapter"
 )
 
@@ -41,7 +41,7 @@ type Params struct {
 	// SystemInstruction is the instruction in effect, empty when there is none.
 	SystemInstruction string
 	// Messages are the items to seed the session with.
-	Messages []events.ConversationItem
+	Messages []protocol.ConversationItem
 	// Tools are the tools the session carries, in the API's form.
 	Tools []map[string]any
 }
@@ -86,7 +86,7 @@ func (a *Adapter) LLMInvocationParams(convo *frames.LLMContext, opts adapter.Opt
 // history, with a word to the model on what it is reading. Messages written for
 // another provider, or for this one, are left out: a packed history cannot carry
 // them.
-func (a *Adapter) fromMessages(system string, all []frames.Message) ([]events.ConversationItem, string, error) {
+func (a *Adapter) fromMessages(system string, all []frames.Message) ([]protocol.ConversationItem, string, error) {
 	msgs := make([]frames.Message, 0, len(all))
 	for _, m := range all {
 		if m.IsLLMSpecific() {
@@ -106,7 +106,7 @@ func (a *Adapter) fromMessages(system string, all []frames.Message) ([]events.Co
 		if err != nil {
 			return nil, "", err
 		}
-		return []events.ConversationItem{item}, system, nil
+		return []protocol.ConversationItem{item}, system, nil
 	}
 
 	history, err := chat.ToMessages(msgs, false)
@@ -120,31 +120,31 @@ func (a *Adapter) fromMessages(system string, all []frames.Message) ([]events.Co
 	if err := enc.Encode(history); err != nil {
 		return nil, "", err
 	}
-	item := events.NewConversationItem(events.ItemMessage)
+	item := protocol.NewConversationItem(protocol.ItemMessage)
 	item.Role = string(frames.RoleUser)
-	item.Content = []events.ItemContent{{
+	item.Content = []protocol.ItemContent{{
 		Type: contentInputText,
 		Text: strings.Join([]string{packedIntro, strings.TrimSuffix(buf.String(), "\n"), packedTrailer}, "\n\n"),
 	}}
-	return []events.ConversationItem{item}, system, nil
+	return []protocol.ConversationItem{item}, system, nil
 }
 
 // fromMessage converts one message into an item: a user message, or the first
 // call of an assistant message calling functions.
-func fromMessage(m frames.Message) (events.ConversationItem, error) {
+func fromMessage(m frames.Message) (protocol.ConversationItem, error) {
 	switch {
 	case m.Role == frames.RoleUser:
-		item := events.NewConversationItem(events.ItemMessage)
+		item := protocol.NewConversationItem(protocol.ItemMessage)
 		item.Role = string(frames.RoleUser)
-		item.Content = []events.ItemContent{{Type: contentInputText, Text: m.Text}}
+		item.Content = []protocol.ItemContent{{Type: contentInputText, Text: m.Text}}
 		return item, nil
 	case m.Role == frames.RoleAssistant && len(m.ToolCalls) > 0:
 		call := m.ToolCalls[0]
-		item := events.NewConversationItem(events.ItemFunctionCall)
+		item := protocol.NewConversationItem(protocol.ItemFunctionCall)
 		item.CallID, item.Name, item.Arguments = call.ID, call.Name, string(call.Args)
 		return item, nil
 	default:
-		return events.ConversationItem{}, &adapter.ConversionError{Cause: &unhandledMessageError{role: string(m.Role)}}
+		return protocol.ConversationItem{}, &adapter.ConversionError{Cause: &unhandledMessageError{role: string(m.Role)}}
 	}
 }
 

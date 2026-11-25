@@ -9,7 +9,7 @@ import (
 
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
-	"github.com/gojargo/jargo/provider/openai/realtime/events"
+	"github.com/gojargo/jargo/provider/openai/realtime/protocol"
 )
 
 // Ports of tests/test_openai_realtime_audio_frames.py: a response whose audio
@@ -72,7 +72,7 @@ func drive(t *testing.T, s *Service, evs ...map[string]any) {
 	t.Helper()
 	for _, e := range evs {
 		raw, _ := json.Marshal(e)
-		ev, err := events.ParseServerEvent(raw)
+		ev, err := protocol.ParseServerEvent(raw)
 		if err != nil || ev == nil {
 			t.Fatalf("event %s: %v", raw, err)
 		}
@@ -131,12 +131,12 @@ func (s *Service) trackedItem() string {
 }
 
 // truncates are the truncation events the service sent.
-func (r *sentEvents) truncates() []events.ConversationItemTruncateEvent {
+func (r *sentEvents) truncates() []protocol.ConversationItemTruncateEvent {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	var out []events.ConversationItemTruncateEvent
+	var out []protocol.ConversationItemTruncateEvent
 	for _, e := range r.events {
-		if tr, ok := e.(events.ConversationItemTruncateEvent); ok {
+		if tr, ok := e.(protocol.ConversationItemTruncateEvent); ok {
 			out = append(out, tr)
 		}
 	}
@@ -250,11 +250,11 @@ func TestResponseDoneWithoutUsageReportsNoUsage(t *testing.T) {
 
 func TestCachedAudioTokensAreReported(t *testing.T) {
 	five, three := int64(5), int64(3)
-	got := tokenUsage(&events.Usage{
+	got := tokenUsage(&protocol.Usage{
 		InputTokens: &five, OutputTokens: &five,
-		InputTokenDetails: &events.TokenDetails{
+		InputTokenDetails: &protocol.TokenDetails{
 			CachedTokens:        &five,
-			CachedTokensDetails: &events.CachedTokensDetails{AudioTokens: &three},
+			CachedTokensDetails: &protocol.CachedTokensDetails{AudioTokens: &three},
 		},
 	})
 	if got.CacheReadAudioTokens == nil || *got.CacheReadAudioTokens != 3 {

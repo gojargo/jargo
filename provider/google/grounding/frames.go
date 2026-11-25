@@ -1,7 +1,7 @@
-// Package frames holds the frames the Google services add to the pipeline's
+// Package grounding holds the frames the Google services add to the pipeline's
 // own: the search results and grounding a Gemini model reports when it answers
 // from a web search.
-package frames
+package grounding
 
 import (
 	"fmt"

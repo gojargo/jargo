@@ -25,7 +25,7 @@ import (
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor/aggregators"
 	"github.com/gojargo/jargo/provider/openai/realtime"
-	rtevents "github.com/gojargo/jargo/provider/openai/realtime/events"
+	"github.com/gojargo/jargo/provider/openai/realtime/protocol"
 	"github.com/gojargo/jargo/runner"
 	"github.com/gojargo/jargo/service/llm"
 	"github.com/gojargo/jargo/transport"
@@ -114,12 +114,12 @@ func runBot(ctx context.Context, t transport.Transport, args runner.Arguments) e
 	s2s := realtime.New(realtime.Config{
 		APIKey:       os.Getenv("OPENAI_API_KEY"),
 		Instructions: systemInstruction,
-		SessionProperties: rtevents.SessionProperties{
-			Audio: &rtevents.AudioConfiguration{
-				Input: &rtevents.AudioInput{
-					Transcription:  &rtevents.InputAudioTranscription{},
-					TurnDetection:  rtevents.SemanticVAD(),
-					NoiseReduction: &rtevents.InputAudioNoiseReduction{Type: "near_field"},
+		SessionProperties: protocol.SessionProperties{
+			Audio: &protocol.AudioConfiguration{
+				Input: &protocol.AudioInput{
+					Transcription:  &protocol.InputAudioTranscription{},
+					TurnDetection:  protocol.SemanticVAD(),
+					NoiseReduction: &protocol.InputAudioNoiseReduction{Type: "near_field"},
 				},
 			},
 		},

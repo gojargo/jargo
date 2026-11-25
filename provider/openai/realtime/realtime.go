@@ -9,7 +9,7 @@
 // audio at any other rate is resampled to it before it is sent, and the model's
 // audio comes out at 24 kHz.
 //
-// The session's properties (events.SessionProperties) configure it: its audio,
+// The session's properties (protocol.SessionProperties) configure it: its audio,
 // transcription, turn detection, voice and tools. By default the server detects
 // the user's turns; the service proposes each boundary it reports, and the
 // pipeline's turn strategies turn the proposals into turns and interruptions.
@@ -24,7 +24,7 @@ import (
 	"errors"
 
 	"github.com/gojargo/jargo/internal/validate"
-	"github.com/gojargo/jargo/provider/openai/realtime/events"
+	"github.com/gojargo/jargo/provider/openai/realtime/protocol"
 )
 
 const (
@@ -83,7 +83,7 @@ type Config struct {
 	// own, so the user's audio is not transcribed unless a transcription is
 	// configured. The model and instructions are kept in step with the fields
 	// above, which win.
-	SessionProperties events.SessionProperties
+	SessionProperties protocol.SessionProperties
 	// StartAudioPaused starts the service with user audio paused; see
 	// Service.SetAudioInputPaused.
 	StartAudioPaused bool

@@ -1,11 +1,12 @@
-// Package dtmf aggregates the DTMF keypresses a caller makes into a string a
-// language model can read. Aggregator collects the keys and flushes them on a
-// terminator key or an idle timeout.
+// This file holds the DTMF aggregator, which aggregates the DTMF keypresses a
+// caller makes into a string a language model can read. DTMFAggregator collects
+// the keys and flushes them on a terminator key or an idle timeout.
 //
 // Generating the tones for a key is a separate concern and lives in
 // audio/dtmf, which is what an output transport sounds when it has to carry a
 // keypress as audio.
-package dtmf
+
+package aggregators
 
 import (
 	"context"
@@ -17,18 +18,18 @@ import (
 	"github.com/gojargo/jargo/processor"
 )
 
-// DefaultTimeout is how long the aggregator waits after the last key before it
+// DefaultDTMFTimeout is how long the aggregator waits after the last key before it
 // flushes the digits collected without a terminator.
-const DefaultTimeout = 2 * time.Second
+const DefaultDTMFTimeout = 2 * time.Second
 
-// DefaultPrefix is what the emitted transcription starts with, so the model
+// DefaultDTMFPrefix is what the emitted transcription starts with, so the model
 // can tell a keypad entry from something the user said.
-const DefaultPrefix = "DTMF: "
+const DefaultDTMFPrefix = "DTMF: "
 
-// AggregatorConfig configures a DTMF Aggregator. The zero value is the
+// DTMFAggregatorConfig configures a DTMF Aggregator. The zero value is the
 // defaults: '#' ends an entry, two idle seconds flush one without it, and the
 // transcription starts "DTMF: ".
-type AggregatorConfig struct {
+type DTMFAggregatorConfig struct {
 	// Terminator is the key that flushes the collected digits; empty uses '#'.
 	Terminator frames.KeypadEntry
 	// Timeout flushes the collected digits after this idle period even without a
@@ -40,37 +41,37 @@ type AggregatorConfig struct {
 	Prefix *string
 }
 
-// Aggregator collects the DTMF keys received from the transport into a string
+// DTMFAggregator collects the DTMF keys received from the transport into a string
 // and emits it downstream as a TranscriptionFrame — so an LLM can react to the
 // entered sequence — when the terminator key is pressed or the idle timeout
 // elapses. It forwards the InputDTMFFrames it sees unchanged.
-type Aggregator struct {
+type DTMFAggregator struct {
 	*processor.Base
-	cfg AggregatorConfig
+	cfg DTMFAggregatorConfig
 
 	mu    sync.Mutex
 	buf   strings.Builder
 	timer *time.Timer
 }
 
-// NewAggregator builds a DTMF Aggregator.
-func NewAggregator(cfg AggregatorConfig) *Aggregator {
+// NewDTMFAggregator builds a DTMF Aggregator.
+func NewDTMFAggregator(cfg DTMFAggregatorConfig) *DTMFAggregator {
 	if cfg.Terminator == "" {
 		cfg.Terminator = frames.KeypadPound
 	}
 	if cfg.Timeout == 0 {
-		cfg.Timeout = DefaultTimeout
+		cfg.Timeout = DefaultDTMFTimeout
 	}
 	if cfg.Prefix == nil {
-		cfg.Prefix = new(DefaultPrefix)
+		cfg.Prefix = new(DefaultDTMFPrefix)
 	}
-	a := &Aggregator{cfg: cfg}
+	a := &DTMFAggregator{cfg: cfg}
 	a.Base = processor.New("DTMFAggregator", a)
 	return a
 }
 
 // ProcessFrame aggregates DTMF keypresses and forwards every frame.
-func (a *Aggregator) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
+func (a *DTMFAggregator) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
 	if err := a.Base.ProcessFrame(ctx, f, dir); err != nil {
 		return err
 	}
@@ -95,7 +96,7 @@ func (a *Aggregator) ProcessFrame(ctx context.Context, f frames.Frame, dir proce
 }
 
 // Cleanup stops the idle timer and tears down the processor.
-func (a *Aggregator) Cleanup(ctx context.Context) error {
+func (a *DTMFAggregator) Cleanup(ctx context.Context) error {
 	a.mu.Lock()
 	a.stopTimer()
 	a.mu.Unlock()
@@ -104,7 +105,7 @@ func (a *Aggregator) Cleanup(ctx context.Context) error {
 
 // handle appends a key, and flushes the entry when the key is the terminator.
 // The terminator is part of the entry: it is what the caller pressed.
-func (a *Aggregator) handle(ctx context.Context, button frames.KeypadEntry) {
+func (a *DTMFAggregator) handle(ctx context.Context, button frames.KeypadEntry) {
 	a.mu.Lock()
 	first := a.buf.Len() == 0
 	a.buf.WriteString(string(button))
@@ -131,7 +132,7 @@ func (a *Aggregator) handle(ctx context.Context, button frames.KeypadEntry) {
 
 // armTimer restarts the idle-flush timer when a timeout is configured. It runs
 // with the mutex held.
-func (a *Aggregator) armTimer(ctx context.Context) {
+func (a *DTMFAggregator) armTimer(ctx context.Context) {
 	if a.cfg.Timeout <= 0 {
 		return
 	}
@@ -146,7 +147,7 @@ func (a *Aggregator) armTimer(ctx context.Context) {
 	})
 }
 
-func (a *Aggregator) stopTimer() {
+func (a *DTMFAggregator) stopTimer() {
 	if a.timer != nil {
 		a.timer.Stop()
 		a.timer = nil
@@ -154,7 +155,7 @@ func (a *Aggregator) stopTimer() {
 }
 
 // emit pushes the collected digits downstream as a finalized transcription.
-func (a *Aggregator) emit(ctx context.Context, text string) {
+func (a *DTMFAggregator) emit(ctx context.Context, text string) {
 	if text == "" {
 		return
 	}

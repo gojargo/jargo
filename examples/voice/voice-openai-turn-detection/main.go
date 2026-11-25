@@ -25,7 +25,7 @@ import (
 	"github.com/gojargo/jargo/processor/aggregators"
 	"github.com/gojargo/jargo/provider/openai/chat"
 	"github.com/gojargo/jargo/provider/openai/realtime"
-	rtevents "github.com/gojargo/jargo/provider/openai/realtime/events"
+	"github.com/gojargo/jargo/provider/openai/realtime/protocol"
 	"github.com/gojargo/jargo/runner"
 	"github.com/gojargo/jargo/transport"
 	"github.com/gojargo/jargo/transport/wsserver"
@@ -53,7 +53,7 @@ func runBot(ctx context.Context, t transport.Transport, args runner.Arguments) e
 
 	stt := realtime.NewSTT(realtime.STTConfig{
 		APIKey:        os.Getenv("OPENAI_API_KEY"),
-		TurnDetection: &rtevents.TurnDetection{Type: rtevents.TurnDetectionServerVAD}, // Use OpenAI's server-side VAD
+		TurnDetection: &protocol.TurnDetection{Type: protocol.TurnDetectionServerVAD}, // Use OpenAI's server-side VAD
 		// gpt-realtime-whisper (the default) rejects turn detection.
 		Model: "gpt-transcribe",
 	})

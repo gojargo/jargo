@@ -29,7 +29,6 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor/aggregators"
-	"github.com/gojargo/jargo/processor/dtmf"
 	"github.com/gojargo/jargo/provider/cartesia"
 	"github.com/gojargo/jargo/provider/openai/chat"
 	"github.com/gojargo/jargo/runner"
@@ -88,7 +87,7 @@ func runBot(ctx context.Context, t transport.Transport, args runner.Arguments) e
 
 	p := pipeline.New(
 		t.Input(), // Transport user input (incl. DTMF keypresses)
-		dtmf.NewAggregator(dtmf.AggregatorConfig{}), // InputDTMFFrame -> "DTMF: ..." TranscriptionFrame
+		aggregators.NewDTMFAggregator(aggregators.DTMFAggregatorConfig{}), // InputDTMFFrame -> "DTMF: ..." TranscriptionFrame
 		agg.User(),      // User (keypad) turns
 		llm,             // LLM
 		tts,             // TTS

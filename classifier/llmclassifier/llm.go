@@ -1,10 +1,10 @@
-// Package llm is a classifier backed by any LLM service that runs a one-shot
+// Package llmclassifier is a classifier backed by any LLM service that runs a one-shot
 // inference.
 //
 // Every question about a state goes to the LLM in one out-of-pipeline call,
 // through the service's RunInference. The LLM is asked for one JSON object with
 // an answer per question, and the object is parsed into results.
-package llm
+package llmclassifier
 
 import (
 	"context"

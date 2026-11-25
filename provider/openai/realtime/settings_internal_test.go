@@ -15,7 +15,7 @@ import (
 	"github.com/gojargo/jargo/clock"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
-	"github.com/gojargo/jargo/provider/openai/realtime/events"
+	"github.com/gojargo/jargo/provider/openai/realtime/protocol"
 	"github.com/gojargo/jargo/service/llm"
 	"github.com/gojargo/jargo/service/llm/adapter"
 	"github.com/gojargo/jargo/service/settings"
@@ -27,12 +27,12 @@ type sentEvents struct {
 	events []any
 }
 
-func (r *sentEvents) sessionUpdates() []events.SessionUpdateEvent {
+func (r *sentEvents) sessionUpdates() []protocol.SessionUpdateEvent {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	var out []events.SessionUpdateEvent
+	var out []protocol.SessionUpdateEvent
 	for _, e := range r.events {
-		if u, ok := e.(events.SessionUpdateEvent); ok {
+		if u, ok := e.(protocol.SessionUpdateEvent); ok {
 			out = append(out, u)
 		}
 	}
@@ -81,7 +81,7 @@ func offlineServiceWith(t *testing.T, cfg Config, setup processor.Setup) (*Servi
 }
 
 // sendAndCapture runs a session update and returns the session it sent.
-func sendAndCapture(t *testing.T, s *Service, sent *sentEvents) events.SessionProperties {
+func sendAndCapture(t *testing.T, s *Service, sent *sentEvents) protocol.SessionProperties {
 	t.Helper()
 	s.sendSessionUpdate(context.Background())
 	updates := sent.sessionUpdates()
@@ -106,7 +106,7 @@ func TestOutgoingSessionUpdateStripsReasoningOnUnsupportedModel(t *testing.T) {
 	defer restore()
 	s, sent := offlineService(t, Config{
 		Model: "gpt-realtime-1.5", Instructions: "be helpful",
-		SessionProperties: events.SessionProperties{Reasoning: &events.Reasoning{Effort: "high"}},
+		SessionProperties: protocol.SessionProperties{Reasoning: &protocol.Reasoning{Effort: "high"}},
 	})
 	outgoing := sendAndCapture(t, s, sent)
 	if outgoing.Reasoning != nil {
@@ -126,7 +126,7 @@ func TestOutgoingSessionUpdateKeepsReasoningOnSupportedModel(t *testing.T) {
 		buf, restore := captureWarnings(t)
 		s, sent := offlineService(t, Config{
 			Model: model, Instructions: "be helpful",
-			SessionProperties: events.SessionProperties{Reasoning: &events.Reasoning{Effort: "high"}},
+			SessionProperties: protocol.SessionProperties{Reasoning: &protocol.Reasoning{Effort: "high"}},
 		})
 		outgoing := sendAndCapture(t, s, sent)
 		restore()
@@ -163,10 +163,10 @@ func update(t *testing.T, s *Service, delta *Settings) {
 func TestRuntimeSettingsUpdateWithReasoningTriggersSessionUpdate(t *testing.T) {
 	s, sent := offlineService(t, Config{
 		Model: "gpt-realtime-2", Instructions: "be helpful",
-		SessionProperties: events.SessionProperties{Reasoning: &events.Reasoning{Effort: "low"}},
+		SessionProperties: protocol.SessionProperties{Reasoning: &protocol.Reasoning{Effort: "low"}},
 	})
-	update(t, s, &Settings{SessionProperties: settings.Set(events.SessionProperties{
-		Reasoning: &events.Reasoning{Effort: "high"},
+	update(t, s, &Settings{SessionProperties: settings.Set(protocol.SessionProperties{
+		Reasoning: &protocol.Reasoning{Effort: "high"},
 	})})
 	updates := sent.sessionUpdates()
 	if len(updates) != 1 {
@@ -179,8 +179,8 @@ func TestRuntimeSettingsUpdateWithReasoningTriggersSessionUpdate(t *testing.T) {
 
 func TestRuntimeSettingsUpdateStripsReasoningOnUnsupportedModel(t *testing.T) {
 	s, sent := offlineService(t, Config{Model: "gpt-realtime-1.5", Instructions: "be helpful"})
-	update(t, s, &Settings{SessionProperties: settings.Set(events.SessionProperties{
-		Reasoning: &events.Reasoning{Effort: "high"},
+	update(t, s, &Settings{SessionProperties: settings.Set(protocol.SessionProperties{
+		Reasoning: &protocol.Reasoning{Effort: "high"},
 	})})
 	updates := sent.sessionUpdates()
 	if len(updates) != 1 || updates[0].Session.Reasoning != nil {
@@ -190,12 +190,12 @@ func TestRuntimeSettingsUpdateStripsReasoningOnUnsupportedModel(t *testing.T) {
 
 // Ports of TestOpenAIRealtimeSettingsApplyUpdate (tests/test_settings.py).
 
-func store(sp events.SessionProperties, instruction string) *Settings {
+func store(sp protocol.SessionProperties, instruction string) *Settings {
 	return newSettings(Config{Model: "gpt-realtime-1.5", Instructions: instruction, SessionProperties: sp})
 }
 
 func TestTopLevelModelSyncsToSP(t *testing.T) {
-	s := store(events.SessionProperties{}, "")
+	s := store(protocol.SessionProperties{}, "")
 	delta := &Settings{}
 	delta.Model = settings.Set("gpt-realtime-2.0")
 	changed, err := settings.Apply(s, delta)
@@ -208,7 +208,7 @@ func TestTopLevelModelSyncsToSP(t *testing.T) {
 }
 
 func TestTopLevelSystemInstructionSyncsToSP(t *testing.T) {
-	s := store(events.SessionProperties{}, "")
+	s := store(protocol.SessionProperties{}, "")
 	delta := &Settings{}
 	delta.SystemInstruction = settings.Set("Be helpful.")
 	changed, _ := settings.Apply(s, delta)
@@ -219,12 +219,12 @@ func TestTopLevelSystemInstructionSyncsToSP(t *testing.T) {
 }
 
 func TestSPReplacesWholesale(t *testing.T) {
-	s := store(events.SessionProperties{
-		OutputModalities: []events.Modality{events.ModalityAudio, events.ModalityText},
+	s := store(protocol.SessionProperties{
+		OutputModalities: []protocol.Modality{protocol.ModalityAudio, protocol.ModalityText},
 		Instructions:     "Old instructions.",
 	}, "Old instructions.")
-	changed, _ := settings.Apply(s, &Settings{SessionProperties: settings.Set(events.SessionProperties{
-		OutputModalities: []events.Modality{events.ModalityText},
+	changed, _ := settings.Apply(s, &Settings{SessionProperties: settings.Set(protocol.SessionProperties{
+		OutputModalities: []protocol.Modality{protocol.ModalityText},
 	})})
 	sp, _ := s.SessionProperties.Value()
 	if !changed.Has("session_properties") || len(sp.OutputModalities) != 1 || sp.OutputModalities[0] != "text" {
@@ -236,8 +236,8 @@ func TestSPReplacesWholesale(t *testing.T) {
 }
 
 func TestSPModelSyncsToTopLevel(t *testing.T) {
-	s := store(events.SessionProperties{}, "")
-	changed, _ := settings.Apply(s, &Settings{SessionProperties: settings.Set(events.SessionProperties{
+	s := store(protocol.SessionProperties{}, "")
+	changed, _ := settings.Apply(s, &Settings{SessionProperties: settings.Set(protocol.SessionProperties{
 		Model: "gpt-realtime-2.0",
 	})})
 	sp, _ := s.SessionProperties.Value()
@@ -247,8 +247,8 @@ func TestSPModelSyncsToTopLevel(t *testing.T) {
 }
 
 func TestSPInstructionsSyncsToTopLevel(t *testing.T) {
-	s := store(events.SessionProperties{}, "")
-	changed, _ := settings.Apply(s, &Settings{SessionProperties: settings.Set(events.SessionProperties{
+	s := store(protocol.SessionProperties{}, "")
+	changed, _ := settings.Apply(s, &Settings{SessionProperties: settings.Set(protocol.SessionProperties{
 		Instructions: "New instructions.",
 	})})
 	if !changed.Has("system_instruction") || s.SystemInstruction.Or("") != "New instructions." {
@@ -257,8 +257,8 @@ func TestSPInstructionsSyncsToTopLevel(t *testing.T) {
 }
 
 func TestTopLevelTakesPrecedenceOverSP(t *testing.T) {
-	s := store(events.SessionProperties{}, "")
-	delta := &Settings{SessionProperties: settings.Set(events.SessionProperties{
+	s := store(protocol.SessionProperties{}, "")
+	delta := &Settings{SessionProperties: settings.Set(protocol.SessionProperties{
 		Model: "sp-model", Instructions: "sp instructions",
 	})}
 	delta.Model = settings.Set("top-model")
@@ -272,7 +272,7 @@ func TestTopLevelTakesPrecedenceOverSP(t *testing.T) {
 }
 
 func TestNonSyncedFieldUpdateDoesNotAffectSP(t *testing.T) {
-	s := store(events.SessionProperties{Instructions: "Keep me."}, "Keep me.")
+	s := store(protocol.SessionProperties{Instructions: "Keep me."}, "Keep me.")
 	delta := &Settings{}
 	delta.Temperature = settings.Set(0.5)
 	changed, _ := settings.Apply(s, delta)
@@ -285,8 +285,8 @@ func TestNonSyncedFieldUpdateDoesNotAffectSP(t *testing.T) {
 // Ports of TestOpenAIRealtimeSessionProperties.
 
 func TestRealtimeWhisperPromptIsOmitted(t *testing.T) {
-	s := store(events.SessionProperties{Audio: &events.AudioConfiguration{Input: &events.AudioInput{
-		Transcription: &events.InputAudioTranscription{Model: events.WhisperModel, Prompt: "Keywords: coffee"},
+	s := store(protocol.SessionProperties{Audio: &protocol.AudioConfiguration{Input: &protocol.AudioInput{
+		Transcription: &protocol.InputAudioTranscription{Model: protocol.WhisperModel, Prompt: "Keywords: coffee"},
 	}}}, "")
 	// newSettings already omitted it; a prompt given again is omitted again.
 	if sp, _ := s.SessionProperties.Value(); sp.InputTranscription().Prompt != "" {
@@ -301,8 +301,8 @@ func TestRealtimeWhisperPromptIsOmitted(t *testing.T) {
 }
 
 func TestSupportedTranscriptionModelKeepsPrompt(t *testing.T) {
-	s := store(events.SessionProperties{Audio: &events.AudioConfiguration{Input: &events.AudioInput{
-		Transcription: &events.InputAudioTranscription{Model: "gpt-4o-transcribe", Prompt: "Keywords: coffee"},
+	s := store(protocol.SessionProperties{Audio: &protocol.AudioConfiguration{Input: &protocol.AudioInput{
+		Transcription: &protocol.InputAudioTranscription{Model: "gpt-4o-transcribe", Prompt: "Keywords: coffee"},
 	}}}, "")
 	sp, _ := s.SessionProperties.Value()
 	if omitUnsupportedTranscriptionPrompt(s) || sp.InputTranscription().Prompt != "Keywords: coffee" {
@@ -352,7 +352,7 @@ func TestMixedKeys(t *testing.T) {
 }
 
 func TestRoundtripFromMappingApplyUpdate(t *testing.T) {
-	s := store(events.SessionProperties{}, "")
+	s := store(protocol.SessionProperties{}, "")
 	delta := fromMap(t, map[string]any{"instructions": "Be concise.", "output_modalities": []any{"text"}})
 	changed, err := settings.Apply(s, delta)
 	if err != nil || !changed.Has("session_properties") {
@@ -381,7 +381,7 @@ func sampleTools() frames.ToolsSchema {
 }
 
 func TestServiceSchemaHandlerRegisters(t *testing.T) {
-	s := New(Config{APIKey: "test-key", SessionProperties: events.SessionProperties{Tools: sampleTools()}})
+	s := New(Config{APIKey: "test-key", SessionProperties: protocol.SessionProperties{Tools: sampleTools()}})
 	s.SyncToolHandlers(context.Background(), frames.ToolsSchema{})
 	if !s.HasFunction("sample") {
 		t.Error("the configured tool's handler was not registered")
@@ -392,7 +392,7 @@ func TestServiceAsyncToolOptionHonored(t *testing.T) {
 	keep := false
 	tools := sampleTools()
 	tools.Standard[0].CancelOnInterruption = &keep
-	s := New(Config{APIKey: "test-key", SessionProperties: events.SessionProperties{Tools: tools}})
+	s := New(Config{APIKey: "test-key", SessionProperties: protocol.SessionProperties{Tools: tools}})
 	s.SyncToolHandlers(context.Background(), frames.ToolsSchema{})
 	if !s.FunctionIsAsync("sample") {
 		t.Error("a configured tool not canceled on interruption should register as async")
@@ -408,7 +408,7 @@ func TestNoServiceToolsIsSafe(t *testing.T) {
 }
 
 // toolNames are the names of the tools a session carries.
-func toolNames(sp events.SessionProperties) []string {
+func toolNames(sp protocol.SessionProperties) []string {
 	var out []string
 	for _, t := range sp.WireTools {
 		name, _ := t["name"].(string)
@@ -418,7 +418,7 @@ func toolNames(sp events.SessionProperties) []string {
 }
 
 func TestSendSessionUpdatePreservesServiceTools(t *testing.T) {
-	s, sent := offlineService(t, Config{SessionProperties: events.SessionProperties{Tools: sampleTools()}})
+	s, sent := offlineService(t, Config{SessionProperties: protocol.SessionProperties{Tools: sampleTools()}})
 	sendAndCapture(t, s, sent)
 	// The stored schema survives, so the empty-conversation fallback still finds
 	// and registers the handler.
@@ -432,7 +432,7 @@ func TestSendSessionUpdatePreservesServiceTools(t *testing.T) {
 }
 
 func TestBuiltInToolsJoinTheServiceTools(t *testing.T) {
-	s, sent := offlineService(t, Config{SessionProperties: events.SessionProperties{Tools: sampleTools()}})
+	s, sent := offlineService(t, Config{SessionProperties: protocol.SessionProperties{Tools: sampleTools()}})
 	s.adapter.SetBuiltin(adapter.Builtin{Tool: frames.Tool{Name: "delegate"}})
 	s.convo = frames.NewLLMContext("")
 	got := toolNames(sendAndCapture(t, s, sent))

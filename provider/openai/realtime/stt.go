@@ -14,7 +14,7 @@ import (
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/processor/turns"
-	"github.com/gojargo/jargo/provider/openai/realtime/events"
+	"github.com/gojargo/jargo/provider/openai/realtime/protocol"
 	"github.com/gojargo/jargo/service/stt"
 	"github.com/gojargo/jargo/service/wsservice"
 	"github.com/gojargo/jargo/service/wsutil"
@@ -74,15 +74,15 @@ type STTConfig struct {
 	// turns it off and relies on a local VAD in the pipeline: when the VAD
 	// reports the user stopped, the service commits the audio buffer so the
 	// server transcribes the finished segment. A configuration turns it on, at
-	// minimum &events.TurnDetection{Type: events.TurnDetectionServerVAD}; the
+	// minimum &protocol.TurnDetection{Type: protocol.TurnDetectionServerVAD}; the
 	// server then delimits each utterance, the service proposes those turn
 	// boundaries, and it recommends the external user turn strategies that
 	// resolve them, so no separate VAD should run in the pipeline. An empty
-	// &events.TurnDetection{} leaves the field off the session, keeping the
+	// &protocol.TurnDetection{} leaves the field off the session, keeping the
 	// session's own default, which detects turns. Server-side detection needs a
 	// model that supports it: gpt-transcribe does, the default
 	// gpt-realtime-whisper does not.
-	TurnDetection *events.TurnDetection
+	TurnDetection *protocol.TurnDetection
 	// ShouldInterrupt barges in when the server-side VAD hears the user speak;
 	// nil enables it. It only applies with TurnDetection on, and is passed along
 	// to the user turn strategies this service recommends, which own the
@@ -217,7 +217,7 @@ func (c *sttConnector) sessionUpdate() map[string]any {
 	case td == nil || td.Disabled:
 		// Off: sent as null, so the local VAD delimits the utterances.
 		input["turn_detection"] = nil
-	case *td != (events.TurnDetection{}):
+	case *td != (protocol.TurnDetection{}):
 		input["turn_detection"] = td
 	}
 	// An empty configuration leaves the field off, keeping the session default.

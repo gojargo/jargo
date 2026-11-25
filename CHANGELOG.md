@@ -222,6 +222,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **BREAKING: no two public packages share a name any more.** Packages that
+  collided with another one in user code were renamed or merged:
+
+  | Before | After |
+  |---|---|
+  | `classifier/llm` | `classifier/llmclassifier` |
+  | `processor/dtmf` (`dtmf.Aggregator`, `dtmf.NewAggregator`, `dtmf.AggregatorConfig`, `dtmf.DefaultTimeout`, `dtmf.DefaultPrefix`) | `processor/aggregators` (`aggregators.DTMFAggregator`, `NewDTMFAggregator`, `DTMFAggregatorConfig`, `DefaultDTMFTimeout`, `DefaultDTMFPrefix`) |
+  | `provider/google/frames` | `provider/google/grounding` |
+  | `provider/openai/realtime/events` | `provider/openai/realtime/protocol` |
+
 - **BREAKING: the `utils` packages are gone.** Each one moved to a package
   named for what it provides, and the ones only jargo itself uses became
   internal. Nothing else changed in them. Update imports and qualifiers:
@@ -3780,7 +3790,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   scale and a probability per level). A failure wraps `classifier.ErrClassifier`.
   After every call a classifier raises `on_metrics` with the time it took and,
   when it knows them, the tokens it used, for its owner to push in a
-  `MetricsFrame`. Two implementations ship. `classifier/llm` asks any service
+  `MetricsFrame`. Two implementations ship. `classifier/llmclassifier` asks any service
   that runs a one-shot inference, all the questions in one call, for one JSON
   object held to a reply schema where the provider enforces one; it waits 10s
   by default. `classifier/jev` asks Jev, TypeSafe's classification model,

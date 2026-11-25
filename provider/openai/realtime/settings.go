@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"github.com/gojargo/jargo/frames"
-	"github.com/gojargo/jargo/provider/openai/realtime/events"
+	"github.com/gojargo/jargo/provider/openai/realtime/protocol"
 	"github.com/gojargo/jargo/service/settings"
 )
 
@@ -22,7 +22,7 @@ type Settings struct {
 
 	// SessionProperties are the session's properties. An update giving them
 	// replaces them whole.
-	SessionProperties settings.Opt[events.SessionProperties] `settings:"session_properties"`
+	SessionProperties settings.Opt[protocol.SessionProperties] `settings:"session_properties"`
 }
 
 var (
@@ -107,7 +107,7 @@ func (s *Settings) FromMap(values map[string]any) error {
 		if err != nil {
 			return err
 		}
-		var props events.SessionProperties
+		var props protocol.SessionProperties
 		if err := json.Unmarshal(raw, &props); err != nil {
 			return err
 		}
@@ -139,7 +139,7 @@ func settingNames(v any) []string {
 // excepted: it is a setting of its own.
 func sessionPropertyNames() map[string]bool {
 	names := map[string]bool{}
-	t := reflect.TypeFor[events.SessionProperties]()
+	t := reflect.TypeFor[protocol.SessionProperties]()
 	for field := range t.Fields() {
 		name, _, _ := strings.Cut(field.Tag.Get("json"), ",")
 		if name != "" && name != "-" && name != "model" {
@@ -177,12 +177,12 @@ func omitUnsupportedTranscriptionPrompt(s *Settings) bool {
 		return false
 	}
 	t := sp.InputTranscription()
-	if t == nil || t.Prompt == "" || (t.Model != "" && t.Model != events.WhisperModel) {
+	if t == nil || t.Prompt == "" || (t.Model != "" && t.Model != protocol.WhisperModel) {
 		return false
 	}
 	t.Prompt = ""
 	s.SessionProperties = settings.Set(sp)
-	slog.Warn(events.WhisperModel + " does not support the prompt parameter; omitting prompt from " +
+	slog.Warn(protocol.WhisperModel + " does not support the prompt parameter; omitting prompt from " +
 		"OpenAI Realtime input audio transcription settings")
 	return true
 }
@@ -197,7 +197,7 @@ var reasoningModels = []string{"gpt-realtime-2", "gpt-realtime-2.1"}
 // stripUnsupportedReasoning drops the reasoning configuration from outgoing
 // properties when the model cannot take it, since the server would otherwise
 // reject the whole update and end the session. It reports the stripping once.
-func (s *Service) stripUnsupportedReasoning(sp events.SessionProperties) events.SessionProperties {
+func (s *Service) stripUnsupportedReasoning(sp protocol.SessionProperties) protocol.SessionProperties {
 	if sp.Reasoning == nil || sp.Model == "" {
 		return sp
 	}
@@ -231,7 +231,7 @@ func (s *Service) UpdateSettings(ctx context.Context, changed settings.Changed) 
 }
 
 // sessionProperties are the session properties the service holds.
-func (s *Service) sessionProperties() events.SessionProperties {
+func (s *Service) sessionProperties() protocol.SessionProperties {
 	sp, _ := s.live.SessionProperties.Value()
 	return sp
 }

@@ -17,7 +17,7 @@ import (
 	"time"
 
 	"github.com/gojargo/jargo/classifier"
-	llmclassifier "github.com/gojargo/jargo/classifier/llm"
+	"github.com/gojargo/jargo/classifier/llmclassifier"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/ordered"
 	"github.com/gojargo/jargo/internal/security"
@@ -418,7 +418,7 @@ func NewEvalJudgeFromConfig(cfg *JudgeEvalConfig) (*EvalJudge, error) {
 // NewLLMJudge builds a judge that classifies with inf and explains with it too,
 // e.g. eval.NewLLMJudge(chat.NewLLM(chat.LLMConfig{APIKey: key})).
 //
-// Deprecated: build a classifier/llm classifier over the service and pass it to
+// Deprecated: build a classifier/llmclassifier classifier over the service and pass it to
 // NewEvalJudge, with the service as the Explainer for the reasons.
 func NewLLMJudge(inf llm.Inferencer) *EvalJudge {
 	c, err := llmclassifier.New(llmclassifier.Config{LLM: inf})

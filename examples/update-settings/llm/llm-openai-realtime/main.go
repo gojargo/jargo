@@ -21,7 +21,7 @@ import (
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor/aggregators"
 	"github.com/gojargo/jargo/provider/openai/realtime"
-	rtevents "github.com/gojargo/jargo/provider/openai/realtime/events"
+	"github.com/gojargo/jargo/provider/openai/realtime/protocol"
 	"github.com/gojargo/jargo/runner"
 	"github.com/gojargo/jargo/service/settings"
 	"github.com/gojargo/jargo/transport"
@@ -123,8 +123,8 @@ func runBot(ctx context.Context, t transport.Transport, args runner.Arguments) e
 			}
 			slog.Info("Updating OpenAI Realtime LLM settings: output_modalities=['text']")
 			worker.QueueFrame(frames.NewLLMUpdateSettingsFrame(&realtime.Settings{
-				SessionProperties: settings.Set(rtevents.SessionProperties{
-					OutputModalities: []rtevents.Modality{rtevents.ModalityText},
+				SessionProperties: settings.Set(protocol.SessionProperties{
+					OutputModalities: []protocol.Modality{protocol.ModalityText},
 				}),
 			}))
 
@@ -133,8 +133,8 @@ func runBot(ctx context.Context, t transport.Transport, args runner.Arguments) e
 			}
 			slog.Info("Updating OpenAI Realtime LLM settings: output_modalities=['audio']")
 			worker.QueueFrame(frames.NewLLMUpdateSettingsFrame(&realtime.Settings{
-				SessionProperties: settings.Set(rtevents.SessionProperties{
-					OutputModalities: []rtevents.Modality{rtevents.ModalityAudio},
+				SessionProperties: settings.Set(protocol.SessionProperties{
+					OutputModalities: []protocol.Modality{protocol.ModalityAudio},
 				}),
 			}))
 		}()

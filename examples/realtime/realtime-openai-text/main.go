@@ -20,7 +20,7 @@ import (
 	"github.com/gojargo/jargo/processor/aggregators"
 	"github.com/gojargo/jargo/provider/cartesia"
 	"github.com/gojargo/jargo/provider/openai/realtime"
-	rtevents "github.com/gojargo/jargo/provider/openai/realtime/events"
+	"github.com/gojargo/jargo/provider/openai/realtime/protocol"
 	"github.com/gojargo/jargo/runner"
 	"github.com/gojargo/jargo/service/llm"
 	"github.com/gojargo/jargo/transport"
@@ -134,20 +134,20 @@ func runBot(ctx context.Context, t transport.Transport, args runner.Arguments) e
 	s2s := realtime.New(realtime.Config{
 		APIKey:       os.Getenv("OPENAI_API_KEY"),
 		Instructions: systemInstruction,
-		SessionProperties: rtevents.SessionProperties{
-			Audio: &rtevents.AudioConfiguration{
-				Input: &rtevents.AudioInput{
-					Transcription: &rtevents.InputAudioTranscription{},
+		SessionProperties: protocol.SessionProperties{
+			Audio: &protocol.AudioConfiguration{
+				Input: &protocol.AudioInput{
+					Transcription: &protocol.InputAudioTranscription{},
 					// Set the server's turn detection parameters. Not setting this at
 					// all leaves it on, at the server's defaults.
-					TurnDetection: rtevents.SemanticVAD(),
+					TurnDetection: protocol.SemanticVAD(),
 					// Or turn it off to have the pipeline's own turn detection drive the
 					// session:
-					// TurnDetection: rtevents.NoTurnDetection(),
-					NoiseReduction: &rtevents.InputAudioNoiseReduction{Type: "near_field"},
+					// TurnDetection: protocol.NoTurnDetection(),
+					NoiseReduction: &protocol.InputAudioNoiseReduction{Type: "near_field"},
 				},
 			},
-			OutputModalities: []rtevents.Modality{rtevents.ModalityText},
+			OutputModalities: []protocol.Modality{protocol.ModalityText},
 			// The tools could be given here rather than through the conversation:
 			// Tools: frames.ToolsSchema{Standard: tools()},
 		},

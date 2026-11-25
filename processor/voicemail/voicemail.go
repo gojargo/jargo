@@ -6,7 +6,7 @@
 // a classifier; until it has an answer, its TTSGate holds the bot's speech back
 // so a voicemail greeting is never talked over.
 //
-// Any classifier will do. A classifier/llm classifier needs a service that runs
+// Any classifier will do. A classifier/llmclassifier classifier needs a service that runs
 // a one-shot inference, so a realtime LLM cannot back the detector.
 package voicemail
 
@@ -19,7 +19,7 @@ import (
 	"time"
 
 	"github.com/gojargo/jargo/classifier"
-	llmclassifier "github.com/gojargo/jargo/classifier/llm"
+	"github.com/gojargo/jargo/classifier/llmclassifier"
 	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
@@ -94,12 +94,12 @@ type Config struct {
 
 	// LLM is a service to build the classifier from, when Classifier is nil.
 	//
-	// Deprecated: build a classifier/llm classifier and pass it as Classifier.
+	// Deprecated: build a classifier/llmclassifier classifier and pass it as Classifier.
 	LLM llm.Inferencer
 	// CustomSystemPrompt is put ahead of the classifier's own instructions for
 	// the LLM.
 	//
-	// Deprecated: build a classifier/llm classifier with the instructions you
+	// Deprecated: build a classifier/llmclassifier classifier with the instructions you
 	// want and pass it as Classifier.
 	CustomSystemPrompt string
 }

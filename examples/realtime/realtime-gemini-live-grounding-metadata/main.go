@@ -19,7 +19,7 @@ import (
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/processor/aggregators"
-	googleframes "github.com/gojargo/jargo/provider/google/frames"
+	googleframes "github.com/gojargo/jargo/provider/google/grounding"
 	"github.com/gojargo/jargo/provider/google/live"
 	"github.com/gojargo/jargo/runner"
 	"github.com/gojargo/jargo/transport"

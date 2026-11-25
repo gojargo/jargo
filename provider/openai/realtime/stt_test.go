@@ -17,7 +17,7 @@ import (
 	"github.com/gojargo/jargo/internal/providertest"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/processor/turns"
-	"github.com/gojargo/jargo/provider/openai/realtime/events"
+	"github.com/gojargo/jargo/provider/openai/realtime/protocol"
 )
 
 // TestSTTConfigValidate pins which fields the provider requires.
@@ -44,7 +44,7 @@ func TestSTTShouldInterruptRidesOnRecommendedStrategies(t *testing.T) {
 		c := &sttConnector{cfg: STTConfig{
 			APIKey:          "k",
 			Model:           "gpt-transcribe",
-			TurnDetection:   &events.TurnDetection{Type: events.TurnDetectionServerVAD},
+			TurnDetection:   &protocol.TurnDetection{Type: protocol.TurnDetectionServerVAD},
 			ShouldInterrupt: new(shouldInterrupt),
 		}}
 		got, ok := c.Metadata().UserTurnStrategies.(turns.UserTurnStrategies)
@@ -65,7 +65,7 @@ func TestSTTShouldInterruptRidesOnRecommendedStrategies(t *testing.T) {
 // leaves the session's own default standing, gets the recommendation: that
 // default detects turns, just as an explicit configuration does.
 func TestSTTServerDefaultsRecommendStrategies(t *testing.T) {
-	c := &sttConnector{cfg: STTConfig{APIKey: "k", TurnDetection: &events.TurnDetection{}}}
+	c := &sttConnector{cfg: STTConfig{APIKey: "k", TurnDetection: &protocol.TurnDetection{}}}
 	if _, ok := c.Metadata().UserTurnStrategies.(turns.UserTurnStrategies); !ok {
 		t.Fatalf("UserTurnStrategies = %T, want external turn strategies", c.Metadata().UserTurnStrategies)
 	}
@@ -75,7 +75,7 @@ func TestSTTServerDefaultsRecommendStrategies(t *testing.T) {
 // the default, the service recommends nothing: the server reports no
 // boundaries to propose.
 func TestSTTLocalVADModeRecommendsNoStrategies(t *testing.T) {
-	for _, td := range []*events.TurnDetection{nil, events.NoTurnDetection()} {
+	for _, td := range []*protocol.TurnDetection{nil, protocol.NoTurnDetection()} {
 		c := &sttConnector{cfg: STTConfig{APIKey: "k", Model: defaultSTTModel, TurnDetection: td}}
 		if got := c.Metadata().UserTurnStrategies; got != nil {
 			t.Errorf("TurnDetection %v: UserTurnStrategies = %v, want none", td, got)
@@ -108,16 +108,16 @@ func TestSTTSessionUpdate(t *testing.T) {
 	t.Run("turn detection", func(t *testing.T) {
 		for _, tc := range []struct {
 			name    string
-			td      *events.TurnDetection
+			td      *protocol.TurnDetection
 			present bool
 			want    any
 		}{
 			{"off by default", nil, true, nil},
-			{"turned off", events.NoTurnDetection(), true, nil},
-			{"session default", &events.TurnDetection{}, false, nil},
+			{"turned off", protocol.NoTurnDetection(), true, nil},
+			{"session default", &protocol.TurnDetection{}, false, nil},
 			{
 				"configured",
-				&events.TurnDetection{Type: events.TurnDetectionServerVAD, SilenceDurationMs: new(700)},
+				&protocol.TurnDetection{Type: protocol.TurnDetectionServerVAD, SilenceDurationMs: new(700)},
 				true,
 				map[string]any{"type": "server_vad", "silence_duration_ms": float64(700)},
 			},
@@ -418,11 +418,11 @@ func TestSTTIsSentAudioAt24kHz(t *testing.T) {
 func TestSTTFinalizeCommitsInLocalVADMode(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
-		td     *events.TurnDetection
+		td     *protocol.TurnDetection
 		commit bool
 	}{
 		{"local VAD", nil, true},
-		{"server VAD", &events.TurnDetection{Type: events.TurnDetectionServerVAD}, false},
+		{"server VAD", &protocol.TurnDetection{Type: protocol.TurnDetectionServerVAD}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			endpoint, sent, _ := sttServer(t, nil)
@@ -459,11 +459,11 @@ func TestSTTFinalizeCommitsInLocalVADMode(t *testing.T) {
 func TestSTTEndOfTurnFollowsTheMode(t *testing.T) {
 	for _, tc := range []struct {
 		name string
-		td   *events.TurnDetection
+		td   *protocol.TurnDetection
 		eot  bool
 	}{
 		{"local VAD", nil, false},
-		{"server VAD", &events.TurnDetection{Type: events.TurnDetectionServerVAD}, true},
+		{"server VAD", &protocol.TurnDetection{Type: protocol.TurnDetectionServerVAD}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			endpoint, _, _ := sttServer(t, []map[string]any{

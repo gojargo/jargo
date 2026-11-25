@@ -202,7 +202,7 @@ not idle. `WaitingTimeout` and `OnWaiting` cover that silence; see
 ## DTMF
 
 Keypresses arrive as `InputDTMFFrame` (a system frame, so they are never dropped
-by a barge-in). `processor/dtmf` aggregates digits into complete entries, so an
+by a barge-in). `aggregators.DTMFAggregator` aggregates digits into complete entries, so an
 account number typed at speed arrives as one value rather than eight frames.
 
 Play tones outbound with `OutputDTMFFrame`.
@@ -230,7 +230,7 @@ pipe := pipeline.New(in, stt, userAgg, nav, tts, out, assistantAgg)
 conversation with a recording.
 
 The voicemail detector listens to what the other side says and asks a
-classifier (see `classifier/llm` and `classifier/jev`) whether a person answered.
+classifier (see `classifier/llmclassifier` and `classifier/jev`) whether a person answered.
 It sits after the STT service, and its gate after the TTS service: the gate holds
 the bot's speech back until the verdict, so a greeting is never talked over. The
 verdict acts once the caller has been quiet for `DecisionTimeout`, since "hi,

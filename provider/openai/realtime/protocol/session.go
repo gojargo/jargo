@@ -1,7 +1,7 @@
-// Package events holds the messages of OpenAI's Realtime API: the session's
+// Package protocol holds the messages of OpenAI's Realtime API: the session's
 // properties, the conversation items, and the events the client sends and the
 // server sends back.
-package events
+package protocol
 
 import (
 	"encoding/json"

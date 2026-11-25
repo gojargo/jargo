@@ -15,7 +15,7 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
-	rtevents "github.com/gojargo/jargo/provider/openai/realtime/events"
+	"github.com/gojargo/jargo/provider/openai/realtime/protocol"
 )
 
 // A speech-to-speech service takes a tool's intermediate results, its final
@@ -177,11 +177,11 @@ func (s *Service) pushContextUpstream(ctx context.Context) {
 }
 
 func (s *Service) responseCreated(ctx context.Context) {
-	s.handleResponseEvent(ctx, &rtevents.ServerEvent{Type: "response.created"})
+	s.handleResponseEvent(ctx, &protocol.ServerEvent{Type: "response.created"})
 }
 
 func (s *Service) responseDone(ctx context.Context) {
-	s.handleResponseEvent(ctx, &rtevents.ServerEvent{Type: "response.done"})
+	s.handleResponseEvent(ctx, &protocol.ServerEvent{Type: "response.done"})
 }
 
 func TestAnIntermediateResultGoesInBesideTheCall(t *testing.T) {

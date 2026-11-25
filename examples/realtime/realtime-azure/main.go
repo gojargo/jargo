@@ -24,7 +24,7 @@ import (
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor/aggregators"
 	"github.com/gojargo/jargo/provider/azure/realtime"
-	rtevents "github.com/gojargo/jargo/provider/openai/realtime/events"
+	"github.com/gojargo/jargo/provider/openai/realtime/protocol"
 	"github.com/gojargo/jargo/runner"
 	"github.com/gojargo/jargo/service/llm"
 	"github.com/gojargo/jargo/transport"
@@ -139,16 +139,16 @@ func runBot(ctx context.Context, t transport.Transport, args runner.Arguments) e
 		APIKey:       os.Getenv("AZURE_REALTIME_API_KEY"),
 		BaseURL:      os.Getenv("AZURE_REALTIME_BASE_URL"),
 		Instructions: systemInstruction,
-		SessionProperties: rtevents.SessionProperties{
-			Audio: &rtevents.AudioConfiguration{
-				Input: &rtevents.AudioInput{
-					Transcription: &rtevents.InputAudioTranscription{Model: "whisper-1"},
+		SessionProperties: protocol.SessionProperties{
+			Audio: &protocol.AudioConfiguration{
+				Input: &protocol.AudioInput{
+					Transcription: &protocol.InputAudioTranscription{Model: "whisper-1"},
 					// Set the server's turn detection parameters. Not setting this at
 					// all leaves it on, at the server's defaults:
-					// TurnDetection: &rtevents.TurnDetection{Type: rtevents.TurnDetectionServerVAD, SilenceDurationMs: &ms},
+					// TurnDetection: &protocol.TurnDetection{Type: protocol.TurnDetectionServerVAD, SilenceDurationMs: &ms},
 					// Or turn it off to have the pipeline's own turn detection drive the
 					// session:
-					// TurnDetection: rtevents.NoTurnDetection(),
+					// TurnDetection: protocol.NoTurnDetection(),
 				},
 			},
 			// The tools could be given here rather than through the conversation:

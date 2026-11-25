@@ -14,7 +14,7 @@
 // value that encodes to a JSON object or array. The instructions, the meanings
 // and the options of a question take the same.
 //
-// The implementations live in the subpackages: classifier/llm answers through
+// The implementations live in the subpackages: classifier/llmclassifier answers through
 // any LLM service that runs a one-shot inference, classifier/jev through Jev,
 // TypeSafe's hosted classification model, classifier/google/decisions through
 // Google's Decisions API, and classifier/zoom/decisions through Zoom's.

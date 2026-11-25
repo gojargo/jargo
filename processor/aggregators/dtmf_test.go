@@ -1,4 +1,4 @@
-package dtmf_test
+package aggregators_test
 
 import (
 	"context"
@@ -10,12 +10,12 @@ import (
 	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
-	"github.com/gojargo/jargo/processor/dtmf"
+	"github.com/gojargo/jargo/processor/aggregators"
 )
 
 func TestAggregatorFlushesOnTerminator(t *testing.T) {
 	got := make(chan string, 1)
-	agg := dtmf.NewAggregator(dtmf.AggregatorConfig{Prefix: new("digits: ")})
+	agg := aggregators.NewDTMFAggregator(aggregators.DTMFAggregatorConfig{Prefix: new("digits: ")})
 	task := pipeline.NewWorker(pipeline.New(agg), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
@@ -56,10 +56,10 @@ type dtmfRun struct {
 // runKeys runs an aggregator built from cfg, feeding it each step: a key, or a
 // pause. With end set, the pipeline is ended with an EndFrame once the steps are
 // fed; otherwise it is stopped as the test ends.
-func runKeys(t *testing.T, cfg dtmf.AggregatorConfig, end bool, steps ...any) *dtmfRun {
+func runKeys(t *testing.T, cfg aggregators.DTMFAggregatorConfig, end bool, steps ...any) *dtmfRun {
 	t.Helper()
 	r := &dtmfRun{}
-	task := pipeline.NewWorker(pipeline.New(dtmf.NewAggregator(cfg)), pipeline.WorkerConfig{
+	task := pipeline.NewWorker(pipeline.New(aggregators.NewDTMFAggregator(cfg)), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
 	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
@@ -105,7 +105,7 @@ func (r *dtmfRun) gotTexts() []string {
 // no terminator is flushed after two idle seconds, and the transcription says it
 // came from the keypad.
 func TestAggregatorDefaults(t *testing.T) {
-	r := runKeys(t, dtmf.AggregatorConfig{}, false, frames.KeypadOne, 2300*time.Millisecond)
+	r := runKeys(t, aggregators.DTMFAggregatorConfig{}, false, frames.KeypadOne, 2300*time.Millisecond)
 	if got := r.gotTexts(); len(got) != 1 || got[0] != "DTMF: 1" {
 		t.Errorf("transcriptions = %q, want the entry flushed by the default timeout", got)
 	}
@@ -114,7 +114,7 @@ func TestAggregatorDefaults(t *testing.T) {
 // TestAggregatorKeepsTheTerminator checks the terminator is part of the entry,
 // as the caller pressed it, so a lone terminator is an entry too.
 func TestAggregatorKeepsTheTerminator(t *testing.T) {
-	r := runKeys(t, dtmf.AggregatorConfig{Terminator: frames.KeypadStar}, true,
+	r := runKeys(t, aggregators.DTMFAggregatorConfig{Terminator: frames.KeypadStar}, true,
 		frames.KeypadOne, frames.KeypadTwo, frames.KeypadStar, 50*time.Millisecond, frames.KeypadStar)
 	if got := r.gotTexts(); len(got) != 2 || got[0] != "DTMF: 12*" || got[1] != "DTMF: *" {
 		t.Errorf("transcriptions = %q, want the terminator kept in each entry", got)
@@ -124,7 +124,7 @@ func TestAggregatorKeepsTheTerminator(t *testing.T) {
 // TestAggregatorInterruptsOnTheFirstKey checks the first key of an entry
 // interrupts the bot, and the keys after it do not.
 func TestAggregatorInterruptsOnTheFirstKey(t *testing.T) {
-	r := runKeys(t, dtmf.AggregatorConfig{}, true,
+	r := runKeys(t, aggregators.DTMFAggregatorConfig{}, true,
 		frames.KeypadOne, frames.KeypadTwo, frames.KeypadPound)
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -137,7 +137,7 @@ func TestAggregatorInterruptsOnTheFirstKey(t *testing.T) {
 // TestAggregatorFlushesAtTheEnd checks an entry still waiting on its terminator
 // or its timeout goes out when the session ends, rather than being lost.
 func TestAggregatorFlushesAtTheEnd(t *testing.T) {
-	r := runKeys(t, dtmf.AggregatorConfig{Timeout: time.Second}, true, frames.KeypadOne, frames.KeypadTwo)
+	r := runKeys(t, aggregators.DTMFAggregatorConfig{Timeout: time.Second}, true, frames.KeypadOne, frames.KeypadTwo)
 	if got := r.gotTexts(); len(got) != 1 || got[0] != "DTMF: 12" {
 		t.Errorf("transcriptions = %q, want the pending entry flushed at the end", got)
 	}

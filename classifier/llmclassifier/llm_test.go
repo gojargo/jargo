@@ -1,4 +1,4 @@
-package llm_test
+package llmclassifier_test
 
 import (
 	"context"
@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/gojargo/jargo/classifier"
-	"github.com/gojargo/jargo/classifier/llm"
+	"github.com/gojargo/jargo/classifier/llmclassifier"
 	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	llmservice "github.com/gojargo/jargo/service/llm"
@@ -66,13 +66,15 @@ func (silentLLM) RunInference(
 	return "", ctx.Err()
 }
 
-func newClassifier(t *testing.T, cfg llm.Config, replies ...string) (*llm.Classifier, *scriptedLLM) {
+func newClassifier(
+	t *testing.T, cfg llmclassifier.Config, replies ...string,
+) (*llmclassifier.Classifier, *scriptedLLM) {
 	t.Helper()
 	scripted := &scriptedLLM{replies: replies}
 	if cfg.LLM == nil {
 		cfg.LLM = scripted
 	}
-	c, err := llm.New(cfg)
+	c, err := llmclassifier.New(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +98,7 @@ func score(name string, q classifier.ScoreQuestion) []classifier.Named[classifie
 func near(a, b float64) bool { return math.Abs(a-b) < 1e-9 }
 
 func TestYesNoAnswersFromTheJSONReply(t *testing.T) {
-	c, _ := newClassifier(t, llm.Config{}, `{"greeting": {"probability": 0.93}}`)
+	c, _ := newClassifier(t, llmclassifier.Config{}, `{"greeting": {"probability": 0.93}}`)
 	results, err := c.YesNo(t.Context(), "Hello?", yesNo("greeting", "a greeting?"))
 	if err != nil {
 		t.Fatal(err)
@@ -107,7 +109,7 @@ func TestYesNoAnswersFromTheJSONReply(t *testing.T) {
 }
 
 func TestChoiceAnswersWithAProbabilityPerOption(t *testing.T) {
-	c, _ := newClassifier(t, llm.Config{},
+	c, _ := newClassifier(t, llmclassifier.Config{},
 		`{"turn": {"choice": "short", "probabilities": {"short": 0.8, "complete": 0.2}}}`)
 	q := classifier.ChoiceQuestion{
 		Instructions: "is the turn over?",
@@ -134,7 +136,7 @@ func TestChoiceAnswersWithAProbabilityPerOption(t *testing.T) {
 }
 
 func TestScoreAnswersFromAProbabilityPerLevel(t *testing.T) {
-	c, _ := newClassifier(t, llm.Config{}, `{"mood": {"probabilities": {"0": 0.0, "1": 0.3, "2": 0.7}}}`)
+	c, _ := newClassifier(t, llmclassifier.Config{}, `{"mood": {"probabilities": {"0": 0.0, "1": 0.3, "2": 0.7}}}`)
 	q := classifier.ScoreQuestion{Instructions: "how upset?", Levels: []any{"calm", "impatient", "frustrated"}}
 	results, err := c.Score(t.Context(), "This is the third time!", score("mood", q))
 	if err != nil {
@@ -158,7 +160,7 @@ func TestScoreAnswersFromAProbabilityPerLevel(t *testing.T) {
 }
 
 func TestScoreProbabilitiesAreScaledToSumToOne(t *testing.T) {
-	c, _ := newClassifier(t, llm.Config{}, `{"mood": {"probabilities": {"0": 0.5, "1": 1.0}}}`)
+	c, _ := newClassifier(t, llmclassifier.Config{}, `{"mood": {"probabilities": {"0": 0.5, "1": 1.0}}}`)
 	q := classifier.ScoreQuestion{Instructions: "how upset?", Levels: []any{"calm", "upset"}}
 	results, err := c.Score(t.Context(), "hmm", score("mood", q))
 	if err != nil {
@@ -171,7 +173,7 @@ func TestScoreProbabilitiesAreScaledToSumToOne(t *testing.T) {
 }
 
 func TestAScoreWithoutAnyProbabilityIsAnError(t *testing.T) {
-	c, _ := newClassifier(t, llm.Config{}, `{"mood": {"probabilities": {}}}`)
+	c, _ := newClassifier(t, llmclassifier.Config{}, `{"mood": {"probabilities": {}}}`)
 	q := classifier.ScoreQuestion{Instructions: "how upset?", Levels: []any{"calm", "upset"}}
 	if _, err := c.Score(t.Context(), "hmm", score("mood", q)); !errors.Is(err, classifier.ErrClassifier) {
 		t.Fatalf("err = %v, want a classifier error", err)
@@ -179,7 +181,7 @@ func TestAScoreWithoutAnyProbabilityIsAnError(t *testing.T) {
 }
 
 func TestSeveralQuestionsGoInOneCall(t *testing.T) {
-	c, scripted := newClassifier(t, llm.Config{},
+	c, scripted := newClassifier(t, llmclassifier.Config{},
 		`{"greeting": {"probability": 0.9}, "mood": {"probabilities": {"0": 1.0, "1": 0.0}}}`)
 	results, err := c.Ask(t.Context(), "Hello there!", []classifier.Named[classifier.Question]{
 		{Name: "greeting", Question: classifier.YesNoQuestion{Instructions: "a greeting?"}},
@@ -199,7 +201,7 @@ func TestSeveralQuestionsGoInOneCall(t *testing.T) {
 }
 
 func TestTheQuestionIsRenderedWithItsOptionsAndTheReplyShape(t *testing.T) {
-	c, scripted := newClassifier(t, llm.Config{}, `{"which": {"choice": "a"}}`)
+	c, scripted := newClassifier(t, llmclassifier.Config{}, `{"which": {"choice": "a"}}`)
 	_, err := c.Choice(t.Context(), map[string]any{"assistant": "Where to?", "user": "japan"},
 		choice("which", classifier.ChoiceQuestion{
 			Instructions: "which?",
@@ -227,7 +229,7 @@ func TestTheQuestionIsRenderedWithItsOptionsAndTheReplyShape(t *testing.T) {
 }
 
 func TestYesAndNoMeaningsAreWrittenIntoTheQuestion(t *testing.T) {
-	c, scripted := newClassifier(t, llm.Config{}, `{"q": {"probability": 0.1}}`)
+	c, scripted := newClassifier(t, llmclassifier.Config{}, `{"q": {"probability": 0.1}}`)
 	_, err := c.YesNo(t.Context(), "Hello?", []classifier.Named[classifier.YesNoQuestion]{{
 		Name:     "q",
 		Question: classifier.YesNoQuestion{Instructions: "is this a voicemail?", Yes: "a recording", No: "a person"},
@@ -242,7 +244,7 @@ func TestYesAndNoMeaningsAreWrittenIntoTheQuestion(t *testing.T) {
 }
 
 func TestCustomInstructionsReachTheLLM(t *testing.T) {
-	c, scripted := newClassifier(t, llm.Config{Instructions: "Decide."}, `{"q": {"probability": 0.5}}`)
+	c, scripted := newClassifier(t, llmclassifier.Config{Instructions: "Decide."}, `{"q": {"probability": 0.5}}`)
 	if _, err := c.YesNo(t.Context(), "hi", yesNo("q", "?")); err != nil {
 		t.Fatal(err)
 	}
@@ -252,7 +254,7 @@ func TestCustomInstructionsReachTheLLM(t *testing.T) {
 }
 
 func TestAFencedReplyIsParsed(t *testing.T) {
-	c, _ := newClassifier(t, llm.Config{}, "Sure:\n```json\n{\"q\": {\"probability\": 0.4}}\n```\n")
+	c, _ := newClassifier(t, llmclassifier.Config{}, "Sure:\n```json\n{\"q\": {\"probability\": 0.4}}\n```\n")
 	results, err := c.YesNo(t.Context(), "hi", yesNo("q", "?"))
 	if err != nil || results["q"].Probability != 0.4 {
 		t.Fatalf("got %+v, %v; want 0.4", results, err)
@@ -306,7 +308,7 @@ func props(t *testing.T, schema any) map[string]any {
 }
 
 func TestTheReplySchemaHasOneAnswerPerQuestion(t *testing.T) {
-	c, scripted := newClassifier(t, llm.Config{},
+	c, scripted := newClassifier(t, llmclassifier.Config{},
 		`{"q": {"probability": 0.5}, "w": {"choice": "a", "probabilities": {"a": 1, "b": 0}}}`)
 	_, err := c.Ask(t.Context(), "hi", []classifier.Named[classifier.Question]{
 		{Name: "q", Question: classifier.YesNoQuestion{Instructions: "?"}},
@@ -338,7 +340,7 @@ func TestTheReplySchemaHasOneAnswerPerQuestion(t *testing.T) {
 }
 
 func TestTheScoreSchemaAsksForAProbabilityPerLevel(t *testing.T) {
-	c, scripted := newClassifier(t, llm.Config{}, `{"mood": {"probabilities": {"0": 0.5, "1": 0.5}}}`)
+	c, scripted := newClassifier(t, llmclassifier.Config{}, `{"mood": {"probabilities": {"0": 0.5, "1": 0.5}}}`)
 	q := classifier.ScoreQuestion{Instructions: "?", Levels: []any{"a", "b"}}
 	if _, err := c.Score(t.Context(), "hi", score("mood", q)); err != nil {
 		t.Fatal(err)
@@ -359,7 +361,7 @@ func twoOptions() classifier.ChoiceQuestion {
 }
 
 func TestAChoiceWithoutProbabilitiesHasNoConfidence(t *testing.T) {
-	c, _ := newClassifier(t, llm.Config{}, `{"q": {"choice": "b"}}`)
+	c, _ := newClassifier(t, llmclassifier.Config{}, `{"q": {"choice": "b"}}`)
 	results, err := c.Choice(t.Context(), "hi", choice("q", twoOptions()))
 	if err != nil {
 		t.Fatal(err)
@@ -371,7 +373,7 @@ func TestAChoiceWithoutProbabilitiesHasNoConfidence(t *testing.T) {
 }
 
 func TestALoneAnswerWithoutItsNameIsAccepted(t *testing.T) {
-	c, _ := newClassifier(t, llm.Config{}, `{"choice": "b", "probabilities": {"a": 0.2, "b": 0.8}}`)
+	c, _ := newClassifier(t, llmclassifier.Config{}, `{"choice": "b", "probabilities": {"a": 0.2, "b": 0.8}}`)
 	results, err := c.Choice(t.Context(), "hi", choice("q", twoOptions()))
 	if err != nil || results["q"].Choice != "b" {
 		t.Fatalf("got %+v, %v; want b", results, err)
@@ -379,7 +381,7 @@ func TestALoneAnswerWithoutItsNameIsAccepted(t *testing.T) {
 }
 
 func TestAFailedLLMCallIsAClassifierError(t *testing.T) {
-	c, _ := newClassifier(t, llm.Config{LLM: failingLLM{}})
+	c, _ := newClassifier(t, llmclassifier.Config{LLM: failingLLM{}})
 	_, err := c.YesNo(t.Context(), "hi", yesNo("q", "?"))
 	if !errors.Is(err, classifier.ErrClassifier) || !strings.Contains(err.Error(), "connection reset") {
 		t.Fatalf("err = %v, want a classifier error carrying the cause", err)
@@ -387,7 +389,7 @@ func TestAFailedLLMCallIsAClassifierError(t *testing.T) {
 }
 
 func TestATextReplyIsAnError(t *testing.T) {
-	c, _ := newClassifier(t, llm.Config{}, "I think yes.")
+	c, _ := newClassifier(t, llmclassifier.Config{}, "I think yes.")
 	_, err := c.YesNo(t.Context(), "hi", yesNo("q", "?"))
 	if !errors.Is(err, classifier.ErrClassifier) || !strings.Contains(err.Error(), "JSON object") {
 		t.Fatalf("err = %v, want a classifier error about the JSON object", err)
@@ -395,7 +397,7 @@ func TestATextReplyIsAnError(t *testing.T) {
 }
 
 func TestAMissingAnswerIsAnError(t *testing.T) {
-	c, _ := newClassifier(t, llm.Config{}, `{"other": {"probability": 0.5}}`)
+	c, _ := newClassifier(t, llmclassifier.Config{}, `{"other": {"probability": 0.5}}`)
 	_, err := c.YesNo(t.Context(), "hi", []classifier.Named[classifier.YesNoQuestion]{
 		{Name: "a", Question: classifier.YesNoQuestion{Instructions: "?"}},
 		{Name: "b", Question: classifier.YesNoQuestion{Instructions: "?"}},
@@ -406,7 +408,7 @@ func TestAMissingAnswerIsAnError(t *testing.T) {
 }
 
 func TestAChoiceOutsideTheOptionsIsAnError(t *testing.T) {
-	c, _ := newClassifier(t, llm.Config{}, `{"q": {"choice": "c"}}`)
+	c, _ := newClassifier(t, llmclassifier.Config{}, `{"q": {"choice": "c"}}`)
 	_, err := c.Choice(t.Context(), "hi", choice("q", twoOptions()))
 	if !errors.Is(err, classifier.ErrClassifier) || !strings.Contains(err.Error(), "not an option") {
 		t.Fatalf("err = %v, want not an option", err)
@@ -414,7 +416,7 @@ func TestAChoiceOutsideTheOptionsIsAnError(t *testing.T) {
 }
 
 func TestAReplyThatDoesNotComeInTimeIsAnError(t *testing.T) {
-	c, _ := newClassifier(t, llm.Config{LLM: silentLLM{}, Timeout: 50 * time.Millisecond})
+	c, _ := newClassifier(t, llmclassifier.Config{LLM: silentLLM{}, Timeout: 50 * time.Millisecond})
 	_, err := c.YesNo(t.Context(), "hello", yesNo("answer", "a greeting?"))
 	if !errors.Is(err, classifier.ErrClassifier) || !strings.Contains(err.Error(), "did not answer within") {
 		t.Fatalf("err = %v, want did not answer within", err)
@@ -422,13 +424,13 @@ func TestAReplyThatDoesNotComeInTimeIsAnError(t *testing.T) {
 }
 
 func TestAServiceIsRequired(t *testing.T) {
-	if _, err := llm.New(llm.Config{}); err == nil {
+	if _, err := llmclassifier.New(llmclassifier.Config{}); err == nil {
 		t.Fatal("a classifier with no LLM was built")
 	}
 }
 
 // metricsOf asks one question and returns what the classifier reported.
-func metricsOf(t *testing.T, c *llm.Classifier) []frames.MetricsData {
+func metricsOf(t *testing.T, c *llmclassifier.Classifier) []frames.MetricsData {
 	t.Helper()
 	got := make(chan []frames.MetricsData, 1)
 	event.On(c.Events(), classifier.EventMetrics, func(_ context.Context, data []frames.MetricsData) {
@@ -447,7 +449,7 @@ func metricsOf(t *testing.T, c *llm.Classifier) []frames.MetricsData {
 }
 
 func TestEveryCallReportsItsTimeWithoutTokens(t *testing.T) {
-	c, _ := newClassifier(t, llm.Config{}, `{"answer": {"probability": 0.9}}`)
+	c, _ := newClassifier(t, llmclassifier.Config{}, `{"answer": {"probability": 0.9}}`)
 	data := metricsOf(t, c)
 	if len(data) != 1 {
 		t.Fatalf("got %d metrics, want the processing time alone", len(data))
@@ -462,7 +464,7 @@ func TestEveryCallReportsItsTimeWithoutTokens(t *testing.T) {
 }
 
 func TestANamedClassifierReportsMetricsUnderItsName(t *testing.T) {
-	c, _ := newClassifier(t, llm.Config{Name: "voicemail"}, `{"answer": {"probability": 0.9}}`)
+	c, _ := newClassifier(t, llmclassifier.Config{Name: "voicemail"}, `{"answer": {"probability": 0.9}}`)
 	data := metricsOf(t, c)
 	if c.Name() != "voicemail" || data[0].MetricsProcessor() != "voicemail" {
 		t.Fatalf("name = %q, metrics under %q; want voicemail", c.Name(), data[0].MetricsProcessor())
