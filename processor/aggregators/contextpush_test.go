@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor/aggregators"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // Tests for the run a tool result or an appended message asks for when the push
@@ -41,7 +41,7 @@ func newAssistantHarness(t *testing.T, convo *frames.LLMContext) *assistantHarne
 		ReachedUpstreamFilter:   pipeline.AnyFrame,
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&h.task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
+	event.On(&h.task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
 		if _, ok := f.(*frames.LLMContextFrame); ok {
 			h.mu.Lock()
 			h.runs++
@@ -49,10 +49,10 @@ func newAssistantHarness(t *testing.T, convo *frames.LLMContext) *assistantHarne
 		}
 	})
 	started := make(chan struct{})
-	events.On(&h.task.Registry, pipeline.EventPipelineStarted, func(context.Context, *frames.StartFrame) {
+	event.On(&h.task.Registry, pipeline.EventPipelineStarted, func(context.Context, *frames.StartFrame) {
 		close(started)
 	})
-	events.On(&h.task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&h.task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		h.mu.Lock()
 		h.down = append(h.down, f)
 		h.mu.Unlock()

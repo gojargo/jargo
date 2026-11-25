@@ -6,12 +6,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/processor/aggregators"
 	"github.com/gojargo/jargo/processor/turns"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // runThrough runs feed through p, pausing after each frame so system frames do
@@ -21,7 +21,7 @@ func runThrough(t *testing.T, p processor.Processor, feed ...frames.Frame) []fra
 	var mu sync.Mutex
 	var down []frames.Frame
 	task := pipeline.NewWorker(pipeline.New(p), pipeline.WorkerConfig{ReachedDownstreamFilter: pipeline.AnyFrame})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		down = append(down, f)
 		mu.Unlock()
@@ -56,7 +56,7 @@ func TestUserBackchannel(t *testing.T) {
 	pair := aggregators.New(convo)
 	var mu sync.Mutex
 	var got []aggregators.UserBackchannel
-	events.On(pair.User().Events(), aggregators.EventUserBackchannel,
+	event.On(pair.User().Events(), aggregators.EventUserBackchannel,
 		func(_ context.Context, b aggregators.UserBackchannel) {
 			mu.Lock()
 			got = append(got, b)
@@ -85,7 +85,7 @@ func TestUserBackchannelIsSuppressedWhileTheUserIsMuted(t *testing.T) {
 		aggregators.WithMuteStrategies(turns.NewFirstSpeechUserMute()))
 	var mu sync.Mutex
 	reported := 0
-	events.On(pair.User().Events(), aggregators.EventUserBackchannel,
+	event.On(pair.User().Events(), aggregators.EventUserBackchannel,
 		func(context.Context, aggregators.UserBackchannel) {
 			mu.Lock()
 			reported++
@@ -113,7 +113,7 @@ func TestAssistantBackchannel(t *testing.T) {
 	pair := aggregators.New(convo)
 	var mu sync.Mutex
 	var got []string
-	events.On(pair.Assistant().Events(), aggregators.EventAssistantBackchannel,
+	event.On(pair.Assistant().Events(), aggregators.EventAssistantBackchannel,
 		func(_ context.Context, b aggregators.AssistantBackchannel) {
 			mu.Lock()
 			got = append(got, b.Content)

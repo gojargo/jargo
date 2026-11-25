@@ -11,12 +11,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/processor/aggregators"
 	"github.com/gojargo/jargo/processor/turns"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 const (
@@ -297,7 +297,7 @@ func idleFired(t *testing.T, s script, empty *turns.EmptyUserTurnConfig) bool {
 		mu   sync.Mutex
 		idle bool
 	)
-	events.OnSignal(pair.User().Events(), aggregators.EventUserTurnIdle, func(context.Context) {
+	event.OnSignal(pair.User().Events(), aggregators.EventUserTurnIdle, func(context.Context) {
 		mu.Lock()
 		idle = true
 		mu.Unlock()

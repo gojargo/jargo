@@ -20,7 +20,7 @@ import (
 	"github.com/gojargo/jargo/service/tts"
 	"github.com/gojargo/jargo/service/wsservice"
 	"github.com/gojargo/jargo/service/wsutil"
-	ttstext "github.com/gojargo/jargo/utils/text"
+	ttstext "github.com/gojargo/jargo/text"
 )
 
 const (

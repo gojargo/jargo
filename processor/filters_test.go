@@ -7,7 +7,7 @@ import (
 	"github.com/gojargo/jargo/clock"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
-	"github.com/gojargo/jargo/utils/notify"
+	"github.com/gojargo/jargo/processor/notify"
 )
 
 // linkAndStart puts p between two recorders and starts all three. Both sides

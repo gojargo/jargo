@@ -13,8 +13,8 @@ import (
 	"time"
 
 	"github.com/gojargo/jargo/frames"
-	uctx "github.com/gojargo/jargo/utils/context"
-	ttstext "github.com/gojargo/jargo/utils/text"
+	ttstext "github.com/gojargo/jargo/text"
+	"github.com/gojargo/jargo/text/align"
 )
 
 // heldSynth holds every synthesis until release is closed, the way a provider
@@ -83,7 +83,7 @@ func (s *heldSynth) RunTTS(_ context.Context, text, contextID string, yield func
 
 // deliver appends a context's words and audio and ends it, unless the context is
 // gone already.
-func (s *heldSynth) deliver(host AudioContextHost, contextID string, words []uctx.WordTiming) {
+func (s *heldSynth) deliver(host AudioContextHost, contextID string, words []align.WordTiming) {
 	if !host.AudioContextAvailable(contextID) {
 		return
 	}
@@ -102,7 +102,7 @@ type heldWordSynth struct{ *heldSynth }
 func (s heldWordSynth) RunTTSTimed(
 	_ context.Context, text, contextID string,
 	_ func(frames.Frame) error,
-	_ func([]uctx.WordTiming, WordTimingOptions) error,
+	_ func([]align.WordTiming, WordTimingOptions) error,
 ) error {
 	s.mu.Lock()
 	s.requests[text] = contextID
@@ -115,7 +115,7 @@ func (s heldWordSynth) RunTTSTimed(
 		// has registered the text they belong to, and a word no text claims is
 		// dropped.
 		time.Sleep(10 * time.Millisecond)
-		s.deliver(host, contextID, []uctx.WordTiming{{Word: text, Offset: 0}})
+		s.deliver(host, contextID, []align.WordTiming{{Word: text, Offset: 0}})
 	})
 	return nil
 }
@@ -244,7 +244,7 @@ func TestQueuedUninterruptibleSynthesisSurvivesAnInterruptedContext(t *testing.T
 type laterWordsSynth struct {
 	mu    sync.Mutex
 	host  AudioContextHost
-	calls [][]uctx.WordTiming
+	calls [][]align.WordTiming
 	wg    sync.WaitGroup
 }
 
@@ -263,11 +263,11 @@ func (s *laterWordsSynth) RunTTS(context.Context, string, string, func(frames.Fr
 func (s *laterWordsSynth) RunTTSTimed(
 	_ context.Context, _, contextID string,
 	_ func(frames.Frame) error,
-	_ func([]uctx.WordTiming, WordTimingOptions) error,
+	_ func([]align.WordTiming, WordTimingOptions) error,
 ) error {
 	s.mu.Lock()
 	host := s.host
-	var words []uctx.WordTiming
+	var words []align.WordTiming
 	if len(s.calls) > 0 {
 		words, s.calls = s.calls[0], s.calls[1:]
 	}
@@ -287,7 +287,7 @@ func (s *laterWordsSynth) RunTTSTimed(
 // before its last word is heard. Those words outlive the interruption, so the
 // words spoken next are timed after them rather than over them.
 func TestWordsAfterAnInterruptionFollowUninterruptibleWordsStillToPlay(t *testing.T) {
-	synth := &laterWordsSynth{calls: [][]uctx.WordTiming{
+	synth := &laterWordsSynth{calls: [][]align.WordTiming{
 		{{Word: "Keep", Offset: 0}, {Word: "this.", Offset: 5}},
 		{{Word: "Next.", Offset: 0}},
 	}}

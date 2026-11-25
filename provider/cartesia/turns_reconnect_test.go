@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/errclass"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/provider/cartesia"
 	"github.com/gojargo/jargo/service/stt"
-	errs "github.com/gojargo/jargo/utils/errors"
 )
 
 func turnsService(url string) *stt.StreamService {
@@ -162,7 +162,7 @@ func TestTurnsRejectedSettingsAreNotRetried(t *testing.T) {
 		t.Error("service still usable")
 	}
 	efs := errorFrames(res.up)
-	if len(efs) != 1 || efs[0].Category != errs.InvalidRequest {
+	if len(efs) != 1 || efs[0].Category != errclass.InvalidRequest {
 		t.Errorf("errors = %v, want one INVALID_REQUEST", efs)
 	}
 }

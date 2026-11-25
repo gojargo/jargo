@@ -7,7 +7,7 @@ import (
 
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
-	"github.com/gojargo/jargo/utils/text"
+	"github.com/gojargo/jargo/text"
 )
 
 // DefaultSpeculationTimeout is how long a prediction may go unresolved before it

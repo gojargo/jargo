@@ -8,12 +8,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/service/llm"
 	"github.com/gojargo/jargo/service/settings"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // How an LLM service runs its LLM extensions, with the service running in a
@@ -139,14 +139,14 @@ func runExtended(t *testing.T, p processor.Processor, send ...any) (down, up []f
 		}
 		return true
 	}
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if keep(f) {
 			mu.Lock()
 			down = append(down, f)
 			mu.Unlock()
 		}
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
 		if keep(f) {
 			mu.Lock()
 			up = append(up, f)

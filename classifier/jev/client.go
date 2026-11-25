@@ -21,7 +21,7 @@ import (
 	"github.com/gojargo/jargo/classifier"
 	"github.com/gojargo/jargo/internal/ordered"
 	"github.com/gojargo/jargo/internal/validate"
-	"github.com/gojargo/jargo/utils/network"
+	"github.com/gojargo/jargo/retry"
 )
 
 const (
@@ -255,7 +255,7 @@ func (c *Client) Ask(
 				return nil, Usage{}, fmt.Errorf("%w: Jev is busy (HTTP %d) after %d attempts",
 					classifier.ErrClassifier, status, attempt)
 			}
-			wait := network.ExponentialBackoffTime(attempt, 250*time.Millisecond, 2*time.Second, 0.25)
+			wait := retry.ExponentialBackoffTime(attempt, 250*time.Millisecond, 2*time.Second, 0.25)
 			slog.Debug("Jev busy, retrying", "status", status, "wait", wait)
 			if err := c.sleep(ctx, wait); err != nil {
 				return nil, Usage{}, fmt.Errorf("%w: Jev request failed: %w", classifier.ErrClassifier, err)

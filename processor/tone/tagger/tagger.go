@@ -34,7 +34,7 @@ import (
 	"github.com/gojargo/jargo/processor/aggregators"
 	"github.com/gojargo/jargo/processor/rtvi"
 	"github.com/gojargo/jargo/service/tts"
-	"github.com/gojargo/jargo/utils/text"
+	"github.com/gojargo/jargo/text"
 )
 
 // ErrVocabulary is returned for a vocabulary that names a label the tagger

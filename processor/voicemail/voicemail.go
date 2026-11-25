@@ -20,11 +20,11 @@ import (
 
 	"github.com/gojargo/jargo/classifier"
 	llmclassifier "github.com/gojargo/jargo/classifier/llm"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
+	"github.com/gojargo/jargo/processor/notify"
 	"github.com/gojargo/jargo/service/llm"
-	"github.com/gojargo/jargo/utils/events"
-	"github.com/gojargo/jargo/utils/notify"
 )
 
 // The events a Detector raises. Each handler receives the detector as its
@@ -123,7 +123,7 @@ type Config struct {
 // the TTS service:
 //
 //	detector, err := voicemail.New(voicemail.Config{Classifier: c})
-//	events.OnSignal(detector.Events(), voicemail.EventVoicemailDetected, func(ctx context.Context) {
+//	event.OnSignal(detector.Events(), voicemail.EventVoicemailDetected, func(ctx context.Context) {
 //		_ = detector.PushFrame(ctx, frames.NewTTSSpeakFrame("Please call me back."), processor.Downstream)
 //	})
 //	pipe := pipeline.New(in, stt, detector.Detector(), userAgg, llm, tts, detector.Gate(), out, assistantAgg)
@@ -195,7 +195,7 @@ func New(cfg Config) (*Detector, error) {
 	d.gate = NewTTSGate(d.conversation, d.voicemail)
 	d.Events().Register(EventConversationDetected, false)
 	d.Events().Register(EventVoicemailDetected, false)
-	events.On(c.Events(), classifier.EventMetrics, d.onClassifierMetrics)
+	event.On(c.Events(), classifier.EventMetrics, d.onClassifierMetrics)
 	return d, nil
 }
 

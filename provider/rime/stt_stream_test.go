@@ -10,12 +10,12 @@ import (
 	"time"
 
 	"github.com/gojargo/jargo/audio/resample"
+	"github.com/gojargo/jargo/errclass"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor/aggregators"
 	"github.com/gojargo/jargo/processor/turns"
 	"github.com/gojargo/jargo/service/settings"
-	errs "github.com/gojargo/jargo/utils/errors"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // Ported from upstream (test_stream_starts_with_audio_from_before_speech).
@@ -149,17 +149,17 @@ func TestSTTFinalIsNotFinalizedOnceTheUserSpeaksAgain(t *testing.T) {
 func TestSTTStreamErrorCategoryAndUsability(t *testing.T) {
 	cases := []struct {
 		kind     errorKind
-		category errs.Category
+		category errclass.Category
 		usable   bool
 	}{
-		{kindAuthentication, errs.Authentication, false},
-		{kindPermission, errs.Authorization, false},
-		{kindBilling, errs.Quota, true},
-		{kindInput, errs.InvalidRequest, false},
-		{kindTimeout, errs.Connectivity, true},
-		{kindUnavailable, errs.Connectivity, true},
-		{kindResourceLimit, errs.Unknown, true},
-		{kindStream, errs.Unknown, true},
+		{kindAuthentication, errclass.Authentication, false},
+		{kindPermission, errclass.Authorization, false},
+		{kindBilling, errclass.Quota, true},
+		{kindInput, errclass.InvalidRequest, false},
+		{kindTimeout, errclass.Connectivity, true},
+		{kindUnavailable, errclass.Connectivity, true},
+		{kindResourceLimit, errclass.Unknown, true},
+		{kindStream, errclass.Unknown, true},
 	}
 	for _, c := range cases {
 		t.Run(c.kind.String(), func(t *testing.T) {
@@ -260,7 +260,7 @@ func TestSTTMissingKeyIsAnAuthenticationFailure(t *testing.T) {
 		t.Fatalf("error = %v, want an authentication failure", err)
 	}
 	c := newSTT(STTConfig{}, nil)
-	if got := c.ClassifyError(err); got != errs.Authentication {
+	if got := c.ClassifyError(err); got != errclass.Authentication {
 		t.Errorf("category = %v, want authentication", got)
 	}
 }
@@ -490,7 +490,7 @@ func userTurns(t *testing.T, client *fakeRime, cfg STTConfig, opts ...aggregator
 	convo := frames.NewLLMContext("")
 	agg := aggregators.New(convo, opts...)
 	turnsCh := make(chan string, 4)
-	events.On(agg.User().Events(), aggregators.EventUserTurnStopped,
+	event.On(agg.User().Events(), aggregators.EventUserTurnStopped,
 		func(_ context.Context, stopped aggregators.UserTurnStopped) { turnsCh <- stopped.Content })
 	r := runSTT(t, cfg, client, agg.User())
 	var got []string

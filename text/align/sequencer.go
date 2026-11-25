@@ -1,0 +1,691 @@
+package align
+
+import (
+	"log/slog"
+	"maps"
+	"slices"
+	"strings"
+	"sync"
+
+	"github.com/gojargo/jargo/frames"
+)
+
+// aggregatedFrameSlot is one AggregatedTextFrame's place in the ordered queue.
+//
+// Every frame handed to the synthesizer takes a slot, spoken or skipped. A
+// skipped frame (a code block excluded from synthesis, say) waits at its
+// position and goes downstream only once every spoken slot ahead of it is done,
+// which is what keeps the context in the order it was written.
+type aggregatedFrameSlot struct {
+	frame                *frames.AggregatedTextFrame
+	contextID            string
+	spoken               bool
+	tracker              *WordCompletionTracker
+	transportDestination string
+	complete             bool
+	includesInterFrame   bool
+}
+
+// bufferedWord is a word timing held until the sentence it belongs to has been
+// promoted into a slot. Streaming a turn token by token means a word can arrive
+// before the sentence it is part of has been recognized.
+type bufferedWord struct {
+	word               string
+	pts                int64
+	contextID          string
+	includesInterFrame bool
+}
+
+// streamingContext is the per-context state of a sentence being assembled from
+// tokens. Each live context keeps its own, so two in flight never share a
+// pending sentence.
+type streamingContext struct {
+	aggregator   *parallelSentenceAggregator
+	appendToCtx  bool
+	buildTracker bool
+	// textType is the text type of a promoted sentence: a sentence for streamed
+	// tokens, or the type the context's text was given with, such as a
+	// TTSSpeakFrame's.
+	textType frames.TextType
+}
+
+// AggregatedFrameSequencer orders the frames of a synthesis so the conversation
+// context is written in the order the text was spoken.
+//
+// It holds a queue of spoken and skipped slots. A spoken slot is tracked by a
+// WordCompletionTracker and completes as its words come back; a skipped slot
+// waits until every spoken slot ahead of it is complete, then goes downstream.
+//
+// Contexts can be live at once, so the state is kept in three tiers that never
+// bleed into each other: slots is the single ordered timeline across all
+// contexts, contextAppend marks a context live and says whether its words are
+// written to the conversation, and streaming holds the transient pending
+// sentence of a context still assembling one from tokens.
+type AggregatedFrameSequencer struct {
+	// mu guards everything below it. The sequencer is reached from the goroutine
+	// processing frames and from the one draining a context's audio: a barge-in
+	// clears it while the audio still playing is completing slots against it.
+	//
+	// A single event loop would need no such guard; it is here because these are
+	// genuinely separate goroutines.
+	mu sync.Mutex
+
+	name          string
+	streamingMode bool
+	slots         []*aggregatedFrameSlot
+	contextAppend map[string]bool
+	streaming     map[string]*streamingContext
+	buffered      []bufferedWord
+	// llmMarkup is the tags only the LLM's text carries, such as an expressive
+	// conversation's, which word tracking passes over in it. Set by the TTS
+	// service.
+	llmMarkup LLMMarkup
+}
+
+// SetLLMMarkup sets the tags only the LLM's text carries, such as an
+// expressive conversation's, which word tracking passes over in it. The TTS
+// service sets it before it speaks.
+func (s *AggregatedFrameSequencer) SetLLMMarkup(m LLMMarkup) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.llmMarkup = m
+}
+
+// NewAggregatedFrameSequencer builds a sequencer labeled name.
+//
+// Set streaming when each register call carries one token rather than a whole
+// unit: tokens are then assembled back into sentences and a slot appears only
+// once a boundary is confirmed. Streaming requires the caller to reuse one
+// context id for a whole turn, since a sentence built from several tokens is
+// registered under a single id and every one of its word timings must arrive
+// tagged with that same id.
+func NewAggregatedFrameSequencer(name string, streaming bool) *AggregatedFrameSequencer {
+	return &AggregatedFrameSequencer{
+		name:          name,
+		streamingMode: streaming,
+		contextAppend: map[string]bool{},
+		streaming:     map[string]*streamingContext{},
+	}
+}
+
+// RegisterSpoken records a frame handed to the synthesizer and returns whatever
+// the call unblocks.
+//
+// Not streaming, this registers a slot at once. Streaming, it feeds the token to
+// the context's sentence assembler and registers a slot only once a boundary is
+// confirmed. buildTracker is false for a service with no word timings, whose
+// slot completes on CompleteSpokenSlot instead. language is what the text is
+// written in, used for this text and the boundaries of the context's pending
+// sentence from here on.
+func (s *AggregatedFrameSequencer) registerSpokenLocked(
+	frame *frames.AggregatedTextFrame,
+	contextID, ttsText string,
+	appendToContext, buildTracker, includesInterFrame bool,
+	language string,
+) []frames.Frame {
+	if !s.streamingMode {
+		var tracker *WordCompletionTracker
+		if buildTracker {
+			tracker = NewWordCompletionTrackerWithMarkup(ttsText, frame.Text, rawOr(frame), s.llmMarkup)
+		}
+		s.appendSpokenSlot(frame, contextID, tracker, appendToContext, includesInterFrame)
+		return nil
+	}
+	sc, ok := s.streaming[contextID]
+	if !ok {
+		textType := frame.TextType
+		if textType == frames.TextTypeToken {
+			textType = frames.TextTypeSentence
+		}
+		sc = &streamingContext{
+			aggregator:   newParallelSentenceAggregator(language),
+			appendToCtx:  appendToContext,
+			buildTracker: buildTracker,
+			textType:     textType,
+		}
+		s.streaming[contextID] = sc
+	}
+	sc.aggregator.setLanguage(language)
+	var out []frames.Frame
+	for _, agg := range sc.aggregator.aggregate(ttsText, rawOr(frame), frame.Text) {
+		out = append(out, s.promote(agg, contextID, sc)...)
+	}
+	return out
+}
+
+// RegisterSkipped records a frame that is not spoken and returns it once it is
+// unblocked. Any sentence still pending for the context is finalized first, so a
+// real spoken slot sits immediately ahead of the skipped one and blocks it until
+// that sentence has actually been spoken.
+func (s *AggregatedFrameSequencer) registerSkippedLocked(
+	frame *frames.AggregatedTextFrame,
+	contextID, transportDestination string,
+) []frames.Frame {
+	out := s.finalizeLocked(contextID)
+	frame.ContextID = contextID
+	s.slots = append(s.slots, &aggregatedFrameSlot{
+		frame:                frame,
+		contextID:            contextID,
+		spoken:               false,
+		transportDestination: transportDestination,
+	})
+	return append(out, s.flushLocked(0)...)
+}
+
+// Finalize promotes a context's still-pending sentence into a real slot, for the
+// end of its text where no more tokens are coming. The context's live entry is
+// kept: word timings for the slot just promoted arrive later, during playback,
+// and have to be recognized.
+func (s *AggregatedFrameSequencer) finalizeLocked(contextID string) []frames.Frame {
+	if !s.streamingMode || contextID == "" {
+		return nil
+	}
+	sc, ok := s.streaming[contextID]
+	if !ok {
+		return nil
+	}
+	delete(s.streaming, contextID)
+	agg, ok := sc.aggregator.flush()
+	if !ok {
+		return nil
+	}
+	return s.promote(agg, contextID, sc)
+}
+
+// ProcessWord folds one word timing into the slot it belongs to and returns the
+// frames to push. pts is when the word is spoken.
+func (s *AggregatedFrameSequencer) processWordLocked(
+	word string, pts int64, contextID string, includesInterFrame bool,
+) []frames.Frame {
+	// A word for a context that was never registered, was cleared by an
+	// interruption, or has already finished is stale: a provider can deliver
+	// timings seconds after its context was abandoned, and emitting them would
+	// interleave them into the current turn. A context still assembling a
+	// sentence is not stale; its words are buffered below.
+	_, pending := s.streaming[contextID]
+	if contextID != "" && !s.contextLive(contextID) && !pending {
+		slog.Debug("sequencer dropping stale word", "sequencer", s.name, "word", word, "context", contextID)
+		return nil
+	}
+
+	active := s.activeSlot(contextID)
+	if s.routeWord(active, word, pts, contextID, includesInterFrame) {
+		return nil
+	}
+
+	complete, overflow := false, ""
+	if active != nil && active.tracker != nil {
+		complete = active.tracker.AddWord(word)
+		if over, ok := active.tracker.OverflowWord(); ok {
+			overflow = over
+		}
+	}
+
+	out := s.emitWord(active, word, pts, contextID, includesInterFrame)
+	if complete && active != nil {
+		active.complete = true
+		out = append(out, s.flushLocked(pts)...)
+		if overflow != "" {
+			slog.Debug("sequencer emitting overflow word", "sequencer", s.name, "word", overflow)
+			out = append(out, s.processWordLocked(overflow, pts, contextID, false)...)
+		}
+	}
+	return out
+}
+
+// routeWord decides whether the word can be handed to active at all. It reports
+// handled when the word was dealt with here: buffered until the sentence it
+// belongs to is promoted, or dropped when no slot claims it.
+func (s *AggregatedFrameSequencer) routeWord(
+	active *aggregatedFrameSlot, word string, pts int64, contextID string, includesInterFrame bool,
+) (handled bool) {
+	if active == nil {
+		if s.streamingMode {
+			s.buffered = append(s.buffered, bufferedWord{word, pts, contextID, includesInterFrame})
+			return true
+		}
+		return false
+	}
+	if active.tracker == nil || active.tracker.WordBelongsHere(word) {
+		return false
+	}
+	next := s.nextActiveSlot(active, contextID)
+	if next != nil && next.tracker != nil && next.tracker.WordBelongsHere(word) {
+		// It belongs to the next slot, so this one is force-completed below.
+		return false
+	}
+	if s.streamingMode {
+		// The sentence it belongs to may simply not be promoted yet.
+		s.buffered = append(s.buffered, bufferedWord{word, pts, contextID, includesInterFrame})
+		return true
+	}
+	// Nothing left in this turn's text can be what was reported. Emitting it
+	// anyway would write words the LLM never wrote into the conversation.
+	// Dropping it loses nothing: the slot keeps its place, so the next word that
+	// does match is matched past this one and carries the text it should have
+	// covered. Only text no later word accounts for waits for the force-complete
+	// when the audio context ends.
+	slog.Warn("sequencer dropping a word no slot recognizes", "sequencer", s.name, "word", word)
+	return true
+}
+
+// emitWord builds the frames for a word the active slot has taken.
+func (s *AggregatedFrameSequencer) emitWord(
+	active *aggregatedFrameSlot, word string, pts int64, contextID string, includesInterFrame bool,
+) []frames.Frame {
+	// The per-call flag wins, and is carried onto the slot so a force-complete
+	// inherits it.
+	if active != nil && includesInterFrame {
+		active.includesInterFrame = true
+	}
+	slotIFS := includesInterFrame
+	emitContextID := contextID
+	frameText, rawText, suppress := word, "", false
+	var segmentID uint64
+	if active != nil {
+		slotIFS = includesInterFrame || active.includesInterFrame
+		emitContextID = active.contextID
+		segmentID = active.frame.ID()
+	}
+	if active != nil && active.tracker != nil {
+		frameText = ""
+		if fw, ok := active.tracker.FrameWord(); ok {
+			frameText = fw
+		}
+		if rt, ok := active.tracker.RawText(); ok {
+			rawText = rt
+		}
+		suppress = active.tracker.Suppress()
+	}
+
+	var out []frames.Frame
+	if frameText != "" {
+		out = append(out, s.buildWordFrame(frameText, pts, emitContextID, segmentID, rawText, suppress, slotIFS))
+	}
+	if active != nil && active.tracker != nil && !suppress {
+		out = append(out, s.buildProgressFrame(active, pts))
+	}
+	return out
+}
+
+// CompleteSpokenSlot marks the first pending spoken slot complete and returns
+// the skipped frames that unblocks. It is for a service with no word timings,
+// whose slots complete one at a time in the call that registers them.
+func (s *AggregatedFrameSequencer) completeSpokenSlotLocked() []frames.Frame {
+	for _, slot := range s.slots {
+		if slot.spoken && !slot.complete {
+			slot.complete = true
+			break
+		}
+	}
+	return s.flushLocked(0)
+}
+
+// Flush walks the queue and returns every skipped frame now unblocked. Complete
+// spoken slots come off the head, then skipped slots whose spoken predecessors
+// are all done. It stops at the first incomplete spoken slot. A non-zero
+// lastWordPTS places the skipped frames right after the last spoken word.
+func (s *AggregatedFrameSequencer) flushLocked(lastWordPTS int64) []frames.Frame {
+	var out []frames.Frame
+	for len(s.slots) > 0 {
+		slot := s.slots[0]
+		switch {
+		case slot.spoken && slot.complete:
+			s.slots = s.slots[1:]
+		case !slot.spoken && !slot.complete:
+			slot.frame.AppendToContext = true
+			slot.frame.SetTransportDestination(slot.transportDestination)
+			if lastWordPTS != 0 {
+				slot.frame.SetPTS(lastWordPTS)
+			}
+			out = append(out, slot.frame)
+			slot.complete = true
+			s.slots = s.slots[1:]
+		default:
+			// Spoken but not yet complete: everything behind it waits.
+			return out
+		}
+	}
+	return out
+}
+
+// ForceComplete closes out a context whose audio has ended, for a provider that
+// silently drops word timings. Each of the context's incomplete spoken slots
+// emits a frame for its remaining unspoken text, paired with the progress frame
+// that carries the view to the end of it, and is marked complete; slots of other
+// contexts still in flight are left to their own words. The context is then
+// forgotten, so any word arriving later is stale.
+//
+// emitRemaining is whether to emit the remaining unspoken text. It is false when
+// the context produced no audio, so none of its text was spoken: the slots are
+// completed without emitting their text.
+func (s *AggregatedFrameSequencer) forceCompleteLocked(
+	contextID string, lastWordPTS int64, emitRemaining bool,
+) []frames.Frame {
+	var out []frames.Frame
+	if s.streamingMode {
+		s.discardBufferedWords(contextID)
+	}
+	for _, slot := range s.slots {
+		if !slot.spoken || slot.complete || slot.contextID != contextID {
+			continue
+		}
+		if slot.tracker != nil {
+			out = append(out, s.forceCompleteSlotLocked(slot, lastWordPTS, emitRemaining)...)
+		}
+		slot.complete = true
+	}
+	out = append(out, s.flushLocked(lastWordPTS)...)
+	delete(s.contextAppend, contextID)
+	delete(s.streaming, contextID)
+	return out
+}
+
+// forceCompleteSlotLocked returns the frames that close out one incomplete
+// spoken slot: its remaining unspoken text, paired with the progress frame that
+// carries the view to the end of it, or nothing when emitRemaining is false
+// and there is text left to drop. See forceCompleteLocked.
+func (s *AggregatedFrameSequencer) forceCompleteSlotLocked(
+	slot *aggregatedFrameSlot, lastWordPTS int64, emitRemaining bool,
+) []frames.Frame {
+	remaining := slot.tracker.RemainingTTSText(true)
+	rawRemaining, hasRaw := slot.tracker.RemainingRawTextOnly()
+	// The words left, not the markup the service was sent for its tags, are
+	// what the LLM's text has to hold, read without its own tags.
+	remainingWords := strings.Join(strings.Fields(stripCompleteMarkup(remaining)), " ")
+	llmWords := rawRemaining
+	if s.llmMarkup != nil {
+		llmWords = stripLLMMarkup(llmWords, s.llmMarkup)
+	}
+	llmWords = strings.Join(strings.Fields(llmWords), " ")
+	if hasRaw && rawRemaining != "" && remainingWords != "" && !contains(llmWords, remainingWords) {
+		slog.Warn("sequencer force-complete: remaining texts disagree, discarding the original",
+			"sequencer", s.name, "raw", rawRemaining, "text", remaining)
+		rawRemaining = ""
+	}
+	if remaining != "" && !emitRemaining {
+		slog.Warn("sequencer: context produced no audio, dropping unspoken text",
+			"sequencer", s.name, "context", slot.contextID, "text", remaining)
+		return nil
+	}
+	// A slot that is only tags, such as a sound, has LLM text and nothing left
+	// to say.
+	if remaining == "" && rawRemaining == "" {
+		return nil
+	}
+	word := s.buildWordFrame(remaining, lastWordPTS, slot.contextID,
+		slot.frame.ID(), rawRemaining, false, slot.includesInterFrame)
+	// That frame carries the rest of the text, so the progress view has to reach
+	// the end alongside it.
+	slot.tracker.TakeRemainingAsSpoken()
+	return []frames.Frame{word, s.buildProgressFrame(slot, lastWordPTS)}
+}
+
+// Clear drops the slots and context state, for an interruption, except those of
+// keepContexts: synthesis contexts that survive the interruption, whose words
+// are still to be attributed as they play.
+func (s *AggregatedFrameSequencer) Clear(keepContexts ...string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	keep := func(contextID string) bool { return slices.Contains(keepContexts, contextID) }
+	s.slots = slices.DeleteFunc(s.slots, func(slot *aggregatedFrameSlot) bool { return !keep(slot.contextID) })
+	maps.DeleteFunc(s.contextAppend, func(contextID string, _ bool) bool { return !keep(contextID) })
+	s.buffered = slices.DeleteFunc(s.buffered, func(w bufferedWord) bool { return !keep(w.contextID) })
+	maps.DeleteFunc(s.streaming, func(contextID string, _ *streamingContext) bool { return !keep(contextID) })
+}
+
+// appendSpokenSlot adds a registered spoken slot.
+func (s *AggregatedFrameSequencer) appendSpokenSlot(
+	frame *frames.AggregatedTextFrame,
+	contextID string,
+	tracker *WordCompletionTracker,
+	appendToContext, includesInterFrame bool,
+) {
+	s.contextAppend[contextID] = appendToContext
+	s.slots = append(s.slots, &aggregatedFrameSlot{
+		frame:              frame,
+		contextID:          contextID,
+		spoken:             true,
+		tracker:            tracker,
+		includesInterFrame: includesInterFrame,
+	})
+}
+
+// promote turns a sentence assembled from tokens into a real spoken slot.
+//
+// The sentence frame goes downstream first, marked as one that will be spoken:
+// it is the streaming counterpart of the sentence frame a whole-unit service
+// pushes before synthesis, and it is what later progress frames refer back to.
+// It does not itself go into the conversation, which is built from the per-word
+// frames instead.
+//
+// With a tracker the slot completes as words arrive. Without one there is no
+// word signal to complete it, and by the time a sentence promotes every token
+// making it up has already been sent, so it completes at once and a
+// whole-sentence frame carries its text into the conversation.
+func (s *AggregatedFrameSequencer) promote(
+	agg parallelAggregation, contextID string, sc *streamingContext,
+) []frames.Frame {
+	// A sentence that is only tags has no words to show, but its text still
+	// reaches the context in order.
+	if trimSpace(agg.userFacing) == "" && trimSpace(agg.llm) == "" {
+		return nil
+	}
+	appendToContext, buildTracker := sc.appendToCtx, sc.buildTracker
+	frame := frames.NewAggregatedTextFrame(agg.userFacing, sc.textType)
+	frame.RawText = agg.llm
+	frame.ContextID = contextID
+	frame.WillBeSpoken = true
+	frame.AppendToContext = false
+
+	var tracker *WordCompletionTracker
+	if buildTracker {
+		tracker = NewWordCompletionTrackerWithMarkup(agg.tts, agg.userFacing, agg.llm, s.llmMarkup)
+	}
+	s.appendSpokenSlot(frame, contextID, tracker, appendToContext, false)
+	var out []frames.Frame
+	if trimSpace(agg.userFacing) != "" {
+		out = append(out, frame)
+	}
+
+	if !buildTracker {
+		// No timings are coming, so the whole unit is spoken at once: the frame
+		// stands for the sentence rather than a word within it. It is trimmed
+		// like a sentence-mode unit: the context joins its parts with a space,
+		// and a streamed sentence keeps the spaces of its tokens.
+		wordFrame := frames.NewTTSTextFrame(trimSpace(agg.userFacing), sc.textType)
+		wordFrame.SegmentID = frame.ID()
+		wordFrame.RawText = trimSpace(agg.llm)
+		wordFrame.ContextID = contextID
+		wordFrame.WillBeSpoken = true
+		wordFrame.AppendToContext = appendToContext
+		out = append(out, wordFrame)
+		out = append(out, s.completeSpokenSlotLocked()...)
+	}
+	return append(out, s.drainBufferedWords()...)
+}
+
+// drainBufferedWords replays words held back now that a new slot may match them.
+// The buffer is taken before replaying, so a word that still matches nothing is
+// re-buffered by ProcessWord and waits for the next promotion rather than
+// looping here.
+func (s *AggregatedFrameSequencer) drainBufferedWords() []frames.Frame {
+	buffered := s.buffered
+	s.buffered = nil
+	var out []frames.Frame
+	for _, w := range buffered {
+		out = append(out, s.processWordLocked(w.word, w.pts, w.contextID, w.includesInterFrame)...)
+	}
+	return out
+}
+
+// discardBufferedWords drops this context's still-buffered words, which no slot
+// ever matched. Sentence mode drops an unrecognized word where it arrives;
+// streaming only knows one will never match once the context it belongs to has
+// ended. Another context's words are left for their own turn.
+func (s *AggregatedFrameSequencer) discardBufferedWords(contextID string) {
+	var keep []bufferedWord
+	for _, w := range s.buffered {
+		if w.contextID != contextID {
+			keep = append(keep, w)
+			continue
+		}
+		slog.Warn("sequencer dropping a buffered word no slot recognized",
+			"sequencer", s.name, "word", w.word)
+	}
+	s.buffered = keep
+}
+
+// contextLive reports whether the context has been registered and not finished.
+func (s *AggregatedFrameSequencer) contextLive(contextID string) bool {
+	_, ok := s.contextAppend[contextID]
+	return ok
+}
+
+// slotMatches reports whether slot can take a word for contextID. An empty
+// contextID matches any slot, for a provider that does not tag its words.
+func slotMatches(slot *aggregatedFrameSlot, contextID string) bool {
+	if !slot.spoken || slot.complete || slot.tracker == nil {
+		return false
+	}
+	return contextID == "" || slot.contextID == contextID
+}
+
+// activeSlot returns the first incomplete tracked spoken slot for contextID.
+func (s *AggregatedFrameSequencer) activeSlot(contextID string) *aggregatedFrameSlot {
+	for _, slot := range s.slots {
+		if slotMatches(slot, contextID) {
+			return slot
+		}
+	}
+	return nil
+}
+
+// nextActiveSlot returns the first such slot after current.
+func (s *AggregatedFrameSequencer) nextActiveSlot(
+	current *aggregatedFrameSlot, contextID string,
+) *aggregatedFrameSlot {
+	found := false
+	for _, slot := range s.slots {
+		if slot == current {
+			found = true
+			continue
+		}
+		if found && slotMatches(slot, contextID) {
+			return slot
+		}
+	}
+	return nil
+}
+
+// buildProgressFrame reports how much of a slot has been spoken.
+func (s *AggregatedFrameSequencer) buildProgressFrame(
+	slot *aggregatedFrameSlot, pts int64,
+) *frames.AggregatedTextProgressFrame {
+	f := frames.NewAggregatedTextProgressFrame(
+		slot.frame.ID(),
+		slot.contextID,
+		slot.frame.Text,
+		slot.frame.TextType,
+		slot.tracker.AccumulatedUserFacingText(),
+		slot.tracker.RemainingUserFacingText(false),
+	)
+	f.SetPTS(pts)
+	return f
+}
+
+// buildWordFrame builds the frame for one spoken word. segmentID is the id of
+// the frame the word was spoken in, or zero for a word no slot recognized.
+func (s *AggregatedFrameSequencer) buildWordFrame(
+	text string, pts int64, contextID string, segmentID uint64, rawText string, suppress, includesInterFrame bool,
+) *frames.TTSTextFrame {
+	f := frames.NewTTSTextFrame(text, frames.TextTypeWord)
+	f.SegmentID = segmentID
+	f.SetPTS(pts)
+	f.ContextID = contextID
+	f.RawText = rawText
+	f.IncludesInterFrameSpaces = includesInterFrame
+	switch {
+	case suppress:
+		f.AppendToContext = false
+	case contextID != "":
+		appendTo, ok := s.contextAppend[contextID]
+		f.AppendToContext = !ok || appendTo
+	default:
+		f.AppendToContext = true
+	}
+	return f
+}
+
+// rawOr returns the frame's original text, falling back to its spoken text.
+func rawOr(f *frames.AggregatedTextFrame) string {
+	if f.RawText != "" {
+		return f.RawText
+	}
+	return f.Text
+}
+
+// RegisterSpoken records a frame handed to the synthesizer. See
+// registerSpokenLocked.
+func (s *AggregatedFrameSequencer) RegisterSpoken(
+	frame *frames.AggregatedTextFrame,
+	contextID, ttsText string,
+	appendToContext, buildTracker, includesInterFrame bool,
+	language string,
+) []frames.Frame {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.registerSpokenLocked(frame, contextID, ttsText, appendToContext, buildTracker, includesInterFrame, language)
+}
+
+// RegisterSkipped records a frame that is not spoken. See registerSkippedLocked.
+func (s *AggregatedFrameSequencer) RegisterSkipped(
+	frame *frames.AggregatedTextFrame,
+	contextID, transportDestination string,
+) []frames.Frame {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.registerSkippedLocked(frame, contextID, transportDestination)
+}
+
+// Finalize closes out a context. See finalizeLocked.
+func (s *AggregatedFrameSequencer) Finalize(contextID string) []frames.Frame {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.finalizeLocked(contextID)
+}
+
+// ProcessWord records one spoken word. See processWordLocked.
+func (s *AggregatedFrameSequencer) ProcessWord(
+	word string, pts int64, contextID string, includesInterFrame bool,
+) []frames.Frame {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.processWordLocked(word, pts, contextID, includesInterFrame)
+}
+
+// CompleteSpokenSlot marks the active spoken slot complete. See
+// completeSpokenSlotLocked.
+func (s *AggregatedFrameSequencer) CompleteSpokenSlot() []frames.Frame {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.completeSpokenSlotLocked()
+}
+
+// Flush returns every skipped frame now unblocked. See flushLocked.
+func (s *AggregatedFrameSequencer) Flush(lastWordPTS int64) []frames.Frame {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.flushLocked(lastWordPTS)
+}
+
+// ForceComplete completes a context's outstanding slots. See
+// forceCompleteLocked.
+func (s *AggregatedFrameSequencer) ForceComplete(
+	contextID string, lastWordPTS int64, emitRemaining bool,
+) []frames.Frame {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.forceCompleteLocked(contextID, lastWordPTS, emitRemaining)
+}

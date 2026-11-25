@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/gojargo/jargo/audio/resample"
+	"github.com/gojargo/jargo/errclass"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/processor"
@@ -26,7 +27,6 @@ import (
 	"github.com/gojargo/jargo/service/wsservice"
 	"github.com/gojargo/jargo/telemetry/metrics"
 	"github.com/gojargo/jargo/telemetry/tracing"
-	errs "github.com/gojargo/jargo/utils/errors"
 )
 
 // errNoSession is returned when a Connector reports neither a session nor an
@@ -159,7 +159,7 @@ type SendRater interface {
 // error decides. It mirrors the classification hook the original puts on the
 // service class for the same reason.
 type ErrorClassifier interface {
-	ClassifyError(err error) errs.Category
+	ClassifyError(err error) errclass.Category
 }
 
 const (
@@ -803,10 +803,10 @@ func (s *StreamService) PushFrame(ctx context.Context, f frames.Frame, dir proce
 // failure signaled in the provider's protocol rather than an HTTP status still
 // costs the service its usability when that is what it means. A provider that
 // says nothing leaves the shared classification to decide.
-func (s *StreamService) ClassifyError(err error) errs.Category {
+func (s *StreamService) ClassifyError(err error) errclass.Category {
 	classifier, ok := s.conn.(ErrorClassifier)
 	if !ok {
-		return errs.Unset
+		return errclass.Unset
 	}
 	return classifier.ClassifyError(err)
 }

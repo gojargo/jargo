@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor/rtvi"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // observerHarness runs frames through an observer built with params and returns
@@ -39,7 +39,7 @@ func observerHarness(t *testing.T, params rtvi.ObserverParams, queue ...frames.F
 		Observers:               []pipeline.Observer{rtvi.NewObserverWithParams(proc, params)},
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if m, ok := f.(*frames.OutputTransportMessageUrgentFrame); ok {
 			if msg, ok := m.Message.(rtvi.Message); ok {
 				mu.Lock()

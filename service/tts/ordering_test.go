@@ -18,10 +18,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/service/tts"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 const (
@@ -138,7 +138,7 @@ func TestEndFrameWaitsForAudioStillInFlight(t *testing.T) {
 	task := pipeline.NewWorker(pipeline.New(base), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		got = append(got, f)
 		mu.Unlock()
@@ -294,7 +294,7 @@ func runOrdering(t *testing.T, synth tts.Synthesizer) []frames.Frame {
 	task := pipeline.NewWorker(pipeline.New(base), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		got = append(got, f)
 		mu.Unlock()
@@ -349,7 +349,7 @@ func runTurns(t *testing.T, synth tts.Synthesizer, send []frames.Frame) []frames
 	task := pipeline.NewWorker(pipeline.New(base), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		got = append(got, f)
 		mu.Unlock()
@@ -457,7 +457,7 @@ func TestBoundaryFramesCarryTheirContext(t *testing.T) {
 	task := pipeline.NewWorker(pipeline.New(base), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		defer mu.Unlock()
 		switch fr := f.(type) {

@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"os"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/provider/cartesia"
@@ -21,7 +22,6 @@ import (
 	"github.com/gojargo/jargo/transport"
 	"github.com/gojargo/jargo/transport/wsserver"
 	"github.com/gojargo/jargo/transport/wsserver/evalws"
-	"github.com/gojargo/jargo/utils/events"
 	"github.com/gojargo/jargo/workers"
 )
 
@@ -65,7 +65,7 @@ func runBot(ctx context.Context, t transport.Transport, args runner.Arguments) e
 	r.AddWorkers(ctx, worker)
 
 	// Register an event handler so we can play the audio when the client joins.
-	events.On(t.Events(), transport.EventClientConnected, func(context.Context, any) {
+	event.On(t.Events(), transport.EventClientConnected, func(context.Context, any) {
 		worker.QueueFrames([]frames.Frame{frames.NewTTSSpeakFrame("Hello there!"), frames.NewEndFrame()})
 	})
 

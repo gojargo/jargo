@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // taggedFrame is a distinguishable data frame, so a test can tell which branch
@@ -64,7 +64,7 @@ func runSyncParallel(t *testing.T, spp *pipeline.SyncParallelPipeline, in []fram
 	task := pipeline.NewWorker(pipeline.New(spp), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		got = append(got, f)
 		mu.Unlock()

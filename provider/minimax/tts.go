@@ -13,10 +13,10 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/gojargo/jargo/errclass"
 	"github.com/gojargo/jargo/expressive"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/service/tts"
-	errs "github.com/gojargo/jargo/utils/errors"
 )
 
 // NewTTS builds a MiniMax TTS service.
@@ -82,7 +82,7 @@ func (s *synthesizer) RunTTS(ctx context.Context, text, _ string, yield func(f f
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return errs.NewHTTPStatusError(resp.StatusCode, fmt.Errorf("%w %d: %s", errStatus, resp.StatusCode, msg))
+		return errclass.NewHTTPStatusError(resp.StatusCode, fmt.Errorf("%w %d: %s", errStatus, resp.StatusCode, msg))
 	}
 	tts.StartUsageMetrics(ctx, text)
 	return scanSSE(resp.Body, func(data []byte) error {

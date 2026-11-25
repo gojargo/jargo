@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // tagger replaces every downstream TextFrame with a new one whose text is
@@ -48,7 +48,7 @@ func runParallel(t *testing.T, pp *pipeline.ParallelPipeline, in []frames.Frame)
 	task := pipeline.NewWorker(pipeline.New(pp), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		got = append(got, f)
 		mu.Unlock()
@@ -269,7 +269,7 @@ func TestParallelBranchGeneratedLifecycleFrameEscapes(t *testing.T) {
 	task := pipeline.NewWorker(pipeline.New(pp), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		defer mu.Unlock()
 		if _, ok := f.(*frames.EndFrame); ok {
@@ -406,7 +406,7 @@ func TestParallelHoldsSystemFramesWhileSynchronizing(t *testing.T) {
 			ReachedDownstreamFilter: pipeline.AnyFrame,
 		},
 	)
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if _, ok := f.(*frames.EndFrame); ok {
 			mu.Lock()
 			endReleased = true

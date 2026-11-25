@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/service/llm"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // fakeGen emits a fixed list of text deltas.
@@ -38,7 +38,7 @@ func TestBaseBracketsResponse(t *testing.T) {
 	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		defer mu.Unlock()
 		switch fr := f.(type) {

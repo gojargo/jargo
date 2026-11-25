@@ -8,11 +8,11 @@ import (
 	"time"
 
 	"github.com/gojargo/jargo/audio/vad"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor/aggregators"
 	"github.com/gojargo/jargo/processor/turns"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // Tests for the voice-activity detection a user aggregator can run itself,
@@ -63,7 +63,7 @@ func TestAggregatorDetectsSpeechItself(t *testing.T) {
 	task := pipeline.NewWorker(pipeline.New(pair.User()), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		select {
 		case seen <- f:
 		default:
@@ -105,12 +105,12 @@ func TestDetectedSpeechIsBroadcastAsSiblings(t *testing.T) {
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 		ReachedUpstreamFilter:   pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		down = append(down, f)
 		mu.Unlock()
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		up = append(up, f)
 		mu.Unlock()
@@ -171,7 +171,7 @@ func TestDetectedSpeechDrivesTheTurn(t *testing.T) {
 	)
 
 	started := make(chan struct{}, 1)
-	events.On(pair.User().Events(), aggregators.EventUserTurnStarted,
+	event.On(pair.User().Events(), aggregators.EventUserTurnStarted,
 		func(context.Context, turns.StartStrategy) {
 			select {
 			case started <- struct{}{}:
@@ -213,7 +213,7 @@ func TestMutedAudioNeverReachesTheDetector(t *testing.T) {
 	task := pipeline.NewWorker(pipeline.New(pair.User()), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		select {
 		case seen <- f:
 		default:
@@ -276,7 +276,7 @@ func TestUserAudioIsDetectedAndMuted(t *testing.T) {
 		task := pipeline.NewWorker(pipeline.New(pair.User()), pipeline.WorkerConfig{
 			ReachedDownstreamFilter: pipeline.AnyFrame,
 		})
-		events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 			select {
 			case seen <- f:
 			default:

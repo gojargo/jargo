@@ -8,13 +8,13 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/processor/aggregators"
 	"github.com/gojargo/jargo/service/llm"
 	"github.com/gojargo/jargo/service/settings"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // Failures the fakes below are told to return, so a test can assert on what the
@@ -28,7 +28,7 @@ var (
 // reports each one as having reached the end so the actions waiting on them do
 // not hang.
 type fakeEnq struct {
-	registry events.Registry
+	registry event.Registry
 	mu       sync.Mutex
 	queued   []frames.Frame
 	filter   pipeline.FrameFilter
@@ -61,7 +61,7 @@ func (e *fakeEnq) QueueFrames(fs []frames.Frame, _ ...processor.Direction) {
 	}
 }
 
-func (e *fakeEnq) Events() *events.Registry { return &e.registry }
+func (e *fakeEnq) Events() *event.Registry { return &e.registry }
 
 func (e *fakeEnq) SetReachedDownstreamFilter(f pipeline.FrameFilter) {
 	e.mu.Lock()

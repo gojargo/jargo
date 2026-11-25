@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/service/tts"
-	"github.com/gojargo/jargo/utils/events"
 	"go.opentelemetry.io/otel"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
@@ -40,7 +40,7 @@ func runTTS(t *testing.T, syn *fakeSynth, feed func(task *pipeline.Worker)) []st
 	task := pipeline.NewWorker(pipeline.New(tts.New("FakeTTS", syn)), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		defer mu.Unlock()
 		switch fr := f.(type) {
@@ -127,7 +127,7 @@ func TestSynthesisReportsCharacterUsage(t *testing.T) {
 		EnableTracing:           true,
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if _, ok := f.(*frames.TTSStoppedFrame); ok {
 			select {
 			case stopped <- struct{}{}:

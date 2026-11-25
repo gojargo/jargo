@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/expressive"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
@@ -22,9 +23,8 @@ import (
 	"github.com/gojargo/jargo/processor/aggregators"
 	"github.com/gojargo/jargo/service/settings"
 	"github.com/gojargo/jargo/service/tts"
-	uctx "github.com/gojargo/jargo/utils/context"
-	"github.com/gojargo/jargo/utils/events"
-	ttstext "github.com/gojargo/jargo/utils/text"
+	ttstext "github.com/gojargo/jargo/text"
+	"github.com/gojargo/jargo/text/align"
 )
 
 const written = "<<cheerful>> It's [[laugh]] ^^back up^^ now. [[pause 400]] Bye!"
@@ -117,16 +117,16 @@ func (s *timedSynth) RunTTS(context.Context, string, string, func(frames.Frame) 
 func (s *timedSynth) RunTTSTimed(
 	_ context.Context, text, _ string,
 	yield func(frames.Frame) error,
-	word func([]uctx.WordTiming, tts.WordTimingOptions) error,
+	word func([]align.WordTiming, tts.WordTimingOptions) error,
 ) error {
 	words := wordsOf(text)
 	if s.reporting {
 		words = strings.Fields(text)
 	}
 	words = words[:max(0, len(words)-s.dropLast)]
-	timings := make([]uctx.WordTiming, 0, len(words))
+	timings := make([]align.WordTiming, 0, len(words))
 	for i, w := range words {
-		timings = append(timings, uctx.WordTiming{Word: w, Offset: float64(i) * 0.1})
+		timings = append(timings, align.WordTiming{Word: w, Offset: float64(i) * 0.1})
 	}
 	if len(timings) > 0 {
 		if err := word(timings, tts.WordTimingOptions{}); err != nil {
@@ -162,7 +162,7 @@ func response(chunks ...string) []frames.Frame {
 func recordRequests(base *tts.Base) func() []string {
 	var mu sync.Mutex
 	var requests []string
-	events.On(base.Events(), tts.EventTTSRequest, func(_ context.Context, r tts.TTSRequest) {
+	event.On(base.Events(), tts.EventTTSRequest, func(_ context.Context, r tts.TTSRequest) {
 		mu.Lock()
 		requests = append(requests, r.Text)
 		mu.Unlock()
@@ -196,12 +196,12 @@ func runExpressive(
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 		ReachedUpstreamFilter:   pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		down = append(down, f)
 		mu.Unlock()
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		up = append(up, f)
 		mu.Unlock()
@@ -298,7 +298,7 @@ func TestAppsGetTheWordsWhileTheContextKeepsTheTags(t *testing.T) {
 	pair := aggregators.New(convo)
 	var mu sync.Mutex
 	var stopped []string
-	events.On(pair.Assistant().Events(), aggregators.EventAssistantTurnStopped,
+	event.On(pair.Assistant().Events(), aggregators.EventAssistantTurnStopped,
 		func(_ context.Context, m aggregators.AssistantTurnStopped) {
 			mu.Lock()
 			stopped = append(stopped, m.Content)
@@ -1073,7 +1073,7 @@ func (s *streamingSynth) RunTTS(context.Context, string, string, func(frames.Fra
 func (s *streamingSynth) RunTTSTimed(
 	_ context.Context, text, contextID string,
 	_ func(frames.Frame) error,
-	_ func([]uctx.WordTiming, tts.WordTimingOptions) error,
+	_ func([]align.WordTiming, tts.WordTimingOptions) error,
 ) error {
 	s.mu.Lock()
 	host := s.host
@@ -1084,7 +1084,7 @@ func (s *streamingSynth) RunTTSTimed(
 			time.Sleep(50 * time.Millisecond)
 			host.AppendToAudioContext(contextID,
 				frames.NewTTSAudioRawFrame(make([]byte, 320), orderingSampleRate, 1))
-			host.AddWordTimestamps(contextID, []uctx.WordTiming{{Word: word, Offset: float64(i) * 0.05}},
+			host.AddWordTimestamps(contextID, []align.WordTiming{{Word: word, Offset: float64(i) * 0.05}},
 				tts.WordTimingOptions{})
 		}
 		host.AppendToAudioContext(contextID, frames.NewTTSStoppedFrame())

@@ -6,10 +6,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gojargo/jargo/errclass"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/service/settings"
-	errs "github.com/gojargo/jargo/utils/errors"
 )
 
 // Ported from upstream (test_default_settings_and_lazy_client): the defaults,
@@ -142,7 +142,7 @@ func TestSTTInvalidSettingsUpdateIsRejectedWhole(t *testing.T) {
 	r.send(frames.NewSTTUpdateSettingsFrame(delta))
 
 	ef := r.waitErrors(t, 1)[0]
-	if ef.Category != errs.Application || ef.Err == nil || !strings.Contains(ef.Err.Error(), "mode") {
+	if ef.Category != errclass.Application || ef.Err == nil || !strings.Contains(ef.Err.Error(), "mode") {
 		t.Errorf("error = %v (%v), want an application error naming the mode", ef.Err, ef.Category)
 	}
 	if got := r.c.live.Language.Or(""); got != "en" {

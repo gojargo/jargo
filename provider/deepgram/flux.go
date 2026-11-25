@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/errclass"
 	"github.com/gojargo/jargo/internal/query"
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/language"
@@ -24,7 +25,6 @@ import (
 	"github.com/gojargo/jargo/service/stt"
 	"github.com/gojargo/jargo/service/wsservice"
 	"github.com/gojargo/jargo/service/wsutil"
-	errs "github.com/gojargo/jargo/utils/errors"
 )
 
 const (
@@ -149,8 +149,8 @@ func (e *fluxFatalError) Unwrap() error { return errFluxServer }
 // the service's own reconnect handling.
 //
 //nolint:gochecknoglobals // a fixed table
-var fluxPermanentErrorCodes = map[string]errs.Category{
-	"UNPARSABLE_CLIENT_MESSAGE": errs.InvalidRequest,
+var fluxPermanentErrorCodes = map[string]errclass.Category{
+	"UNPARSABLE_CLIENT_MESSAGE": errclass.InvalidRequest,
 }
 
 // The Flux setting names, as an update spells them.
@@ -483,11 +483,11 @@ func (c *fluxConnector) currentStream() *fluxStream {
 // ClassifyError says what the failures Flux signals in its own protocol mean.
 // Flux reports these over the connection rather than as an HTTP status, so they
 // carry nothing the shared classification can read.
-func (c *fluxConnector) ClassifyError(err error) errs.Category {
+func (c *fluxConnector) ClassifyError(err error) errclass.Category {
 	if fatal, ok := errors.AsType[*fluxFatalError](err); ok {
 		return fluxPermanentErrorCodes[fatal.code]
 	}
-	return errs.Unset
+	return errclass.Unset
 }
 
 // EagerEndOfTurn reports whether Flux was asked to predict the end of a turn

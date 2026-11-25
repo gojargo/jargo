@@ -10,11 +10,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/transport"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 func TestVideoInSourcesDefaultToNone(t *testing.T) {
@@ -263,7 +263,7 @@ func runVideoOutput(t *testing.T, o *videoOutput) (*pipeline.Worker, chan frames
 	task := pipeline.NewWorker(pipeline.New(o), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		select {
 		case down <- f:
 		default:
@@ -413,13 +413,13 @@ func TestBaseInputPushesVideoOnlyWhenEnabled(t *testing.T) {
 		task := pipeline.NewWorker(pipeline.New(in), pipeline.WorkerConfig{
 			ReachedDownstreamFilter: pipeline.AnyFrame,
 		})
-		events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 			if _, ok := f.(*frames.UserImageRawFrame); ok {
 				down <- f
 			}
 		})
 		started := make(chan struct{})
-		events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 			if _, ok := f.(*frames.StartFrame); ok {
 				close(started)
 			}

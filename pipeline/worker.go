@@ -12,6 +12,7 @@ import (
 
 	"github.com/gojargo/jargo/bus"
 	"github.com/gojargo/jargo/clock"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/expressive"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/observers"
@@ -19,7 +20,6 @@ import (
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/processor/rtvi"
 	"github.com/gojargo/jargo/telemetry/tracing"
-	"github.com/gojargo/jargo/utils/events"
 	"github.com/gojargo/jargo/workers"
 	"go.opentelemetry.io/otel/attribute"
 )
@@ -699,10 +699,10 @@ func (t *Worker) registerEvents() {
 	t.Register(EventPipelineTimeout, false)
 	t.Register(EventSetupTimeout, false)
 
-	events.On(&t.Registry, EventPipelineStarted, func(ctx context.Context, _ *frames.StartFrame) {
+	event.On(&t.Registry, EventPipelineStarted, func(ctx context.Context, _ *frames.StartFrame) {
 		t.Start(ctx)
 	})
-	events.On(&t.Registry, EventPipelineFinished, func(ctx context.Context, _ frames.Frame) {
+	event.On(&t.Registry, EventPipelineFinished, func(ctx context.Context, _ frames.Frame) {
 		t.Stop(ctx)
 	})
 }

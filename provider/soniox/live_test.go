@@ -14,13 +14,13 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/errclass"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/service/settings"
 	"github.com/gojargo/jargo/service/stt"
-	errs "github.com/gojargo/jargo/utils/errors"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // Tests for the live session. Soniox is dialed and then handed a configuration
@@ -422,7 +422,7 @@ func TestSTTErrorCodeSetsTheCategory(t *testing.T) {
 		}
 		return len(got) == 3
 	})
-	want := []errs.Category{errs.Quota, errs.Authentication, errs.Unknown}
+	want := []errclass.Category{errclass.Quota, errclass.Authentication, errclass.Unknown}
 	for i, ef := range got {
 		if ef.Category != want[i] {
 			t.Errorf("error %d (%s) category = %q, want %q", i, ef.Error, ef.Category, want[i])
@@ -586,7 +586,7 @@ func TestServiceProposesNoTurnsAndFinalizesOnTheVADStop(t *testing.T) {
 	r := runSonioxSTT(t, Config{})
 	var mu sync.Mutex
 	var proposed []frames.Frame
-	events.On(&r.task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&r.task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		switch f.(type) {
 		case *frames.ProposedUserStartedSpeakingFrame, *frames.ProposedUserStoppedSpeakingFrame:
 			mu.Lock()
@@ -676,7 +676,7 @@ func runSonioxSTT(t *testing.T, cfg Config, params ...pipeline.Params) *sttRun {
 	}
 	svc := NewSTT(cfg)
 	r.task = pipeline.NewWorker(pipeline.New(svc), wc)
-	events.On(&r.task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&r.task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		r.mu.Lock()
 		defer r.mu.Unlock()
 		switch f := f.(type) {
@@ -690,7 +690,7 @@ func runSonioxSTT(t *testing.T, cfg Config, params ...pipeline.Params) *sttRun {
 			r.down = append(r.down, f.Text)
 		}
 	})
-	events.On(&r.task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
+	event.On(&r.task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
 		if ef, ok := f.(*frames.ErrorFrame); ok {
 			r.mu.Lock()
 			r.errors = append(r.errors, ef)

@@ -25,7 +25,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/gojargo/jargo/frames"
-	"github.com/gojargo/jargo/utils/network"
+	"github.com/gojargo/jargo/retry"
 )
 
 // DefaultMaxRetries is how many times the base redials before it reports the
@@ -96,7 +96,7 @@ type Config struct {
 	// redials wants a longer ceiling than one that simply dropped the socket.
 	ReconnectBackoffMaxWait time.Duration
 	// QuickFailure configures when repeated instant failures end the retrying.
-	QuickFailure network.QuickFailureConfig
+	QuickFailure retry.QuickFailureConfig
 }
 
 // Base runs the receive loop and the reconnection around it. Embed it in a
@@ -107,7 +107,7 @@ type Base struct {
 	reconnectOnError bool
 	maxRetries       int
 	minWait, maxWait time.Duration
-	tracker          *network.QuickFailureTracker
+	tracker          *retry.QuickFailureTracker
 
 	mu                  sync.Mutex
 	disconnecting       bool
@@ -128,7 +128,7 @@ func New(handler Handler, cfg Config) *Base {
 		maxRetries:       cfg.MaxRetries,
 		minWait:          cfg.ReconnectBackoffMinWait,
 		maxWait:          cfg.ReconnectBackoffMaxWait,
-		tracker:          network.NewQuickFailureTracker(cfg.QuickFailure),
+		tracker:          retry.NewQuickFailureTracker(cfg.QuickFailure),
 		now:              time.Now,
 		sleep:            sleepContext,
 	}
@@ -136,10 +136,10 @@ func New(handler Handler, cfg Config) *Base {
 		b.maxRetries = DefaultMaxRetries
 	}
 	if b.minWait <= 0 {
-		b.minWait = network.DefaultMinWait
+		b.minWait = retry.DefaultMinWait
 	}
 	if b.maxWait <= 0 {
-		b.maxWait = network.DefaultMaxWait
+		b.maxWait = retry.DefaultMaxWait
 	}
 	if b.maxWait < b.minWait {
 		b.maxWait = b.minWait
@@ -311,8 +311,8 @@ func (b *Base) TryReconnect(ctx context.Context, report ReportError) bool {
 			b.setLastConnect(b.now())
 			return true
 		}
-		b.sleep(ctx, network.ExponentialBackoffTime(attempt,
-			b.minWait, b.maxWait, network.DefaultMultiplier))
+		b.sleep(ctx, retry.ExponentialBackoffTime(attempt,
+			b.minWait, b.maxWait, retry.DefaultMultiplier))
 		if ctx.Err() != nil {
 			// Stopped while waiting out the backoff.
 			slog.Debug("websocket reconnection stopped with the session", "attempt", attempt)

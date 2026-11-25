@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
+	jevent "github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // turnErrors runs one turn through a WebSocket service answered with events,
@@ -26,14 +26,14 @@ func turnErrors(t *testing.T, events_ ...string) []*frames.ErrorFrame {
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 		ReachedUpstreamFilter:   pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
+	jevent.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
 		if ef, ok := f.(*frames.ErrorFrame); ok {
 			mu.Lock()
 			errs = append(errs, ef)
 			mu.Unlock()
 		}
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	jevent.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if _, ok := f.(*frames.LLMFullResponseEndFrame); ok {
 			select {
 			case ended <- struct{}{}:

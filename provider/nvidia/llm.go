@@ -8,7 +8,7 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/provider/openai/chat"
-	"github.com/gojargo/jargo/utils/text"
+	"github.com/gojargo/jargo/text"
 )
 
 // noKey is the key sent to an endpoint that takes none, a local NIM.

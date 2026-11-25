@@ -10,11 +10,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/provider/nvidia"
 	"github.com/gojargo/jargo/provider/openai/chat"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // ttfbMarker stands in for the metrics frame carrying the TTFB in what
@@ -54,7 +54,7 @@ func nvidiaFrames(t *testing.T, cfg chat.LLMConfig, body string) ([]frames.Frame
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 		Params:                  pipeline.Params{EnableMetrics: true, SendInitialEmptyMetrics: &noInitial},
 	})
-	events.On(&worker.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&worker.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		defer mu.Unlock()
 		switch f := f.(type) {

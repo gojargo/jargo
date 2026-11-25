@@ -5,9 +5,9 @@ import (
 	"log/slog"
 	"sync"
 
+	"github.com/gojargo/jargo/errclass"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
-	errs "github.com/gojargo/jargo/utils/errors"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // The events every processor raises.
@@ -15,7 +15,7 @@ const (
 	// EventUsableChanged fires with the new value of Usable whenever a
 	// processor stops or starts being able to do its job.
 	//
-	//	events.On(p.Events(), processor.EventUsableChanged,
+	//	event.On(p.Events(), processor.EventUsableChanged,
 	//	    func(ctx context.Context, usable bool) { … })
 	EventUsableChanged = "on_usable_changed"
 	// EventError fires with the error frame a processor reports, before the
@@ -55,12 +55,12 @@ type usability struct {
 type ErrorClassifier interface {
 	// ClassifyError returns the category of err, or the zero category to let
 	// the shared classification decide.
-	ClassifyError(err error) errs.Category
+	ClassifyError(err error) errclass.Category
 }
 
 // Events returns the registry of events this processor raises, for attaching
 // handlers to them.
-func (b *Base) Events() *events.Registry { return &b.events }
+func (b *Base) Events() *event.Registry { return &b.events }
 
 // Usable reports whether this processor can still do its job.
 //
@@ -110,7 +110,7 @@ type ErrorOption func(*errorOptions)
 
 // errorOptions collects what the options set.
 type errorOptions struct {
-	category              errs.Category
+	category              errclass.Category
 	forceTreatAsPermanent bool
 }
 
@@ -119,7 +119,7 @@ type errorOptions struct {
 // errors.Unknown reports a failure whose cause cannot be attributed, an
 // unexpected one caught by a catch-all, say, which may not have come from this
 // processor at all.
-func WithErrorCategory(c errs.Category) ErrorOption {
+func WithErrorCategory(c errclass.Category) ErrorOption {
 	return func(o *errorOptions) { o.category = c }
 }
 
@@ -158,16 +158,16 @@ func (b *Base) PushErrorFrame(ctx context.Context, ef *frames.ErrorFrame, forceT
 	}
 	// Anything still unset by now is going to stay that way, so settle it here
 	// and let handlers read a category off every error they receive.
-	if ef.Category == errs.Unset && ef.Err != nil {
+	if ef.Category == errclass.Unset && ef.Err != nil {
 		if classifier, ok := b.self.(ErrorClassifier); ok {
 			ef.Category = classifier.ClassifyError(ef.Err)
 		}
-		if ef.Category == errs.Unset {
-			ef.Category = errs.ClassifyError(ef.Err)
+		if ef.Category == errclass.Unset {
+			ef.Category = errclass.Classify(ef.Err)
 		}
 	}
-	if ef.Category == errs.Unset {
-		ef.Category = errs.Unknown
+	if ef.Category == errclass.Unset {
+		ef.Category = errclass.Unknown
 	}
 
 	// Before anything sees the error, so that handlers reading

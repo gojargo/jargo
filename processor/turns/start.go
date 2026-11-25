@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/gojargo/jargo/frames"
-	"github.com/gojargo/jargo/utils/text"
+	"github.com/gojargo/jargo/text"
 )
 
 // wakePhraseDefaultTimeout is how long a wake-phrase session stays awake without

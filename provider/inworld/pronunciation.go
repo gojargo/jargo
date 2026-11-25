@@ -3,7 +3,7 @@ package inworld
 import (
 	"strings"
 
-	"github.com/gojargo/jargo/utils/text"
+	"github.com/gojargo/jargo/text"
 )
 
 // FormatPronunciation renders a pronunciation as IPA between slashes, as Inworld

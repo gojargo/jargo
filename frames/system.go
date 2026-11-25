@@ -3,8 +3,8 @@ package frames
 import (
 	"fmt"
 
-	"github.com/gojargo/jargo/utils/errors"
-	"github.com/gojargo/jargo/utils/security"
+	"github.com/gojargo/jargo/errclass"
+	"github.com/gojargo/jargo/internal/security"
 )
 
 // The sample rates NewStartFrame applies when the application does not override
@@ -99,9 +99,9 @@ type ErrorFrame struct {
 	// Category is what kind of failure this was: rejected credentials, an
 	// unreachable provider, a malformed request and so on. The zero value means
 	// nobody has said yet, which invites the category to be worked out from Err;
-	// set it to errors.Unknown to report a failure whose cause cannot be
+	// set it to errclass.Unknown to report a failure whose cause cannot be
 	// attributed. It is always settled by the time the frame travels.
-	Category errors.Category
+	Category errclass.Category
 }
 
 // ErrorInfo implements [ErrorReport].
@@ -127,7 +127,7 @@ func NewErrorFrame(message string) *ErrorFrame {
 // neither says anything about the failure that the message does not.
 func (f *ErrorFrame) String() string {
 	category := ""
-	if f.Category != errors.Unset && f.Category != errors.Unknown {
+	if f.Category != errclass.Unset && f.Category != errclass.Unknown {
 		category = fmt.Sprintf(", category: %s", f.Category)
 	}
 	return fmt.Sprintf("%s(error: %s, fatal: %t%s)", f.Name(), f.Error, f.Fatal, category)

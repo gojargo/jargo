@@ -13,11 +13,11 @@ import (
 	"github.com/gojargo/jargo/audio/resample"
 	"github.com/gojargo/jargo/expressive/spoken"
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/internal/timeutil"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/service/settings"
 	"github.com/gojargo/jargo/telemetry/tracing"
-	uctx "github.com/gojargo/jargo/utils/context"
-	"github.com/gojargo/jargo/utils/timeutil"
+	"github.com/gojargo/jargo/text/align"
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/trace"
 )
@@ -41,7 +41,7 @@ type AudioContextHost interface {
 	// normalizing them as opts asks first. It is the entry point for a provider
 	// that reports timings on its own receive loop rather than through the
 	// callback, so both arrive normalized the same way.
-	AddWordTimestamps(contextID string, words []uctx.WordTiming, opts WordTimingOptions)
+	AddWordTimestamps(contextID string, words []align.WordTiming, opts WordTimingOptions)
 	// RemoveAudioContext marks a context for deletion once the audio already
 	// queued for it has been pushed.
 	RemoveAudioContext(contextID string)
@@ -850,9 +850,9 @@ func (b *Base) flushAudioRemainder(contextID string, c *audioContext) {
 // Normalizing belongs here rather than in each provider: one that skips it
 // reports tokens nothing downstream expects, and there is no way to tell from
 // the outside which of them did.
-func (b *Base) AddWordTimestamps(contextID string, words []uctx.WordTiming, opts WordTimingOptions) {
+func (b *Base) AddWordTimestamps(contextID string, words []align.WordTiming, opts WordTimingOptions) {
 	if opts.PreMergeTokens {
-		words = uctx.MergePunctTokens(words)
+		words = align.MergePunctTokens(words)
 	}
 	c := b.audioContextFor(contextID)
 	if c == nil {

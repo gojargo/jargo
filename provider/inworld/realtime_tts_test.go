@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/expressive"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/language"
@@ -22,7 +23,6 @@ import (
 	"github.com/gojargo/jargo/service/tts"
 	"github.com/gojargo/jargo/service/wsservice"
 	"github.com/gojargo/jargo/service/wsutil"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // turns are the utterances the connection tests speak, one TTSSpeakFrame each.
@@ -439,12 +439,12 @@ func runTest(t *testing.T, svc *tts.Base, steps ...step) (down, up []frames.Fram
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 		ReachedUpstreamFilter:   pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		down = append(down, f)
 		mu.Unlock()
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		up = append(up, f)
 		mu.Unlock()

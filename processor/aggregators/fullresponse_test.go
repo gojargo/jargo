@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor/aggregators"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // gatherCompletions runs a full-response aggregator over the frames feed queues
@@ -20,7 +20,7 @@ func gatherCompletions(t *testing.T, feed func(queue func(frames.Frame))) []aggr
 	var mu sync.Mutex
 	var got []aggregators.Completion
 	reported := make(chan struct{}, 8)
-	events.On(agg.Events(), aggregators.EventCompletion,
+	event.On(agg.Events(), aggregators.EventCompletion,
 		func(_ context.Context, c aggregators.Completion) {
 			mu.Lock()
 			got = append(got, c)
@@ -75,7 +75,7 @@ func TestFullResponseReportsWhatAnInterruptionCutShort(t *testing.T) {
 	var mu sync.Mutex
 	var got []aggregators.Completion
 	reported := make(chan struct{}, 4)
-	events.On(agg.Events(), aggregators.EventCompletion,
+	event.On(agg.Events(), aggregators.EventCompletion,
 		func(_ context.Context, c aggregators.Completion) {
 			mu.Lock()
 			got = append(got, c)
@@ -208,7 +208,7 @@ func TestFullResponseReportsBothSidesOfAnInterruption(t *testing.T) {
 	var mu sync.Mutex
 	var got []aggregators.Completion
 	reported := make(chan struct{}, 8)
-	events.On(agg.Events(), aggregators.EventCompletion,
+	event.On(agg.Events(), aggregators.EventCompletion,
 		func(_ context.Context, c aggregators.Completion) {
 			mu.Lock()
 			got = append(got, c)

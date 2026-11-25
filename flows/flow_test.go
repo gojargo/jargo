@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/service/llm"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // Tests for a Flow: a FlowConfig joined to the handlers it names.
@@ -1106,7 +1106,7 @@ func TestNodeEnteredThroughASubflow(t *testing.T) {
 	flow := makeFlow(t, composedFlowConfig(t))
 	fm, enq := flowManager(t, flow)
 	var entered []NodeEntered
-	events.On(fm.Events(), EventNodeEntered, func(_ context.Context, e NodeEntered) {
+	event.On(fm.Events(), EventNodeEntered, func(_ context.Context, e NodeEntered) {
 		entered = append(entered, e)
 	})
 

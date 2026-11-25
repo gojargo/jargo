@@ -11,8 +11,8 @@ import (
 	"github.com/coder/websocket"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
+	"github.com/gojargo/jargo/retry"
 	"github.com/gojargo/jargo/service/wsutil"
-	"github.com/gojargo/jargo/utils/network"
 )
 
 // Static failures for the tests to hand back, so each one names what broke.
@@ -766,8 +766,8 @@ func TestReconnectBackoffDefaultsToTheStandardBounds(t *testing.T) {
 	t.Parallel()
 
 	b := New(&handler{}, Config{})
-	if b.minWait != network.DefaultMinWait || b.maxWait != network.DefaultMaxWait {
+	if b.minWait != retry.DefaultMinWait || b.maxWait != retry.DefaultMaxWait {
 		t.Errorf("bounds = %s to %s, want %s to %s",
-			b.minWait, b.maxWait, network.DefaultMinWait, network.DefaultMaxWait)
+			b.minWait, b.maxWait, retry.DefaultMinWait, retry.DefaultMaxWait)
 	}
 }

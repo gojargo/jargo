@@ -12,11 +12,11 @@ import (
 	"sync"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/errclass"
 	"github.com/gojargo/jargo/processor/turns"
 	"github.com/gojargo/jargo/service/stt"
 	"github.com/gojargo/jargo/service/wsservice"
 	"github.com/gojargo/jargo/service/wsutil"
-	errs "github.com/gojargo/jargo/utils/errors"
 )
 
 // NewSTT builds a Gladia streaming STT service. It works best behind a turn
@@ -178,7 +178,7 @@ func (c *connector) initSession(ctx context.Context, sampleRate int) (string, er
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode/100 != 2 {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return "", errs.NewHTTPStatusError(resp.StatusCode, fmt.Errorf("%w %d: %s", errStatus, resp.StatusCode, msg))
+		return "", errclass.NewHTTPStatusError(resp.StatusCode, fmt.Errorf("%w %d: %s", errStatus, resp.StatusCode, msg))
 	}
 	var out struct {
 		URL string `json:"url"`

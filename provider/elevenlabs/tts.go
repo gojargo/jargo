@@ -18,12 +18,12 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/gojargo/jargo/errclass"
 	"github.com/gojargo/jargo/expressive"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/service/tts"
-	uctx "github.com/gojargo/jargo/utils/context"
-	errs "github.com/gojargo/jargo/utils/errors"
+	textalign "github.com/gojargo/jargo/text/align"
 )
 
 // errTTSStatus is returned when the synthesis API responds with a non-200
@@ -190,7 +190,7 @@ type synthesizer struct {
 	cumulative float64
 	// acc assembles the timed characters into whole words, carrying a word that
 	// runs past the end of one chunk into the next.
-	acc uctx.CharAccumulator
+	acc textalign.CharAccumulator
 }
 
 // resetTurn drops everything carried between the sentences of a turn.
@@ -244,7 +244,7 @@ func (s *synthesizer) RunTTSTimed(
 	ctx context.Context,
 	text, _ string,
 	yield func(f frames.Frame) error,
-	word func(words []uctx.WordTiming, opts tts.WordTimingOptions) error,
+	word func(words []textalign.WordTiming, opts tts.WordTimingOptions) error,
 ) error {
 	return s.synthesize(ctx, text, yield, word)
 }
@@ -304,7 +304,7 @@ func (s *synthesizer) synthesize(
 	ctx context.Context,
 	text string,
 	yield func(f frames.Frame) error,
-	word func(words []uctx.WordTiming, opts tts.WordTimingOptions) error,
+	word func(words []textalign.WordTiming, opts tts.WordTimingOptions) error,
 ) error {
 	body, err := s.requestBody(text)
 	if err != nil {
@@ -321,7 +321,7 @@ func (s *synthesizer) synthesize(
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return errs.NewHTTPStatusError(resp.StatusCode, fmt.Errorf("%w %d: %s", errTTSStatus, resp.StatusCode, msg))
+		return errclass.NewHTTPStatusError(resp.StatusCode, fmt.Errorf("%w %d: %s", errTTSStatus, resp.StatusCode, msg))
 	}
 	tts.StartUsageMetrics(ctx, text)
 	return s.stream(resp.Body, text, tts.PCMYielder(yield, s.SampleRate()), word)
@@ -334,7 +334,7 @@ func (s *synthesizer) stream(
 	r io.Reader,
 	text string,
 	emit func(pcm []byte) error,
-	word func(words []uctx.WordTiming, opts tts.WordTimingOptions) error,
+	word func(words []textalign.WordTiming, opts tts.WordTimingOptions) error,
 ) error {
 	u := &utterance{syn: s, emit: emit, word: word}
 	reader := bufio.NewReader(r)
@@ -430,7 +430,7 @@ func cutFrom(v []float64, n int) []float64 {
 type utterance struct {
 	syn  *synthesizer
 	emit func(pcm []byte) error
-	word func(words []uctx.WordTiming, opts tts.WordTimingOptions) error
+	word func(words []textalign.WordTiming, opts tts.WordTimingOptions) error
 
 	// started reports whether an alignment has been seen yet, which is what makes
 	// the next one an utterance-leading chunk or not.
@@ -496,7 +496,7 @@ func (u *utterance) align(a *httpAlignment) error {
 }
 
 // report hands a batch of finished words to the caller listening for timing.
-func (u *utterance) report(words []uctx.WordTiming) error {
+func (u *utterance) report(words []textalign.WordTiming) error {
 	if u.word == nil || len(words) == 0 {
 		return nil
 	}
@@ -519,7 +519,7 @@ func (u *utterance) finish(text string) error {
 	if !ok {
 		return nil
 	}
-	return u.report([]uctx.WordTiming{last})
+	return u.report([]textalign.WordTiming{last})
 }
 
 // spacelessLanguage reports whether the configured language is written without

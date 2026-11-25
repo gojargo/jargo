@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/service/llm"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // timingGen mirrors how a real service reports timing: it records time to first
@@ -47,7 +47,7 @@ func TestEmitsTimingMetricsWhenEnabled(t *testing.T) {
 			SendInitialEmptyMetrics: &noInitial,
 		},
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		defer mu.Unlock()
 		switch fr := f.(type) {
@@ -103,7 +103,7 @@ func TestNoMetricsFrameWhenDisabled(t *testing.T) {
 	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		switch f.(type) {
 		case *frames.MetricsFrame:
 			select {
@@ -167,7 +167,7 @@ func timingMetrics(t *testing.T, svc *llm.Base) []frames.MetricsData {
 			SendInitialEmptyMetrics: &noInitial,
 		},
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		mf, ok := f.(*frames.MetricsFrame)
 		if !ok {
 			return
@@ -295,7 +295,7 @@ func runSpeculation(t *testing.T, speculation bool, after ...frames.Frame) []fra
 	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		got = append(got, f)
 		mu.Unlock()

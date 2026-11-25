@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/service/tts"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // pauseHarness runs a TTS base with pausing configured, and reports what reaches
@@ -75,7 +75,7 @@ func newPauseHarnessWith(t *testing.T, opts tts.PauseOptions, syn tts.Synthesize
 	h.task = pipeline.NewWorker(pipeline.New(base), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&h.task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&h.task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if tf, ok := f.(*frames.AggregatedTextFrame); ok {
 			h.mu.Lock()
 			h.texts = append(h.texts, tf.Text)

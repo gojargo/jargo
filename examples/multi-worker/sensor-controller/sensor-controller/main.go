@@ -53,6 +53,7 @@ import (
 
 	"github.com/gojargo/jargo/audio/vad"
 	"github.com/gojargo/jargo/bus"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/pipeline/jobcontext"
@@ -65,7 +66,6 @@ import (
 	"github.com/gojargo/jargo/transport"
 	"github.com/gojargo/jargo/transport/wsserver"
 	"github.com/gojargo/jargo/transport/wsserver/evalws"
-	"github.com/gojargo/jargo/utils/events"
 	"github.com/gojargo/jargo/workers"
 )
 
@@ -248,7 +248,7 @@ func buildSensorController() *pipeline.Worker {
 		jobID string
 	)
 
-	events.On(worker.Events(), workers.EventJobRequest, func(_ context.Context, m *bus.JobRequestMessage) {
+	event.On(worker.Events(), workers.EventJobRequest, func(_ context.Context, m *bus.JobRequestMessage) {
 		question := fmt.Sprint(m.Payload["question"])
 		slog.Info(fmt.Sprintf("Controller: received question '%s'", question))
 		mu.Lock()
@@ -259,7 +259,7 @@ func buildSensorController() *pipeline.Worker {
 		worker.QueueFrame(f)
 	})
 
-	events.On(agg.Assistant().Events(), aggregators.EventAssistantTurnStopped,
+	event.On(agg.Assistant().Events(), aggregators.EventAssistantTurnStopped,
 		func(ctx context.Context, message aggregators.AssistantTurnStopped) {
 			// The aggregator raises this event at the end of every LLM response,
 			// including the tool-call round that comes before the tool result and
@@ -395,7 +395,7 @@ func runBot(ctx context.Context, t transport.Transport, args runner.Arguments) e
 
 	r.AddWorkers(ctx, buildSensorController(), worker)
 
-	events.On(t.Events(), transport.EventClientConnected, func(context.Context, any) {
+	event.On(t.Events(), transport.EventClientConnected, func(context.Context, any) {
 		slog.Info("Client connected")
 		convo.AddMessage(frames.Message{
 			Role: frames.RoleDeveloper,
@@ -405,7 +405,7 @@ func runBot(ctx context.Context, t transport.Transport, args runner.Arguments) e
 		worker.QueueFrames([]frames.Frame{frames.NewLLMRunFrame()})
 	})
 
-	events.On(t.Events(), transport.EventClientDisconnected, func(ctx context.Context, _ any) {
+	event.On(t.Events(), transport.EventClientDisconnected, func(ctx context.Context, _ any) {
 		slog.Info("Client disconnected")
 		r.Cancel(ctx, "client disconnected")
 	})

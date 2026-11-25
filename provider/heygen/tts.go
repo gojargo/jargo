@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/errclass"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/language"
@@ -26,9 +27,8 @@ import (
 	"github.com/gojargo/jargo/service/tts"
 	"github.com/gojargo/jargo/service/wsservice"
 	"github.com/gojargo/jargo/service/wsutil"
-	uctx "github.com/gojargo/jargo/utils/context"
-	errs "github.com/gojargo/jargo/utils/errors"
-	ttstext "github.com/gojargo/jargo/utils/text"
+	ttstext "github.com/gojargo/jargo/text"
+	"github.com/gojargo/jargo/text/align"
 )
 
 const (
@@ -57,11 +57,11 @@ const (
 // error of any other code is left for the base to categorize.
 //
 //nolint:gochecknoglobals // read-only lookup table
-var errorCategories = map[string]errs.Category{
-	"rate_limit_exceeded":   errs.RateLimit,
-	"usage_limit_reached":   errs.Quota,
-	"insufficient_credit":   errs.Quota,
-	"plan_upgrade_required": errs.Quota,
+var errorCategories = map[string]errclass.Category{
+	"rate_limit_exceeded":   errclass.RateLimit,
+	"usage_limit_reached":   errclass.Quota,
+	"insufficient_credit":   errclass.Quota,
+	"plan_upgrade_required": errclass.Quota,
 }
 
 // errNotConnected is the failure of text sent with no connection to send it on.
@@ -215,8 +215,8 @@ type wordClock struct {
 // add takes one audio message's character alignment and returns the words it
 // completes, each with its start in seconds. perCharacter says each character
 // is a word, as in Chinese and Japanese, which have no spaces between words.
-func (c *wordClock) add(a *alignment, perCharacter bool) []uctx.WordTiming {
-	var words []uctx.WordTiming
+func (c *wordClock) add(a *alignment, perCharacter bool) []align.WordTiming {
+	var words []align.WordTiming
 	for i := range min(len(a.Chars), len(a.CharStartTimesMs)) {
 		char := a.Chars[i]
 		if char != " " {
@@ -226,7 +226,7 @@ func (c *wordClock) add(a *alignment, perCharacter bool) []uctx.WordTiming {
 			c.partialWord += char
 		}
 		if c.partialWord != "" && (char == " " || perCharacter) {
-			words = append(words, uctx.WordTiming{Word: c.partialWord, Offset: c.partialStart})
+			words = append(words, align.WordTiming{Word: c.partialWord, Offset: c.partialStart})
 			c.partialWord = ""
 		}
 	}
@@ -690,7 +690,7 @@ func (s *synthesizer) handleMessage(ctx context.Context, data []byte) error {
 		clock = &wordClock{}
 		s.wordClocks[id] = clock
 	}
-	var words []uctx.WordTiming
+	var words []align.WordTiming
 	if msg.Alignment != nil {
 		words = clock.add(msg.Alignment, cjk)
 	}
@@ -716,9 +716,9 @@ func errorGiven(raw json.RawMessage) bool {
 func (s *synthesizer) finishContext(id string) {
 	if s.host != nil && s.host.AudioContextAvailable(id) {
 		s.mu.Lock()
-		var last []uctx.WordTiming
+		var last []align.WordTiming
 		if clock := s.wordClocks[id]; clock != nil && clock.partialWord != "" {
-			last = []uctx.WordTiming{{Word: clock.partialWord, Offset: clock.partialStart}}
+			last = []align.WordTiming{{Word: clock.partialWord, Offset: clock.partialStart}}
 		}
 		s.mu.Unlock()
 		s.addWords(id, last, s.isCJK())
@@ -746,7 +746,7 @@ func (s *synthesizer) isCJK() bool {
 // addWords adds words to a context's queue. In Chinese and Japanese each
 // character is a token of its own, which already reads as continuous text, and
 // punctuation joins the character before it.
-func (s *synthesizer) addWords(id string, words []uctx.WordTiming, cjk bool) {
+func (s *synthesizer) addWords(id string, words []align.WordTiming, cjk bool) {
 	if len(words) == 0 || s.host == nil {
 		return
 	}
@@ -806,7 +806,7 @@ func (s *synthesizer) RunTTSTimed(
 	ctx context.Context,
 	text, contextID string,
 	yield func(f frames.Frame) error,
-	_ func(words []uctx.WordTiming, opts tts.WordTimingOptions) error,
+	_ func(words []align.WordTiming, opts tts.WordTimingOptions) error,
 ) error {
 	return s.RunTTS(ctx, text, contextID, yield)
 }

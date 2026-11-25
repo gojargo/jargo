@@ -18,14 +18,14 @@ import (
 	"unicode/utf8"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/service"
 	"github.com/gojargo/jargo/service/settings"
 	"github.com/gojargo/jargo/service/tts"
-	uctx "github.com/gojargo/jargo/utils/context"
-	"github.com/gojargo/jargo/utils/events"
+	"github.com/gojargo/jargo/text/align"
 )
 
 // Tests for the TTS service against a fake Streaming TTS server.
@@ -293,12 +293,12 @@ func runTest(t *testing.T, svc *tts.Base, steps ...step) (down, up []frames.Fram
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 		ReachedUpstreamFilter:   pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		down = append(down, f)
 		mu.Unlock()
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		up = append(up, f)
 		mu.Unlock()
@@ -474,7 +474,7 @@ func TestTTSTokenSpeakFramePreservesUnflushedLLMRequest(t *testing.T) {
 				svc, _ := testTTS(endpoint, TTSConfig{TextAggregation: frames.TextTypeToken})
 				var mu sync.Mutex
 				var requests []tts.TTSRequest
-				events.On(svc.Events(), tts.EventTTSRequest,
+				event.On(svc.Events(), tts.EventTTSRequest,
 					func(_ context.Context, req tts.TTSRequest) {
 						mu.Lock()
 						requests = append(requests, req)
@@ -838,10 +838,10 @@ func TestTTSSessionRenewedMidTurnKeepsWordTimes(t *testing.T) {
 type recordingHost struct {
 	tts.AudioContextHost
 	mu    sync.Mutex
-	words []uctx.WordTiming
+	words []align.WordTiming
 }
 
-func (h *recordingHost) AddWordTimestamps(contextID string, words []uctx.WordTiming, opts tts.WordTimingOptions) {
+func (h *recordingHost) AddWordTimestamps(contextID string, words []align.WordTiming, opts tts.WordTimingOptions) {
 	h.mu.Lock()
 	h.words = append(h.words, words...)
 	h.mu.Unlock()
@@ -995,7 +995,7 @@ func TestTTSRefusedHandshakeRaisesAConnectionError(t *testing.T) {
 	svc, s := testTTS("ws"+strings.TrimPrefix(srv.URL, "http"), TTSConfig{})
 	var mu sync.Mutex
 	var reported []string
-	events.On(svc.Events(), service.EventConnectionError, func(_ context.Context, msg string) {
+	event.On(svc.Events(), service.EventConnectionError, func(_ context.Context, msg string) {
 		mu.Lock()
 		reported = append(reported, msg)
 		mu.Unlock()

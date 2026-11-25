@@ -23,8 +23,8 @@ import (
 	"github.com/gojargo/jargo/service/tts"
 	"github.com/gojargo/jargo/service/wsservice"
 	"github.com/gojargo/jargo/service/wsutil"
-	uctx "github.com/gojargo/jargo/utils/context"
-	ttstext "github.com/gojargo/jargo/utils/text"
+	ttstext "github.com/gojargo/jargo/text"
+	"github.com/gojargo/jargo/text/align"
 )
 
 const (
@@ -519,11 +519,11 @@ func (s *realtimeSynthesizer) FlushAudio(ctx context.Context, contextID string) 
 // report, each offset by where the context's audio so far ends. Blank words are
 // skipped, and punctuation Rime reports as a word of its own is attached to the
 // word before it.
-func (s *realtimeSynthesizer) calculateWordTimes(words []string, starts, ends []float64) []uctx.WordTiming {
+func (s *realtimeSynthesizer) calculateWordTimes(words []string, starts, ends []float64) []align.WordTiming {
 	s.mu.Lock()
 	cumulative := s.cumulativeTime
 	s.mu.Unlock()
-	var pairs []uctx.WordTiming
+	var pairs []align.WordTiming
 	for i, word := range words {
 		if i >= len(starts) || i >= len(ends) {
 			break
@@ -535,7 +535,7 @@ func (s *realtimeSynthesizer) calculateWordTimes(words []string, starts, ends []
 			pairs[len(pairs)-1].Word += word
 			continue
 		}
-		pairs = append(pairs, uctx.WordTiming{Word: word, Offset: starts[i] + cumulative})
+		pairs = append(pairs, align.WordTiming{Word: word, Offset: starts[i] + cumulative})
 	}
 	return pairs
 }
@@ -667,7 +667,7 @@ func (s *realtimeSynthesizer) RunTTSTimed(
 	ctx context.Context,
 	text, contextID string,
 	yield func(f frames.Frame) error,
-	_ func(words []uctx.WordTiming, opts tts.WordTimingOptions) error,
+	_ func(words []align.WordTiming, opts tts.WordTimingOptions) error,
 ) error {
 	return s.RunTTS(ctx, text, contextID, yield)
 }

@@ -8,9 +8,9 @@ import (
 	"testing"
 
 	"github.com/gojargo/jargo/clock"
+	"github.com/gojargo/jargo/errclass"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
-	errs "github.com/gojargo/jargo/utils/errors"
 )
 
 // panicking panics on a text frame reading "boom" and on a UserIdleTimeout
@@ -52,7 +52,7 @@ func checkPanicReported(t *testing.T, ef *frames.ErrorFrame, p processor.Process
 	if ef.Err == nil {
 		t.Error("the error frame carries no error")
 	}
-	if ef.Category != errs.Unknown {
+	if ef.Category != errclass.Unknown {
 		t.Errorf("category = %v, want unknown", ef.Category)
 	}
 	if ef.Source != p {
@@ -172,13 +172,13 @@ func (p *failing) ProcessFrame(ctx context.Context, f frames.Frame, dir processo
 // returned from ProcessFrame carries a 401, but where it came from cannot be
 // told, so it is reported unclassified and the processor stays usable.
 func TestAnErrorReturnedFromProcessFrameIsNotClassified(t *testing.T) {
-	p := &failing{err: errs.NewHTTPStatusError(401, errors.New("unauthorized"))} //nolint:err113 // a one-off cause
+	p := &failing{err: errclass.NewHTTPStatusError(401, errors.New("unauthorized"))} //nolint:err113 // a one-off cause
 	p.Base = processor.New("Failing", p)
 	up, _ := linkAndStart(t, p)
 
 	queue(t, context.Background(), p, frames.NewTextFrame("hello"))
 	got := waitForErrors(t, up, 1)
-	if got[0].Category != errs.Unknown {
+	if got[0].Category != errclass.Unknown {
 		t.Errorf("category = %v, want unknown", got[0].Category)
 	}
 	if !p.Usable() {

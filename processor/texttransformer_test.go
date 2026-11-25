@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // TestTextTransformerKeepsFrameTypeAndFields checks every kind of text frame is
@@ -70,7 +70,7 @@ func TestTextTransformerKeepsDirection(t *testing.T) {
 	var reached []string
 	task := pipeline.NewWorker(pipeline.New(exclaim, b),
 		pipeline.WorkerConfig{ReachedUpstreamFilter: pipeline.AnyFrame})
-	events.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
 		if tf, ok := f.(*frames.TextFrame); ok {
 			mu.Lock()
 			reached = append(reached, tf.Text)

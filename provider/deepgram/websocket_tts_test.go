@@ -14,12 +14,12 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/service"
 	"github.com/gojargo/jargo/service/settings"
 	"github.com/gojargo/jargo/service/tts"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // auraAudioChunk is the audio the fake Aura endpoint answers a Flush with.
@@ -185,12 +185,12 @@ func runAuraPipeline(t *testing.T, svc *tts.Base, params pipeline.Params, steps 
 		ReachedUpstreamFilter:   pipeline.AnyFrame,
 		Params:                  params,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		down = append(down, f)
 		mu.Unlock()
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		up = append(up, f)
 		mu.Unlock()
@@ -227,7 +227,7 @@ type connectionErrors struct {
 
 func watchConnectionErrors(b *tts.Base) *connectionErrors {
 	c := &connectionErrors{}
-	events.On(b.Events(), service.EventConnectionError, func(_ context.Context, msg string) {
+	event.On(b.Events(), service.EventConnectionError, func(_ context.Context, msg string) {
 		c.mu.Lock()
 		c.msgs = append(c.msgs, msg)
 		c.mu.Unlock()

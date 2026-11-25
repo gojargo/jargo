@@ -20,14 +20,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/errclass"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/service/settings"
 	"github.com/gojargo/jargo/service/stt"
-	errs "github.com/gojargo/jargo/utils/errors"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // segmentWAV stands in for a WAV segment where the request body is checked.
@@ -193,7 +193,7 @@ func runAndReport(t *testing.T, svc *stt.SegmentService) ([]*frames.Transcriptio
 		got      []*frames.TranscriptionFrame
 		reported []*frames.ErrorFrame
 	)
-	events.On(svc.Events(), processor.EventError, func(_ context.Context, ef *frames.ErrorFrame) {
+	event.On(svc.Events(), processor.EventError, func(_ context.Context, ef *frames.ErrorFrame) {
 		mu.Lock()
 		reported = append(reported, ef)
 		mu.Unlock()
@@ -203,7 +203,7 @@ func runAndReport(t *testing.T, svc *stt.SegmentService) ([]*frames.Transcriptio
 		EnableRTVI:              &noRTVI,
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&worker.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&worker.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if tf, ok := f.(*frames.TranscriptionFrame); ok {
 			mu.Lock()
 			got = append(got, tf)
@@ -877,11 +877,11 @@ func TestSegmentedARejectedRequestLeavesTheServiceUnusable(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		status   int
-		category errs.Category
+		category errclass.Category
 	}{
-		{http.StatusBadRequest, errs.InvalidRequest},
-		{http.StatusUnauthorized, errs.Authentication},
-		{http.StatusForbidden, errs.Authorization},
+		{http.StatusBadRequest, errclass.InvalidRequest},
+		{http.StatusUnauthorized, errclass.Authentication},
+		{http.StatusForbidden, errclass.Authorization},
 	} {
 		t.Run(http.StatusText(tc.status), func(t *testing.T) {
 			t.Parallel()
@@ -925,8 +925,8 @@ func TestSegmentedARateLimitLeavesTheServiceUsable(t *testing.T) {
 	svc := NewSegmentedSTT(segmentedConfig(srv.URL, nil))
 	ef := reportedError(t, svc)
 
-	if ef.Category != errs.RateLimit {
-		t.Errorf("category = %q, want %q", ef.Category, errs.RateLimit)
+	if ef.Category != errclass.RateLimit {
+		t.Errorf("category = %q, want %q", ef.Category, errclass.RateLimit)
 	}
 	if !svc.Usable() {
 		t.Error("the service is unusable after a rate limit")
@@ -939,8 +939,8 @@ func TestSegmentedAServerErrorLeavesTheServiceUsable(t *testing.T) {
 	svc := NewSegmentedSTT(segmentedConfig(srv.URL, nil))
 	ef := reportedError(t, svc)
 
-	if ef.Category != errs.Server {
-		t.Errorf("category = %q, want %q", ef.Category, errs.Server)
+	if ef.Category != errclass.Server {
+		t.Errorf("category = %q, want %q", ef.Category, errclass.Server)
 	}
 	if !svc.Usable() {
 		t.Error("the service is unusable after a server error")

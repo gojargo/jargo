@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/service/llm"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // stampGen answers every turn with one fixed reply.
@@ -46,7 +46,7 @@ func runStamped(t *testing.T, configure *bool) []*bool {
 			ReachedDownstreamFilter: pipeline.AnyFrame,
 		},
 	)
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream,
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream,
 		func(_ context.Context, f frames.Frame) { record(f) })
 	done := make(chan error, 1)
 	go func() { done <- task.Run(t.Context()) }()

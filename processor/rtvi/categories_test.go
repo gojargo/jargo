@@ -6,11 +6,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/processor/rtvi"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 func off() *bool { v := false; return &v }
@@ -263,7 +263,7 @@ func collectFrom(t *testing.T, ignore bool) []rtvi.Message {
 		Observers:               []pipeline.Observer{obs},
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if m, ok := f.(*frames.OutputTransportMessageUrgentFrame); ok {
 			if msg, ok := m.Message.(rtvi.Message); ok {
 				mu.Lock()

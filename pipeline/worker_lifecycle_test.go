@@ -6,11 +6,11 @@ import (
 	"time"
 
 	"github.com/gojargo/jargo/bus"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/registry"
-	"github.com/gojargo/jargo/utils/events"
 	"github.com/gojargo/jargo/workers"
 )
 
@@ -82,7 +82,7 @@ func TestWorkerIsReadyOncePipelineStarts(t *testing.T) {
 	w, _ := newSessionWorker(t, pipeline.WorkerConfig{})
 
 	started := make(chan struct{})
-	events.On(w.Events(), pipeline.EventPipelineStarted,
+	event.On(w.Events(), pipeline.EventPipelineStarted,
 		func(_ context.Context, _ *frames.StartFrame) { close(started) })
 
 	done := runWorker(t, w)
@@ -127,7 +127,7 @@ func TestWorkerActivatedOverTheBus(t *testing.T) {
 	})
 
 	started := make(chan struct{})
-	events.On(w.Events(), pipeline.EventPipelineStarted,
+	event.On(w.Events(), pipeline.EventPipelineStarted,
 		func(_ context.Context, _ *frames.StartFrame) { close(started) })
 
 	done := runWorker(t, w)
@@ -163,7 +163,7 @@ func TestWorkerEndMessageEndsThePipeline(t *testing.T) {
 	w, msgBus := newSessionWorker(t, pipeline.WorkerConfig{})
 
 	finished := make(chan frames.Frame, 1)
-	events.On(w.Events(), pipeline.EventPipelineFinished,
+	event.On(w.Events(), pipeline.EventPipelineFinished,
 		func(_ context.Context, f frames.Frame) { finished <- f })
 
 	done := runWorker(t, w)
@@ -210,7 +210,7 @@ func TestWorkerSpeakMessageBecomesAFrame(t *testing.T) {
 	})
 
 	spoken := make(chan *frames.TTSSpeakFrame, 1)
-	events.On(w.Events(), pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(w.Events(), pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if sf, ok := f.(*frames.TTSSpeakFrame); ok {
 			spoken <- sf
 		}
@@ -252,7 +252,7 @@ func TestWorkerSpeakMessageWorksWithoutRTVI(t *testing.T) {
 	}
 
 	spoken := make(chan *frames.TTSSpeakFrame, 1)
-	events.On(w.Events(), pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(w.Events(), pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if sf, ok := f.(*frames.TTSSpeakFrame); ok {
 			spoken <- sf
 		}
@@ -287,7 +287,7 @@ func TestWorkerSpeakMessageJoinsTheContextByDefault(t *testing.T) {
 		ReachedDownstreamFilter: pipeline.FrameTypes(&frames.TTSSpeakFrame{}),
 	})
 	spoken := make(chan *frames.TTSSpeakFrame, 2)
-	events.On(w.Events(), pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(w.Events(), pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if sf, ok := f.(*frames.TTSSpeakFrame); ok {
 			spoken <- sf
 		}
@@ -322,7 +322,7 @@ func TestWorkerIgnoresASpeakMessageForAnotherWorker(t *testing.T) {
 	})
 
 	spoken := make(chan *frames.TTSSpeakFrame, 1)
-	events.On(w.Events(), pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(w.Events(), pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if sf, ok := f.(*frames.TTSSpeakFrame); ok {
 			spoken <- sf
 		}
@@ -384,7 +384,7 @@ func TestWorkerQueueFrameReachesThePipeline(t *testing.T) {
 	})
 
 	got := make(chan string, 4)
-	events.On(w.Events(), pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(w.Events(), pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if tf, ok := f.(*frames.TextFrame); ok {
 			got <- tf.Text
 		}
@@ -413,7 +413,7 @@ func TestWorkerQueueFramesReachThePipelineInOrder(t *testing.T) {
 	})
 
 	got := make(chan string, 4)
-	events.On(w.Events(), pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(w.Events(), pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if tf, ok := f.(*frames.TextFrame); ok {
 			got <- tf.Text
 		}
@@ -449,7 +449,7 @@ func TestWorkerRunsUnderARunner(t *testing.T) {
 	r.AddWorkers(t.Context(), w)
 
 	finished := make(chan struct{})
-	events.On(w.Events(), pipeline.EventPipelineFinished,
+	event.On(w.Events(), pipeline.EventPipelineFinished,
 		func(_ context.Context, _ frames.Frame) { close(finished) })
 
 	r.Add(workers.EventRunnerReady, func(context.Context, any, ...any) { w.StopWhenDone() })

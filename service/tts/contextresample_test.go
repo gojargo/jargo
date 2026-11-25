@@ -11,10 +11,10 @@ import (
 	"time"
 
 	"github.com/gojargo/jargo/audio/resample"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/service/tts"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // resampleServiceRate is the rate the service runs at in these tests.
@@ -109,7 +109,7 @@ func speakResampled(t *testing.T, syn tts.Synthesizer, after ...frames.Frame) []
 	var got []frames.Frame
 	task := pipeline.NewWorker(pipeline.New(tts.New("ResampleTTS", syn)),
 		pipeline.WorkerConfig{ReachedDownstreamFilter: pipeline.AnyFrame})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		got = append(got, f)
 		mu.Unlock()

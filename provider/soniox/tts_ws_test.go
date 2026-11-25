@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/errclass"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
@@ -23,9 +25,7 @@ import (
 	"github.com/gojargo/jargo/service/tts"
 	"github.com/gojargo/jargo/service/wsservice"
 	"github.com/gojargo/jargo/service/wsutil"
-	uctx "github.com/gojargo/jargo/utils/context"
-	errs "github.com/gojargo/jargo/utils/errors"
-	"github.com/gojargo/jargo/utils/events"
+	"github.com/gojargo/jargo/text/align"
 )
 
 // Tests for the connection held open for the call. Each turn is a stream of
@@ -200,7 +200,7 @@ type ttsHost struct {
 	open     map[string]bool
 	audio    map[string][]byte
 	appended map[string][]frames.Frame
-	words    map[string][]uctx.WordTiming
+	words    map[string][]align.WordTiming
 	opts     map[string][]tts.WordTimingOptions
 	removed  []string
 	rotated  int
@@ -212,7 +212,7 @@ func newTTSHost() *ttsHost {
 		open:     map[string]bool{},
 		audio:    map[string][]byte{},
 		appended: map[string][]frames.Frame{},
-		words:    map[string][]uctx.WordTiming{},
+		words:    map[string][]align.WordTiming{},
 		opts:     map[string][]tts.WordTimingOptions{},
 	}
 }
@@ -239,7 +239,7 @@ func (h *ttsHost) AppendToAudioContext(id string, f frames.Frame) {
 
 func (h *ttsHost) AppendWordToAudioContext(string, string, float64) {}
 
-func (h *ttsHost) AddWordTimestamps(id string, words []uctx.WordTiming, opts tts.WordTimingOptions) {
+func (h *ttsHost) AddWordTimestamps(id string, words []align.WordTiming, opts tts.WordTimingOptions) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.words[id] = append(h.words[id], words...)
@@ -289,7 +289,7 @@ func (h *ttsHost) appendedTo(id string) []frames.Frame {
 	return slices.Clone(h.appended[id])
 }
 
-func (h *ttsHost) wordsFor(id string) []uctx.WordTiming {
+func (h *ttsHost) wordsFor(id string) []align.WordTiming {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return slices.Clone(h.words[id])
@@ -447,7 +447,7 @@ func TestTTSStreamAudioAndTimings(t *testing.T) {
 	if got := host.audioFor("gone"); len(got) != 0 {
 		t.Errorf("audio for a closed context was appended: %v", got)
 	}
-	want := []uctx.WordTiming{{Word: "hi", Offset: 0}, {Word: "there,", Offset: 0.3}, {Word: "pal", Offset: 1.0}}
+	want := []align.WordTiming{{Word: "hi", Offset: 0}, {Word: "there,", Offset: 0.3}, {Word: "pal", Offset: 1.0}}
 	if got := host.wordsFor("s1"); !slices.Equal(got, want) {
 		t.Errorf("s1 words = %v, want %v", got, want)
 	}
@@ -619,12 +619,12 @@ func runTTSPipeline(t *testing.T, b *tts.Base) *ttsRun {
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 		ReachedUpstreamFilter:   pipeline.AnyFrame,
 	})
-	events.On(&r.task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&r.task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		r.mu.Lock()
 		r.down = append(r.down, f)
 		r.mu.Unlock()
 	})
-	events.On(&r.task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
+	event.On(&r.task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
 		if ef, ok := f.(*frames.ErrorFrame); ok {
 			r.mu.Lock()
 			r.errors = append(r.errors, ef)
@@ -692,9 +692,9 @@ func TestTTSErrorCodeSetsTheCategory(t *testing.T) {
 		}
 		return len(got) == 4
 	})
-	want := []errs.Category{errs.Quota, errs.Authentication, errs.Unset, errs.InvalidRequest}
+	want := []errclass.Category{errclass.Quota, errclass.Authentication, errclass.Unset, errclass.InvalidRequest}
 	for i, ef := range got {
-		if ef.Category != want[i] && (want[i] != errs.Unset || ef.Category != errs.Unknown) {
+		if ef.Category != want[i] && (want[i] != errclass.Unset || ef.Category != errclass.Unknown) {
 			t.Errorf("error %d (%s) category = %q, want %q", i, ef.Error, ef.Category, want[i])
 		}
 	}
@@ -999,7 +999,7 @@ func TestTTSReportsAFailedConnection(t *testing.T) {
 	b := NewTTS(TTSConfig{APIKey: "k", URL: server.url})
 	var mu sync.Mutex
 	var reported []string
-	events.On(b.Events(), service.EventConnectionError, func(_ context.Context, msg string) {
+	event.On(b.Events(), service.EventConnectionError, func(_ context.Context, msg string) {
 		mu.Lock()
 		reported = append(reported, msg)
 		mu.Unlock()

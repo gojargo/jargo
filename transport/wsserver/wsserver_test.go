@@ -24,12 +24,12 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/observers"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/transport/wsserver"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // errSerialize is the failure the test serializer reports on demand.
@@ -1049,7 +1049,7 @@ func TestSessionTimeoutFires(t *testing.T) {
 	defer c.shutdown(t)
 
 	fired := make(chan struct{}, 1)
-	events.On(c.tr.Events(), wsserver.EventSessionTimeout,
+	event.On(c.tr.Events(), wsserver.EventSessionTimeout,
 		func(context.Context, struct{}) { fired <- struct{}{} })
 
 	c.ready(t)
@@ -1069,7 +1069,7 @@ func TestSessionTimeoutDoesNotFireEarly(t *testing.T) {
 	defer c.shutdown(t)
 
 	fired := make(chan struct{}, 1)
-	events.On(c.tr.Events(), wsserver.EventSessionTimeout,
+	event.On(c.tr.Events(), wsserver.EventSessionTimeout,
 		func(context.Context, struct{}) { fired <- struct{}{} })
 
 	c.ready(t)
@@ -1087,7 +1087,7 @@ func TestNoSessionTimeoutByDefault(t *testing.T) {
 	defer c.shutdown(t)
 
 	fired := make(chan struct{}, 1)
-	events.On(c.tr.Events(), wsserver.EventSessionTimeout,
+	event.On(c.tr.Events(), wsserver.EventSessionTimeout,
 		func(context.Context, struct{}) { fired <- struct{}{} })
 
 	c.ready(t)
@@ -1277,7 +1277,7 @@ func TestTheClientConnectingIsReported(t *testing.T) {
 	connected := make(chan struct{}, 2)
 	c := dialWith(t, &testSerializer{}, params(), dialOpts{
 		onTransport: func(tr *wsserver.Transport) {
-			events.On(tr.Events(), wsserver.EventClientConnected,
+			event.On(tr.Events(), wsserver.EventClientConnected,
 				func(context.Context, struct{}) { connected <- struct{}{} })
 		},
 	})
@@ -1302,7 +1302,7 @@ func TestTheClientHangingUpIsReported(t *testing.T) {
 	defer c.shutdown(t)
 
 	gone := make(chan struct{}, 1)
-	events.On(c.tr.Events(), wsserver.EventClientDisconnected,
+	event.On(c.tr.Events(), wsserver.EventClientDisconnected,
 		func(context.Context, struct{}) { gone <- struct{}{} })
 
 	c.ready(t)
@@ -1322,7 +1322,7 @@ func TestEndingTheSessionIsNotAHangUp(t *testing.T) {
 	c := dial(t, &testSerializer{}, params())
 
 	var hangups atomic.Int32
-	events.On(c.tr.Events(), wsserver.EventClientDisconnected,
+	event.On(c.tr.Events(), wsserver.EventClientDisconnected,
 		func(context.Context, struct{}) { hangups.Add(1) })
 
 	c.ready(t)

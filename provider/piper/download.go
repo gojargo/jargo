@@ -16,7 +16,7 @@ import (
 	"strings"
 	"sync"
 
-	errs "github.com/gojargo/jargo/utils/errors"
+	"github.com/gojargo/jargo/errclass"
 )
 
 // huggingFace is the Hugging Face Hub, which hosts the rhasspy/piper-voices
@@ -116,7 +116,7 @@ func (d *voiceDownloader) currentName(ctx context.Context, voice, dir string, fo
 	if err == nil {
 		return voice, nil
 	}
-	if status, ok := errs.ExtractHTTPStatusCode(err); !ok || status != http.StatusNotFound {
+	if status, ok := errclass.ExtractHTTPStatusCode(err); !ok || status != http.StatusNotFound {
 		return "", err
 	}
 	// The voice may have been renamed since this name was published.
@@ -215,7 +215,7 @@ func (d *voiceDownloader) get(ctx context.Context, url string) (*http.Response, 
 	}
 	if resp.StatusCode != http.StatusOK {
 		_ = resp.Body.Close()
-		return nil, errs.NewHTTPStatusError(resp.StatusCode,
+		return nil, errclass.NewHTTPStatusError(resp.StatusCode,
 			fmt.Errorf("%w: %s: %s", errDownloadStatus, url, resp.Status))
 	}
 	return resp, nil

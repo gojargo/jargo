@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor/aggregators"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // Summarization wired through the aggregator pair. The summarizer itself is
@@ -32,7 +32,7 @@ func summarizingPair(
 	task := pipeline.NewWorker(pipeline.New(pair.Assistant()), pipeline.WorkerConfig{
 		ReachedUpstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
 		if fr, ok := f.(*frames.LLMContextSummaryRequestFrame); ok {
 			mu.Lock()
 			got = append(got, fr)
@@ -135,7 +135,7 @@ func TestWithoutTheOptionSummarizationOnlyHappensOnDemand(t *testing.T) {
 	task := pipeline.NewWorker(pipeline.New(pair.Assistant()), pipeline.WorkerConfig{
 		ReachedUpstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
 		if _, ok := f.(*frames.LLMContextSummaryRequestFrame); ok {
 			mu.Lock()
 			got++

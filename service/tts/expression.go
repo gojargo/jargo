@@ -10,7 +10,7 @@ import (
 	"github.com/gojargo/jargo/expressive/spoken"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
-	ttstext "github.com/gojargo/jargo/utils/text"
+	ttstext "github.com/gojargo/jargo/text"
 )
 
 // Expressive conversation (alpha) lets an agent hear how something was said and

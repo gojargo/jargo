@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
-	"github.com/gojargo/jargo/utils/events"
 	"github.com/gojargo/jargo/workers"
 )
 
@@ -34,9 +34,9 @@ func runnerWorker() (w *pipeline.Worker, ready chan struct{}, ended func() frame
 		Name:        "worker",
 		IdleTimeout: -1,
 	})
-	events.On(w.Events(), pipeline.EventPipelineStarted,
+	event.On(w.Events(), pipeline.EventPipelineStarted,
 		func(_ context.Context, _ *frames.StartFrame) { once.Do(func() { close(ready) }) })
-	events.On(w.Events(), pipeline.EventPipelineFinished, func(_ context.Context, f frames.Frame) {
+	event.On(w.Events(), pipeline.EventPipelineFinished, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		last = f
 		mu.Unlock()
@@ -162,7 +162,7 @@ func TestRunnerEndsWhenAParentWorkerEndsOnItsOwn(t *testing.T) {
 		Name:        "child",
 		IdleTimeout: -1,
 	})
-	events.On(child.Events(), pipeline.EventPipelineStarted,
+	event.On(child.Events(), pipeline.EventPipelineStarted,
 		func(_ context.Context, _ *frames.StartFrame) { once.Do(func() { close(childReady) }) })
 
 	done := runUnderRunner(t.Context(), t, r, parent)

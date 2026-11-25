@@ -7,21 +7,21 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/errclass"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
-	errs "github.com/gojargo/jargo/utils/errors"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // erroring reports an error every time it sees a text frame, and forwards
 // everything so the lifecycle frames still reach the sink.
 type erroring struct {
 	*processor.Base
-	category errs.Category
+	category errclass.Category
 }
 
-func newErroring(name string, category errs.Category) *erroring {
+func newErroring(name string, category errclass.Category) *erroring {
 	e := &erroring{category: category}
 	e.Base = processor.New(name, e)
 	return e
@@ -57,7 +57,7 @@ func (p *permanentlyFailing) ProcessFrame(ctx context.Context, f frames.Frame, d
 	}
 	if _, ok := f.(*frames.TextFrame); ok {
 		p.PushError(ctx, "service failed for good", nil, false,
-			processor.WithErrorCategory(errs.Server), processor.ForceTreatAsPermanent())
+			processor.WithErrorCategory(errclass.Server), processor.ForceTreatAsPermanent())
 	}
 	return p.PushFrame(ctx, f, dir)
 }
@@ -74,7 +74,7 @@ func unusableRun(
 	})
 
 	var mu sync.Mutex
-	events.On(&worker.Registry, pipeline.EventPipelineError, func(_ context.Context, ef *frames.ErrorFrame) {
+	event.On(&worker.Registry, pipeline.EventPipelineError, func(_ context.Context, ef *frames.ErrorFrame) {
 		mu.Lock()
 		defer mu.Unlock()
 		// This is how application code tells the two kinds of error apart, with
@@ -83,7 +83,7 @@ func unusableRun(
 			unusable = append(unusable, ef)
 		}
 	})
-	events.On(&worker.Registry, pipeline.EventPipelineFinished, func(_ context.Context, f frames.Frame) {
+	event.On(&worker.Registry, pipeline.EventPipelineFinished, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		defer mu.Unlock()
 		finished = append(finished, f)
@@ -106,15 +106,15 @@ func hasFrame[T frames.Frame](got []frames.Frame) bool {
 }
 
 func TestContinueKeepsThePipelineRunning(t *testing.T) {
-	unusable, finished := unusableRun(t, newErroring("Erroring", errs.Authentication),
+	unusable, finished := unusableRun(t, newErroring("Erroring", errclass.Authentication),
 		pipeline.UnusableContinue,
 		[]frames.Frame{frames.NewTextFrame("hello"), frames.NewEndFrame()})
 
 	if len(unusable) != 1 {
 		t.Fatalf("reported %d unusable errors, want 1", len(unusable))
 	}
-	if unusable[0].Category != errs.Authentication {
-		t.Errorf("category: got %q, want %q", unusable[0].Category, errs.Authentication)
+	if unusable[0].Category != errclass.Authentication {
+		t.Errorf("category: got %q, want %q", unusable[0].Category, errclass.Authentication)
 	}
 	// The pipeline ran until the EndFrame that was queued, not because of the error.
 	if !hasFrame[*frames.EndFrame](finished) {
@@ -123,7 +123,7 @@ func TestContinueKeepsThePipelineRunning(t *testing.T) {
 }
 
 func TestEndStopsThePipeline(t *testing.T) {
-	unusable, finished := unusableRun(t, newErroring("Erroring", errs.Authentication),
+	unusable, finished := unusableRun(t, newErroring("Erroring", errclass.Authentication),
 		pipeline.UnusableEnd, []frames.Frame{frames.NewTextFrame("hello")})
 
 	if len(unusable) != 1 {
@@ -135,7 +135,7 @@ func TestEndStopsThePipeline(t *testing.T) {
 }
 
 func TestCancelStopsThePipeline(t *testing.T) {
-	unusable, finished := unusableRun(t, newErroring("Erroring", errs.Authentication),
+	unusable, finished := unusableRun(t, newErroring("Erroring", errclass.Authentication),
 		pipeline.UnusableCancel, []frames.Frame{frames.NewTextFrame("hello")})
 
 	if len(unusable) != 1 {
@@ -154,7 +154,7 @@ func TestDefaultPolicyIsContinue(t *testing.T) {
 }
 
 func TestTransientErrorsLeaveThePipelineRunning(t *testing.T) {
-	unusable, finished := unusableRun(t, newErroring("Erroring", errs.Server),
+	unusable, finished := unusableRun(t, newErroring("Erroring", errclass.Server),
 		pipeline.UnusableEnd,
 		[]frames.Frame{frames.NewTextFrame("hello"), frames.NewEndFrame()})
 
@@ -167,7 +167,7 @@ func TestTransientErrorsLeaveThePipelineRunning(t *testing.T) {
 }
 
 func TestUnclassifiedErrorsLeaveThePipelineRunning(t *testing.T) {
-	unusable, _ := unusableRun(t, newErroring("Erroring", errs.Unknown),
+	unusable, _ := unusableRun(t, newErroring("Erroring", errclass.Unknown),
 		pipeline.UnusableEnd,
 		[]frames.Frame{frames.NewTextFrame("hello"), frames.NewEndFrame()})
 
@@ -189,7 +189,7 @@ func TestPermanentErrorsAreActedOnWhateverTheCategory(t *testing.T) {
 }
 
 func TestAProcessorIsActedOnOnce(t *testing.T) {
-	p := newErroring("Erroring", errs.Authentication)
+	p := newErroring("Erroring", errclass.Authentication)
 	worker := runActedOn(t, []frames.Frame{
 		frames.NewTextFrame("one"), frames.NewTextFrame("two"),
 		frames.NewTextFrame("three"), frames.NewEndFrame(),
@@ -202,8 +202,8 @@ func TestAProcessorIsActedOnOnce(t *testing.T) {
 }
 
 func TestEachProcessorIsActedOnSeparately(t *testing.T) {
-	first := newErroring("First", errs.Authentication)
-	second := newErroring("Second", errs.Authentication)
+	first := newErroring("First", errclass.Authentication)
+	second := newErroring("Second", errclass.Authentication)
 	worker := runActedOn(t, []frames.Frame{frames.NewTextFrame("hello"), frames.NewEndFrame()}, first, second)
 
 	// The text frame reaches both processors, so both report an error.
@@ -236,7 +236,7 @@ func runActedOn(t *testing.T, feed []frames.Frame, ps ...processor.Processor) *p
 func runPastErrors(t *testing.T, worker *pipeline.Worker, feed []frames.Frame, errors int) {
 	t.Helper()
 	reported := make(chan struct{}, errors)
-	events.On(&worker.Registry, pipeline.EventPipelineError, func(context.Context, *frames.ErrorFrame) {
+	event.On(&worker.Registry, pipeline.EventPipelineError, func(context.Context, *frames.ErrorFrame) {
 		select {
 		case reported <- struct{}{}:
 		default:

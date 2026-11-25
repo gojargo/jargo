@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
@@ -21,7 +22,6 @@ import (
 	"github.com/gojargo/jargo/provider/sarvam"
 	"github.com/gojargo/jargo/service/llm"
 	"github.com/gojargo/jargo/service/settings"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // sarvamRequest is one request the stand-in endpoint received.
@@ -183,7 +183,7 @@ func runTurn(t *testing.T, svc *chat.LLMService, convo *frames.LLMContext) []*fr
 	worker := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&worker.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&worker.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if _, ok := f.(*frames.LLMFullResponseEndFrame); ok {
 			once.Do(func() { close(done) })
 		}

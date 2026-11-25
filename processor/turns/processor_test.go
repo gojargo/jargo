@@ -9,11 +9,11 @@ import (
 	"time"
 
 	"github.com/gojargo/jargo/audio/turn"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/processor/turns"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // runProcessor starts a task around the given processors and collects what
@@ -24,7 +24,7 @@ func runProcessor(t *testing.T, ps ...processor.Processor) (*pipeline.Worker, ch
 	task := pipeline.NewWorker(pipeline.New(ps...), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		select {
 		case seen <- f:
 		default:
@@ -87,13 +87,13 @@ func TestUserTurnProcessorSpeechTimeoutStrategies(t *testing.T) {
 
 	started := make(chan turns.StartStrategy, 1)
 	stopped := make(chan turns.StopStrategy, 1)
-	events.On(p.Events(), turns.EventUserTurnStarted, func(_ context.Context, s turns.StartStrategy) {
+	event.On(p.Events(), turns.EventUserTurnStarted, func(_ context.Context, s turns.StartStrategy) {
 		select {
 		case started <- s:
 		default:
 		}
 	})
-	events.On(p.Events(), turns.EventUserTurnStopped, func(_ context.Context, s turns.StopStrategy) {
+	event.On(p.Events(), turns.EventUserTurnStopped, func(_ context.Context, s turns.StopStrategy) {
 		select {
 		case stopped <- s:
 		default:
@@ -198,7 +198,7 @@ func TestUserTurnProcessorStopTimeout(t *testing.T) {
 	})
 
 	timedOut := make(chan struct{}, 1)
-	events.OnSignal(p.Events(), turns.EventUserTurnStopTimeout, func(context.Context) {
+	event.OnSignal(p.Events(), turns.EventUserTurnStopTimeout, func(context.Context) {
 		select {
 		case timedOut <- struct{}{}:
 		default:
@@ -308,7 +308,7 @@ func TestUserTurnProcessorUserTurnResumed(t *testing.T) {
 		},
 	})
 	resumes := make(chan bool, 4)
-	events.On(p.Events(), turns.EventUserTurnResumed, func(_ context.Context, params turns.UserTurnResumedParams) {
+	event.On(p.Events(), turns.EventUserTurnResumed, func(_ context.Context, params turns.UserTurnResumedParams) {
 		resumes <- params.InferenceTriggered
 	})
 	task, _, runDone := runProcessor(t, p)

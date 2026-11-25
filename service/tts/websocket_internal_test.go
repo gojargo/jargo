@@ -9,12 +9,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/service"
 	"github.com/gojargo/jargo/service/settings"
 	"github.com/gojargo/jargo/service/wsservice"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 const wsSampleRate = 16000
@@ -326,7 +326,7 @@ func runWS(t *testing.T, b *Base) *wsRun {
 	t.Helper()
 	r := &wsRun{t: t, done: make(chan error, 1), seen: make(chan struct{}, 1)}
 	r.task = pipeline.NewWorker(pipeline.New(b), pipeline.WorkerConfig{ReachedDownstreamFilter: pipeline.AnyFrame})
-	events.On(&r.task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&r.task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		r.mu.Lock()
 		r.down = append(r.down, f)
 		r.mu.Unlock()
@@ -700,7 +700,7 @@ func TestALostConnectionIsRestoredAndReported(t *testing.T) {
 	})
 	var mu sync.Mutex
 	var reported []string
-	events.On(b.Events(), service.EventConnectionError, func(_ context.Context, msg string) {
+	event.On(b.Events(), service.EventConnectionError, func(_ context.Context, msg string) {
 		mu.Lock()
 		reported = append(reported, msg)
 		mu.Unlock()

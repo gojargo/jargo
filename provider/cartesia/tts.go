@@ -22,8 +22,8 @@ import (
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/service/tts"
 	"github.com/gojargo/jargo/service/wsutil"
-	uctx "github.com/gojargo/jargo/utils/context"
-	"github.com/gojargo/jargo/utils/text"
+	"github.com/gojargo/jargo/text"
+	"github.com/gojargo/jargo/text/align"
 )
 
 // GenerationConfig guides Cartesia generation; it applies to the sonic-3 series
@@ -557,7 +557,7 @@ func (s *timedSynthesizer) RunTTSTimed(
 	ctx context.Context,
 	text, contextID string,
 	yield func(f frames.Frame) error,
-	_ func(words []uctx.WordTiming, opts tts.WordTimingOptions) error,
+	_ func(words []align.WordTiming, opts tts.WordTimingOptions) error,
 ) error {
 	return s.RunTTS(ctx, text, contextID, yield)
 }
@@ -787,12 +787,12 @@ func isAlnum(r rune) bool { return unicode.IsLetter(r) || unicode.IsNumber(r) }
 // tokens carry their own spacing.
 func normalizeWordTimings(
 	wt *wsWordTimings, spaceless bool,
-) ([]uctx.WordTiming, tts.WordTimingOptions) {
+) ([]align.WordTiming, tts.WordTimingOptions) {
 	opts := tts.WordTimingOptions{IncludesInterFrameSpaces: spaceless, PreMergeTokens: spaceless}
 	if wt == nil {
 		return nil, opts
 	}
-	batch := make([]uctx.WordTiming, 0, len(wt.Words))
+	batch := make([]align.WordTiming, 0, len(wt.Words))
 	for i, w := range wt.Words {
 		cleaned := stripCartesiaTags(w)
 		if cleaned == "" {
@@ -806,7 +806,7 @@ func normalizeWordTimings(
 		if i < len(wt.End) {
 			end = wt.End[i]
 		}
-		batch = append(batch, uctx.WordTiming{Word: cleaned, Offset: start, End: end})
+		batch = append(batch, align.WordTiming{Word: cleaned, Offset: start, End: end})
 	}
 	return batch, opts
 }

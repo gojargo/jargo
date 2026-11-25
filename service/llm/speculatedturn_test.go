@@ -6,12 +6,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor/aggregators"
 	"github.com/gojargo/jargo/processor/turns"
 	"github.com/gojargo/jargo/service/llm"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // TestTheSpeculatedTurnPassesTheLLMBeforeItsResponse checks the turn an eager
@@ -31,7 +31,7 @@ func TestTheSpeculatedTurnPassesTheLLMBeforeItsResponse(t *testing.T) {
 	task := pipeline.NewWorker(pipeline.New(pair.User(), svc), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		defer mu.Unlock()
 		switch fr := f.(type) {

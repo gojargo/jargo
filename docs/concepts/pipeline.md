@@ -175,9 +175,9 @@ worker := pipeline.NewWorker(pipe, pipeline.WorkerConfig{
     },
 })
 
-events.On(worker.Events(), pipeline.EventFrameReachedDownstream,
+event.On(worker.Events(), pipeline.EventFrameReachedDownstream,
     func(ctx context.Context, f frames.Frame) { /* reached the sink */ })
-events.On(worker.Events(), pipeline.EventFrameReachedUpstream,
+event.On(worker.Events(), pipeline.EventFrameReachedUpstream,
     func(ctx context.Context, f frames.Frame) { /* reached the source */ })
 ```
 

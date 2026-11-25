@@ -67,7 +67,7 @@ import (
 
 	"github.com/gojargo/jargo/expressive"
 	"github.com/gojargo/jargo/frames"
-	"github.com/gojargo/jargo/utils/text"
+	"github.com/gojargo/jargo/text"
 )
 
 // ExpressionTags is the delimiters of the tags, for an aggregator such as

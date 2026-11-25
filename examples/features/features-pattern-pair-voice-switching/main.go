@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	"github.com/gojargo/jargo/audio/vad"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
@@ -29,11 +30,10 @@ import (
 	"github.com/gojargo/jargo/provider/openai/chat"
 	"github.com/gojargo/jargo/runner"
 	"github.com/gojargo/jargo/service/settings"
+	"github.com/gojargo/jargo/text"
 	"github.com/gojargo/jargo/transport"
 	"github.com/gojargo/jargo/transport/wsserver"
 	"github.com/gojargo/jargo/transport/wsserver/evalws"
-	"github.com/gojargo/jargo/utils/events"
-	"github.com/gojargo/jargo/utils/text"
 	"github.com/gojargo/jargo/workers"
 )
 
@@ -172,14 +172,14 @@ func runBot(ctx context.Context, t transport.Transport, args runner.Arguments) e
 	r := workers.NewRunner(workers.RunnerConfig{HandleInterrupt: &handleSigint})
 	r.AddWorkers(ctx, worker)
 
-	events.On(t.Events(), transport.EventClientConnected, func(context.Context, any) {
+	event.On(t.Events(), transport.EventClientConnected, func(context.Context, any) {
 		slog.Info("Client connected")
 		// Start the conversation with no prompt, letting the LLM follow its
 		// system instruction.
 		worker.QueueFrames([]frames.Frame{frames.NewLLMRunFrame()})
 	})
 
-	events.On(t.Events(), transport.EventClientDisconnected, func(ctx context.Context, _ any) {
+	event.On(t.Events(), transport.EventClientDisconnected, func(ctx context.Context, _ any) {
 		slog.Info("Client disconnected")
 		r.Cancel(ctx, "client disconnected")
 	})

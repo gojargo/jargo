@@ -4,10 +4,10 @@ import (
 	"context"
 	"encoding/json"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/processor/rtvi"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // The observer that records a bot's conversation as a conversation file holds
@@ -18,7 +18,7 @@ import (
 // EventConversationEnded fires once the pipeline a ConversationObserver watches
 // is done, with a ConversationEndedMessage holding the conversation:
 //
-//	events.On(&observer.Registry, eval.EventConversationEnded,
+//	event.On(&observer.Registry, eval.EventConversationEnded,
 //		func(ctx context.Context, m eval.ConversationEndedMessage) { … })
 const EventConversationEnded = "on_conversation_ended"
 
@@ -44,14 +44,14 @@ type ConversationEndedMessage struct {
 // calls made in other workers are not in it.
 //
 //	observer := eval.NewConversationObserver()
-//	events.On(&observer.Registry, eval.EventConversationEnded,
+//	event.On(&observer.Registry, eval.EventConversationEnded,
 //		func(_ context.Context, m eval.ConversationEndedMessage) {
 //			data, _ := json.MarshalIndent(m.Conversation, "", "  ")
 //			_ = os.WriteFile("call.conversation.json", data, 0o600)
 //		})
 //	worker := pipeline.NewWorker(p, pipeline.WorkerConfig{Observers: []pipeline.Observer{observer}})
 type ConversationObserver struct {
-	events.Registry
+	event.Registry
 
 	conversation *Conversation
 }

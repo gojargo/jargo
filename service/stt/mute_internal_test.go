@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // muteWatcher records whether an STTMuteFrame got past the service.
@@ -39,7 +39,7 @@ func runWatched(
 ) (task *pipeline.Worker, stop func()) {
 	t.Helper()
 	task = pipeline.NewWorker(p, pipeline.WorkerConfig{ReachedDownstreamFilter: pipeline.AnyFrame})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, observe)
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, observe)
 	done := make(chan error, 1)
 	go func() { done <- task.Run(context.Background()) }()
 	return task, func() {

@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/service/tts"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // reconnectingSynth streams on its own connection and loses it after the first
@@ -66,7 +66,7 @@ func TestReplacingTheConnectionMovesTheTurnToANewContext(t *testing.T) {
 	audio := 0
 	ended := make(chan struct{})
 	var once sync.Once
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		switch f.(type) {
 		case *frames.TTSAudioRawFrame:
 			mu.Lock()

@@ -7,11 +7,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/errclass"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/service/wsservice"
 	"github.com/gojargo/jargo/service/wsutil"
-	errs "github.com/gojargo/jargo/utils/errors"
 )
 
 // usableService is a processor holding a websocket whose dials succeed or fail
@@ -92,7 +92,7 @@ func TestReportedErrorsCarryTheException(t *testing.T) {
 	if !errors.Is(s.reported[0].Err, refusal) {
 		t.Errorf("reported error = %v, want the handshake refusal", s.reported[0].Err)
 	}
-	if s.reported[0].Category != errs.Authentication {
+	if s.reported[0].Category != errclass.Authentication {
 		t.Errorf("category = %q, want authentication", s.reported[0].Category)
 	}
 }
@@ -106,7 +106,7 @@ func TestAFailedAttemptAloneLeavesTheServiceUsable(t *testing.T) {
 	if len(s.reported) != 3 {
 		t.Fatalf("reported %d errors, want one per attempt and the give-up", len(s.reported))
 	}
-	if s.reported[0].Category != errs.Server {
+	if s.reported[0].Category != errclass.Server {
 		t.Errorf("category = %q, want server", s.reported[0].Category)
 	}
 	if s.permanent[0] {

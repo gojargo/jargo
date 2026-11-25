@@ -7,12 +7,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/processor/aggregators"
-	"github.com/gojargo/jargo/utils/events"
-	"github.com/gojargo/jargo/utils/notify"
+	"github.com/gojargo/jargo/processor/notify"
 )
 
 // collectGated runs procs as a pipeline over feed and returns every frame that
@@ -27,7 +27,7 @@ func collectGated(
 	task := pipeline.NewWorker(pipeline.New(procs...), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		got = append(got, f)
 		mu.Unlock()

@@ -11,13 +11,13 @@ import (
 	"sync"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/errclass"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/service/settings"
 	"github.com/gojargo/jargo/service/stt"
 	"github.com/gojargo/jargo/service/wsservice"
 	"github.com/gojargo/jargo/service/wsutil"
-	errs "github.com/gojargo/jargo/utils/errors"
 )
 
 // NewSTT builds a Soniox streaming STT service.
@@ -330,7 +330,7 @@ func (c *connector) reportError(ctx context.Context, code json.RawMessage, messa
 		return
 	}
 	var opts []processor.ErrorOption
-	if category := classifyErrorCode(code); category != errs.Unset {
+	if category := classifyErrorCode(code); category != errclass.Unset {
 		opts = append(opts, processor.WithErrorCategory(category))
 	}
 	c.svc.PushError(ctx, msg, nil, false, opts...)

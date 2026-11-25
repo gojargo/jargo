@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/gojargo/jargo/frames"
-	"github.com/gojargo/jargo/utils/images"
+	"github.com/gojargo/jargo/internal/imageenc"
 )
 
 // videoResetFrames is how many frames of drift live video tolerates before its
@@ -237,7 +237,7 @@ func (s *mediaSender) drawImage(ctx context.Context, image *frames.OutputImageRa
 	frame := image
 	width, height := s.out.params.VideoOutSize()
 	if image.Format != "" && (image.Width != width || image.Height != height) {
-		resized, err := images.Resize(image.Image, image.Width, image.Height, image.Format, width, height)
+		resized, err := imageenc.Resize(image.Image, image.Width, image.Height, image.Format, width, height)
 		if err != nil {
 			slog.Warn("sending an image the video output cannot resize as it is",
 				"processor", s.out.Name(), "frame", image.String(), "err", err)

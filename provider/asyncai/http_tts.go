@@ -14,12 +14,12 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/gojargo/jargo/errclass"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/service/settings"
 	"github.com/gojargo/jargo/service/tts"
-	errs "github.com/gojargo/jargo/utils/errors"
 )
 
 const (
@@ -182,7 +182,7 @@ func (s *httpSynthesizer) runTTS(ctx context.Context, text string, yield func(f 
 		if err := yield(frames.NewErrorFrame("Async API error: " + string(errorText))); err != nil {
 			return err
 		}
-		return errs.NewHTTPStatusError(resp.StatusCode,
+		return errclass.NewHTTPStatusError(resp.StatusCode,
 			fmt.Errorf("%w %d: %s", errHTTPStatus, resp.StatusCode, errorText))
 	}
 

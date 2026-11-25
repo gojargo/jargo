@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/gojargo/jargo/audio/vad"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/observers"
 	"github.com/gojargo/jargo/pipeline"
@@ -38,7 +39,6 @@ import (
 	"github.com/gojargo/jargo/transport"
 	"github.com/gojargo/jargo/transport/wsserver"
 	"github.com/gojargo/jargo/transport/wsserver/evalws"
-	"github.com/gojargo/jargo/utils/events"
 	"github.com/gojargo/jargo/workers"
 )
 
@@ -226,12 +226,12 @@ func runBot(ctx context.Context, t transport.Transport, args runner.Arguments) e
 	r := workers.NewRunner(workers.RunnerConfig{HandleInterrupt: &handleSigint})
 	r.AddWorkers(ctx, worker)
 
-	events.On(t.Events(), transport.EventClientConnected, func(context.Context, any) {
+	event.On(t.Events(), transport.EventClientConnected, func(context.Context, any) {
 		slog.Info("Client connected")
 		worker.QueueFrames([]frames.Frame{frames.NewLLMRunFrame()})
 	})
 
-	events.On(t.Events(), transport.EventClientDisconnected, func(ctx context.Context, _ any) {
+	event.On(t.Events(), transport.EventClientDisconnected, func(ctx context.Context, _ any) {
 		slog.Info("Client disconnected")
 		r.Cancel(ctx, "client disconnected")
 	})
@@ -239,17 +239,17 @@ func runBot(ctx context.Context, t transport.Transport, args runner.Arguments) e
 	// In realtime mode the user transcript isn't final when the user's turn
 	// stops, so the turn-stopped event carries no text; the finalized text
 	// arrives with the user turn message being added.
-	events.On(agg.User().Events(), aggregators.EventUserTurnStopped,
+	event.On(agg.User().Events(), aggregators.EventUserTurnStopped,
 		func(_ context.Context, m aggregators.UserTurnStopped) {
 			slog.Info("User turn stopped at " + m.Timestamp)
 		})
 	// In realtime mode this is the canonical "user said X" event, decoupled
 	// from the turn stopping.
-	events.On(agg.User().Events(), aggregators.EventUserTurnMessageAdded,
+	event.On(agg.User().Events(), aggregators.EventUserTurnMessageAdded,
 		func(_ context.Context, m aggregators.UserTurnMessageAdded) {
 			slog.Info("Transcript: " + stamp(m.Timestamp) + "user: " + m.Content)
 		})
-	events.On(agg.Assistant().Events(), aggregators.EventAssistantTurnStopped,
+	event.On(agg.Assistant().Events(), aggregators.EventAssistantTurnStopped,
 		func(_ context.Context, m aggregators.AssistantTurnStopped) {
 			slog.Info("Transcript: " + stamp(m.Timestamp) + "assistant: " + m.Content)
 		})

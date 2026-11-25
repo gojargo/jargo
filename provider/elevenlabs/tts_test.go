@@ -16,7 +16,7 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/service/tts"
-	uctx "github.com/gojargo/jargo/utils/context"
+	"github.com/gojargo/jargo/text/align"
 )
 
 // spoken is one synthesis request as the endpoint received it.
@@ -94,7 +94,7 @@ func ttsCfg(srv *httptest.Server) Config {
 // timed is what one synthesis produced: the audio and the word timing.
 type timed struct {
 	pcm   []byte
-	words []uctx.WordTiming
+	words []align.WordTiming
 	opts  tts.WordTimingOptions
 }
 
@@ -112,7 +112,7 @@ func speak(t *testing.T, s *synthesizer, text string) timed {
 			out.pcm = append(out.pcm, audio.Audio...)
 			return nil
 		},
-		func(words []uctx.WordTiming, opts tts.WordTimingOptions) error {
+		func(words []align.WordTiming, opts tts.WordTimingOptions) error {
 			out.words = append(out.words, words...)
 			out.opts = opts
 			return nil

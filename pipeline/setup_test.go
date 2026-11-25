@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 //nolint:gochecknoglobals // sentinel errors for the tests below
@@ -198,7 +198,7 @@ func TestSetupNeverFinishes(t *testing.T) {
 	})
 
 	var timeouts atomic.Int64
-	events.OnSignal(&task.Registry, pipeline.EventSetupTimeout, func(context.Context) {
+	event.OnSignal(&task.Registry, pipeline.EventSetupTimeout, func(context.Context) {
 		timeouts.Add(1)
 	})
 
@@ -273,7 +273,7 @@ func TestStartFrameNeverReachesSink(t *testing.T) {
 	})
 
 	timedOut := make(chan frames.Frame, 4)
-	events.On(&task.Registry, pipeline.EventPipelineTimeout, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventPipelineTimeout, func(_ context.Context, f frames.Frame) {
 		timedOut <- f
 	})
 

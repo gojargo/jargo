@@ -13,13 +13,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor/aggregators"
 	"github.com/gojargo/jargo/service/tts"
-	uctx "github.com/gojargo/jargo/utils/context"
-	"github.com/gojargo/jargo/utils/events"
-	ttstext "github.com/gojargo/jargo/utils/text"
+	ttstext "github.com/gojargo/jargo/text"
+	"github.com/gojargo/jargo/text/align"
 )
 
 // tokenStreamingSynth is a provider streaming tokens over its own connection:
@@ -29,7 +29,7 @@ import (
 type tokenStreamingSynth struct {
 	mu        sync.Mutex
 	host      tts.AudioContextHost
-	wordTimes [][]uctx.WordTiming
+	wordTimes [][]align.WordTiming
 	wg        sync.WaitGroup
 	// last is closed once the delivery queued last is done, so deliveries land
 	// in the order they were queued, as on a single receive loop.
@@ -66,12 +66,12 @@ func (s *tokenStreamingSynth) RunTTS(context.Context, string, string, func(frame
 func (s *tokenStreamingSynth) RunTTSTimed(
 	_ context.Context, _, contextID string,
 	_ func(frames.Frame) error,
-	_ func([]uctx.WordTiming, tts.WordTimingOptions) error,
+	_ func([]align.WordTiming, tts.WordTimingOptions) error,
 ) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	host := s.host
-	var words []uctx.WordTiming
+	var words []align.WordTiming
 	if len(s.wordTimes) > 0 {
 		words, s.wordTimes = s.wordTimes[0], s.wordTimes[1:]
 	}
@@ -108,7 +108,7 @@ func runTokenMode(t *testing.T, synth *tokenStreamingSynth, send ...frames.Frame
 	task := pipeline.NewWorker(pipeline.New(base), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		got = append(got, f)
 		mu.Unlock()
@@ -145,7 +145,7 @@ func spokenWords(down []frames.Frame) []string {
 // streaming tokens. It is a sentence of its own with no following token to
 // confirm its boundary, so without being finalized its words are never emitted.
 func TestIsolatedSpeakFrameFinalizesInTokenMode(t *testing.T) {
-	synth := &tokenStreamingSynth{wordTimes: [][]uctx.WordTiming{
+	synth := &tokenStreamingSynth{wordTimes: [][]align.WordTiming{
 		{{Word: "hello", Offset: 0}, {Word: "world", Offset: 0.2}},
 	}}
 	speak := frames.NewTTSSpeakFrame("hello world")
@@ -163,7 +163,7 @@ func TestIsolatedSpeakFrameFinalizesInTokenMode(t *testing.T) {
 // frames grow across all of it, and its words reach the conversation even
 // though the response ends with no token after the sentence's last one.
 func TestTokenModeTracksTheWholeSentence(t *testing.T) {
-	synth := &tokenStreamingSynth{wordTimes: [][]uctx.WordTiming{
+	synth := &tokenStreamingSynth{wordTimes: [][]align.WordTiming{
 		{{Word: "Hi", Offset: 0}},
 		{{Word: "there.", Offset: 0.2}},
 	}}
@@ -211,7 +211,7 @@ func TestTokenModeTracksTheWholeSentence(t *testing.T) {
 // last sentence has no terminal punctuation. Nothing confirms its boundary, so
 // it is the end of the response that has to promote it.
 func TestTokenModeSpeaksAnUnpunctuatedTrailingSentence(t *testing.T) {
-	synth := &tokenStreamingSynth{wordTimes: [][]uctx.WordTiming{
+	synth := &tokenStreamingSynth{wordTimes: [][]align.WordTiming{
 		{{Word: "Hello", Offset: 0}, {Word: "there.", Offset: 0.1}},
 		{{Word: "Sure", Offset: 0}},
 		{{Word: "thing", Offset: 0}},
@@ -256,7 +256,7 @@ func TestTokenModeWithoutWordTimestampsRecordsEachSentenceOnce(t *testing.T) {
 // is announced once, by the sentence the tokens are gathered into, and the
 // spoken text names that announcement.
 func TestTokenModeAnnouncesEachUnitOnce(t *testing.T) {
-	synth := &tokenStreamingSynth{wordTimes: [][]uctx.WordTiming{
+	synth := &tokenStreamingSynth{wordTimes: [][]align.WordTiming{
 		{{Word: "One", Offset: 0}, {Word: "moment,", Offset: 0.1}, {Word: "please.", Offset: 0.2}},
 	}}
 	down := runTokenMode(t, synth, frames.NewTTSSpeakFrame("One moment, please."))
@@ -286,7 +286,7 @@ func TestTokenModeAnnouncesEachUnitOnce(t *testing.T) {
 // TestTokenModeAnnouncesNoTokenOnItsOwn checks streamed tokens are announced as
 // the sentence they make, never one by one.
 func TestTokenModeAnnouncesNoTokenOnItsOwn(t *testing.T) {
-	synth := &tokenStreamingSynth{wordTimes: [][]uctx.WordTiming{
+	synth := &tokenStreamingSynth{wordTimes: [][]align.WordTiming{
 		{{Word: "Hi", Offset: 0}},
 		{{Word: "there.", Offset: 0.2}},
 	}}
@@ -308,7 +308,7 @@ func TestTokenModeAnnouncesNoTokenOnItsOwn(t *testing.T) {
 // progress frame, so it rides the transport's clock queue ahead of it rather
 // than waiting behind another context's audio.
 func TestSegmentAnnouncementPrecedesItsProgress(t *testing.T) {
-	synth := &tokenStreamingSynth{wordTimes: [][]uctx.WordTiming{
+	synth := &tokenStreamingSynth{wordTimes: [][]align.WordTiming{
 		{{Word: "Comment", Offset: 0}, {Word: "ca", Offset: 0.1}, {Word: "va", Offset: 0.2}},
 		{{Word: "Bom", Offset: 0}, {Word: "jour", Offset: 0.1}},
 	}}
@@ -317,7 +317,7 @@ func TestSegmentAnnouncementPrecedesItsProgress(t *testing.T) {
 	task := pipeline.NewWorker(pipeline.New(tts.New("TimedTTS", synth)), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		got = append(got, f)
 		mu.Unlock()

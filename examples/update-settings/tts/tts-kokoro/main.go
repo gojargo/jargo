@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/gojargo/jargo/audio/vad"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor/aggregators"
@@ -29,7 +30,6 @@ import (
 	"github.com/gojargo/jargo/transport"
 	"github.com/gojargo/jargo/transport/wsserver"
 	"github.com/gojargo/jargo/transport/wsserver/evalws"
-	"github.com/gojargo/jargo/utils/events"
 	"github.com/gojargo/jargo/workers"
 )
 
@@ -107,7 +107,7 @@ func runBot(ctx context.Context, t transport.Transport, args runner.Arguments) e
 	r := workers.NewRunner(workers.RunnerConfig{HandleInterrupt: &handleSigint})
 	r.AddWorkers(ctx, worker)
 
-	events.On(t.Events(), transport.EventClientConnected, func(context.Context, any) {
+	event.On(t.Events(), transport.EventClientConnected, func(context.Context, any) {
 		slog.Info("Client connected")
 		// Kick off the conversation.
 		convo.AddMessage(frames.Message{Role: frames.RoleDeveloper, Text: "Please introduce yourself to the user."})
@@ -124,7 +124,7 @@ func runBot(ctx context.Context, t transport.Transport, args runner.Arguments) e
 		}()
 	})
 
-	events.On(t.Events(), transport.EventClientDisconnected, func(ctx context.Context, _ any) {
+	event.On(t.Events(), transport.EventClientDisconnected, func(ctx context.Context, _ any) {
 		slog.Info("Client disconnected")
 		r.Cancel(ctx, "client disconnected")
 	})

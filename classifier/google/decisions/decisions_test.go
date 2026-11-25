@@ -23,8 +23,8 @@ import (
 	"time"
 
 	"github.com/gojargo/jargo/classifier"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // usageReply is the usage a stand-in reply reports.
@@ -958,7 +958,7 @@ func TestEveryCallReportsItsTimeAndTokens(t *testing.T) {
 	client, _ := stub(t, reply(noul(0.9)))
 	c := newDecisions(t, client, "voicemail")
 	got := make(chan []frames.MetricsData, 1)
-	events.On(c.Events(), classifier.EventMetrics, func(_ context.Context, data []frames.MetricsData) {
+	event.On(c.Events(), classifier.EventMetrics, func(_ context.Context, data []frames.MetricsData) {
 		got <- data
 	})
 	if _, err := c.YesNo(t.Context(), "hello", yesNo("a greeting?")); err != nil {

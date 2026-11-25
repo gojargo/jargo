@@ -13,12 +13,12 @@ import (
 	"time"
 
 	"github.com/gojargo/jargo/audio"
+	"github.com/gojargo/jargo/errclass"
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/service/settings"
 	"github.com/gojargo/jargo/service/stt"
-	errs "github.com/gojargo/jargo/utils/errors"
 )
 
 const (
@@ -325,37 +325,37 @@ func (c *sttConnector) UpdateSettings(context.Context, settings.Changed) (bool, 
 }
 
 // ClassifyError says what a Rime failure means.
-func (c *sttConnector) ClassifyError(err error) errs.Category {
+func (c *sttConnector) ClassifyError(err error) errclass.Category {
 	if errors.Is(err, errSTTSettingsRejected) {
-		return errs.Application
+		return errclass.Application
 	}
 	if re := asRimeError(err); re != nil {
 		return errorCategory(re)
 	}
-	return errs.Unset
+	return errclass.Unset
 }
 
 // errorCategory is the category of a Rime failure.
-func errorCategory(err *rimeError) errs.Category {
+func errorCategory(err *rimeError) errclass.Category {
 	switch err.kind {
 	case kindAuthentication:
-		return errs.Authentication
+		return errclass.Authentication
 	case kindPermission:
-		return errs.Authorization
+		return errclass.Authorization
 	case kindBilling:
 		// Credits can be added, so the service stays usable and recovers once
 		// they are.
-		return errs.Quota
+		return errclass.Quota
 	case kindTimeout, kindUnavailable:
-		return errs.Connectivity
+		return errclass.Connectivity
 	case kindInput:
-		return errs.InvalidRequest
+		return errclass.InvalidRequest
 	case kindAudioFormat:
-		return errs.Application
+		return errclass.Application
 	case kindStream, kindResourceLimit, kindCancelled:
-		return errs.Unknown
+		return errclass.Unknown
 	default:
-		return errs.Unknown
+		return errclass.Unknown
 	}
 }
 
@@ -408,7 +408,7 @@ func (c *sttConnector) reportError(ctx context.Context, err error) {
 		slog.Error(msg, "err", err)
 		return
 	}
-	category := errs.Unknown
+	category := errclass.Unknown
 	if re := asRimeError(err); re != nil {
 		category = errorCategory(re)
 	}

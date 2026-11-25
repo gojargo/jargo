@@ -8,13 +8,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/service/stt"
 	"github.com/gojargo/jargo/service/tts"
 	"github.com/gojargo/jargo/transport/wsserver"
 	"github.com/gojargo/jargo/transport/wsserver/evalws"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // Bot builds the bot's pipeline task around the harness-provided transport
@@ -183,7 +183,7 @@ func runAgainst(ctx context.Context, scenario *Scenario, url string, opts Option
 		return Result{ScenarioName: scenario.Name}, err
 	}
 	if opts.OnProgress != nil {
-		events.On(&session.Registry, EventProgress, func(_ context.Context, p Progress) { opts.OnProgress(p) })
+		event.On(&session.Registry, EventProgress, func(_ context.Context, p Progress) { opts.OnProgress(p) })
 	}
 	return session.Run(ctx)
 }

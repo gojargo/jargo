@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/errclass"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/providertest"
 	"github.com/gojargo/jargo/language"
@@ -24,7 +25,6 @@ import (
 	"github.com/gojargo/jargo/service/tts"
 	"github.com/gojargo/jargo/service/wsservice"
 	"github.com/gojargo/jargo/service/wsutil"
-	errs "github.com/gojargo/jargo/utils/errors"
 )
 
 // TestTTSConfigValidate pins which fields the service requires.
@@ -408,7 +408,7 @@ func TestTTSRefusalLosesTheTurnNotTheService(t *testing.T) {
 			}
 			errors := errorFrames(up)
 			if len(errors) == 0 || !strings.Contains(errors[0].Error, "rate_limit_exceeded") ||
-				!strings.Contains(errors[0].Error, "req-123") || errors[0].Category != errs.RateLimit {
+				!strings.Contains(errors[0].Error, "req-123") || errors[0].Category != errclass.RateLimit {
 				t.Fatalf("errors = %v", errors)
 			}
 			if !svc.Usable() {
@@ -807,7 +807,7 @@ func TestTTSHandshakeRefusalReportsReason(t *testing.T) {
 
 	errors := errorFrames(up)
 	if len(errors) == 0 || !strings.Contains(errors[0].Error, "Voice not found") ||
-		!strings.Contains(errors[0].Error, "req-7") || errors[0].Category != errs.InvalidRequest {
+		!strings.Contains(errors[0].Error, "req-7") || errors[0].Category != errclass.InvalidRequest {
 		t.Fatalf("errors = %v", errors)
 	}
 	if svc.Usable() {

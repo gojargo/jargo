@@ -11,12 +11,12 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor/turns"
 	"github.com/gojargo/jargo/service/settings"
 	"github.com/gojargo/jargo/service/stt"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // Tests for turn detection from Gradium's end-pointing signal, and for the
@@ -276,7 +276,7 @@ func TestAVADStopTranscriptIsFinalizedByItsFlushAck(t *testing.T) {
 
 	transcripts := make(chan *frames.TranscriptionFrame, 4)
 	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{ReachedDownstreamFilter: pipeline.AnyFrame})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if tf, ok := f.(*frames.TranscriptionFrame); ok {
 			transcripts <- tf
 		}

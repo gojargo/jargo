@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/gojargo/jargo/eval"
-	"github.com/gojargo/jargo/utils/events"
+	"github.com/gojargo/jargo/event"
 	"github.com/spf13/cobra"
 )
 
@@ -165,7 +165,7 @@ func runSuite(ctx context.Context, cmd *cobra.Command, manifestPath string, f su
 
 	grouped := slices.ContainsFunc(runs, func(r *eval.SuiteRun) bool { return r.Attempts > 1 })
 	var mu sync.Mutex
-	events.On(&suite.Registry, eval.EventUpdate, func(_ context.Context, run *eval.SuiteRun) {
+	event.On(&suite.Registry, eval.EventUpdate, func(_ context.Context, run *eval.SuiteRun) {
 		mu.Lock()
 		defer mu.Unlock()
 		d.evalLine(run, grouped)

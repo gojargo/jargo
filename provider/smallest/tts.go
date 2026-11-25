@@ -17,7 +17,7 @@ import (
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/service/tts"
 	"github.com/gojargo/jargo/service/wsutil"
-	uctx "github.com/gojargo/jargo/utils/context"
+	"github.com/gojargo/jargo/text/align"
 )
 
 // keepaliveInterval is how often an idle connection is sent a blank text, so
@@ -168,7 +168,7 @@ func (s *timedSynthesizer) RunTTSTimed(
 	ctx context.Context,
 	text, contextID string,
 	yield func(f frames.Frame) error,
-	_ func(words []uctx.WordTiming, opts tts.WordTimingOptions) error,
+	_ func(words []align.WordTiming, opts tts.WordTimingOptions) error,
 ) error {
 	return s.RunTTS(ctx, text, contextID, yield)
 }
@@ -480,12 +480,12 @@ func (s *synthesizer) handleWordTimestamp(m wsMessage) {
 	}
 	// Only the word and its start are timed; its end sizes the offset of the
 	// next request.
-	word := uctx.WordTiming{Word: *m.Data.Word, Offset: *m.Data.Start + s.cumulativeTime}
+	word := align.WordTiming{Word: *m.Data.Word, Offset: *m.Data.Start + s.cumulativeTime}
 	if m.Data.End != nil {
 		s.requestEndTime = max(s.requestEndTime, *m.Data.End)
 	}
 	s.wtMu.Unlock()
-	s.host.AddWordTimestamps(s.svc.ActiveAudioContextID(), []uctx.WordTiming{word}, tts.WordTimingOptions{})
+	s.host.AddWordTimestamps(s.svc.ActiveAudioContextID(), []align.WordTiming{word}, tts.WordTimingOptions{})
 }
 
 // advanceWordTimestampRequest moves the turn's offset on when the words cross

@@ -7,10 +7,10 @@ import (
 	"time"
 
 	"github.com/gojargo/jargo/audio/opus"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/transport"
 	"github.com/gojargo/jargo/transport/rtc"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // eventPair connects a test client through a request handler and runs a
@@ -31,10 +31,10 @@ func eventPair(t *testing.T) (*testClient, chan *rtc.Connection, chan *rtc.Conne
 		params.AudioInSampleRate = opus.SampleRate
 		params.AudioOutSampleRate = opus.SampleRate
 		tr := rtc.NewTransport(c, params)
-		events.On(tr.Events(), transport.EventClientConnected, func(_ context.Context, c *rtc.Connection) {
+		event.On(tr.Events(), transport.EventClientConnected, func(_ context.Context, c *rtc.Connection) {
 			connected <- c
 		})
-		events.On(tr.Events(), transport.EventClientDisconnected, func(_ context.Context, c *rtc.Connection) {
+		event.On(tr.Events(), transport.EventClientDisconnected, func(_ context.Context, c *rtc.Connection) {
 			disconnected <- c
 		})
 		tr.Events().Add(transport.EventAppMessage, func(_ context.Context, _ any, args ...any) {

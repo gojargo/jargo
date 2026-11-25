@@ -6,11 +6,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/service/stt"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // collectSTTUsage runs svc under a task, feeds it a turn of audio, and returns
@@ -27,7 +27,7 @@ func collectSTTUsage(t *testing.T, svc processor.Processor, usageMetrics bool) [
 			EnableUsageMetrics: usageMetrics,
 		},
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		switch fr := f.(type) {
 		case *frames.MetricsFrame:
 			mu.Lock()

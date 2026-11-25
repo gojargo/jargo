@@ -11,11 +11,11 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/service/llm"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // Gemini takes a tool's intermediate results on the tool-response channel
@@ -125,7 +125,7 @@ func runningLive(t *testing.T, s *Service) *pipeline.Worker {
 	t.Helper()
 	w := pipeline.NewWorker(pipeline.New(s), pipeline.WorkerConfig{})
 	started := make(chan struct{})
-	events.On(&w.Registry, pipeline.EventPipelineStarted, func(context.Context, *frames.StartFrame) { close(started) })
+	event.On(&w.Registry, pipeline.EventPipelineStarted, func(context.Context, *frames.StartFrame) { close(started) })
 	done := make(chan error, 1)
 	go func() { done <- w.Run(context.Background()) }()
 	t.Cleanup(func() {

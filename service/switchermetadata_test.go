@@ -6,11 +6,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/service"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // describer is a minimal service: it says nothing and does nothing but describe
@@ -57,7 +57,7 @@ func TestASwitchedServiceDescribesItself(t *testing.T) {
 	task := pipeline.NewWorker(pipeline.New(sw), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if mf, ok := f.(frames.ServiceMetadata); ok {
 			mu.Lock()
 			seen = append(seen, mf.Service())

@@ -12,10 +12,10 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/errclass"
 	"github.com/gojargo/jargo/internal/providertest"
 	"github.com/gojargo/jargo/processor/turns"
 	"github.com/gojargo/jargo/service/stt"
-	errs "github.com/gojargo/jargo/utils/errors"
 )
 
 // TestTurnsSTTConfigValidate pins which fields the provider requires.
@@ -189,8 +189,8 @@ func TestTurnsSTTServerError(t *testing.T) {
 	if !strings.Contains(err.Error(), "model_not_found") || !strings.Contains(err.Error(), "Could not resolve model.") {
 		t.Errorf("error = %v, want it to carry the server's code and message", err)
 	}
-	if got := errs.ClassifyError(err); got != errs.InvalidRequest {
-		t.Errorf("category = %v, want %v from the status the server gave", got, errs.InvalidRequest)
+	if got := errclass.Classify(err); got != errclass.InvalidRequest {
+		t.Errorf("category = %v, want %v from the status the server gave", got, errclass.InvalidRequest)
 	}
 
 	endpoint, _ = turnsServer(t, []map[string]any{

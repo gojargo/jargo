@@ -20,8 +20,8 @@ import (
 	llmclassifier "github.com/gojargo/jargo/classifier/llm"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/ordered"
+	"github.com/gojargo/jargo/internal/security"
 	"github.com/gojargo/jargo/service/llm"
-	"github.com/gojargo/jargo/utils/security"
 )
 
 // fenced matches the markdown code fences a judge model wraps its JSON in when

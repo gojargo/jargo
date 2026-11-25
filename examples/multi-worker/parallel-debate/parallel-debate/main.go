@@ -31,6 +31,7 @@ import (
 
 	"github.com/gojargo/jargo/audio/vad"
 	"github.com/gojargo/jargo/bus"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/pipeline/jobcontext"
@@ -43,7 +44,6 @@ import (
 	"github.com/gojargo/jargo/transport"
 	"github.com/gojargo/jargo/transport/wsserver"
 	"github.com/gojargo/jargo/transport/wsserver/evalws"
-	"github.com/gojargo/jargo/utils/events"
 	"github.com/gojargo/jargo/workers"
 	"github.com/gojargo/jargo/workers/llmworker"
 )
@@ -103,7 +103,7 @@ func newDebateWorker(role string) *debateWorker {
 	// The base reaches OnJobRequest through the worker it is bound to.
 	d.Bind(d)
 
-	events.On(d.AssistantAggregator().Events(), aggregators.EventAssistantTurnStopped,
+	event.On(d.AssistantAggregator().Events(), aggregators.EventAssistantTurnStopped,
 		func(ctx context.Context, message aggregators.AssistantTurnStopped) {
 			text := message.Content
 			slog.Info(fmt.Sprintf("Worker '%s': completed (%d chars)", d.Name(), len(text)))
@@ -248,7 +248,7 @@ func runBot(ctx context.Context, t transport.Transport, args runner.Arguments) e
 		worker,
 	)
 
-	events.On(t.Events(), transport.EventClientConnected, func(context.Context, any) {
+	event.On(t.Events(), transport.EventClientConnected, func(context.Context, any) {
 		slog.Info("Client connected")
 		convo.AddMessage(frames.Message{
 			Role: frames.RoleDeveloper,
@@ -258,7 +258,7 @@ func runBot(ctx context.Context, t transport.Transport, args runner.Arguments) e
 		worker.QueueFrames([]frames.Frame{frames.NewLLMRunFrame()})
 	})
 
-	events.On(t.Events(), transport.EventClientDisconnected, func(ctx context.Context, _ any) {
+	event.On(t.Events(), transport.EventClientDisconnected, func(ctx context.Context, _ any) {
 		slog.Info("Client disconnected")
 		r.Cancel(ctx, "client disconnected")
 	})

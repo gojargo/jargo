@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // usageReports runs one generation through a service streaming body, with usage
@@ -32,7 +32,7 @@ func usageReports(t *testing.T, body string) []frames.LLMTokenUsage {
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 		Params:                  pipeline.Params{EnableUsageMetrics: true, SendInitialEmptyMetrics: &noInitial},
 	})
-	events.On(&worker.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&worker.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		switch f := f.(type) {
 		case *frames.MetricsFrame:
 			for _, d := range f.Data {

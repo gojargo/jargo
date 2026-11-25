@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor/rtvi"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // handled is what an RTVI processor did with the messages a client sent: what
@@ -49,7 +49,7 @@ func clientSends(t *testing.T, raw ...string) handled {
 	var mu sync.Mutex
 	h := handled{answers: map[string][]string{}}
 	task := pipeline.NewWorker(pipeline.New(proc), pipeline.WorkerConfig{ReachedDownstreamFilter: pipeline.AnyFrame})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		defer mu.Unlock()
 		switch fr := f.(type) {

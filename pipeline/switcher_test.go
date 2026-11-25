@@ -8,11 +8,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/errclass"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
-	errs "github.com/gojargo/jargo/utils/errors"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // errBoom is the non-fatal error a tagSvc raises to trigger failover.
@@ -30,7 +30,7 @@ type tagSvc struct {
 	tag         string
 	failOn      string
 	recoverable bool
-	category    errs.Category
+	category    errclass.Category
 }
 
 func newTagSvc(tag, failOn string) *tagSvc {
@@ -58,7 +58,7 @@ func (s *tagSvc) ProcessFrame(ctx context.Context, f frames.Frame, dir processor
 // given, and whether the service can carry on from it.
 func (s *tagSvc) errorOptions() []processor.ErrorOption {
 	var opts []processor.ErrorOption
-	if s.category != errs.Unset {
+	if s.category != errclass.Unset {
 		opts = append(opts, processor.WithErrorCategory(s.category))
 	}
 	if !s.recoverable {
@@ -75,7 +75,7 @@ func runCollector(t *testing.T, proc processor.Processor) (*pipeline.Worker, <-c
 	task := pipeline.NewWorker(pipeline.New(proc), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if tf, ok := f.(*frames.TextFrame); ok {
 			select {
 			case out <- tf.Text:
@@ -409,7 +409,7 @@ func collectMetadata(t *testing.T, sw *pipeline.ServiceSwitcher) (*pipeline.Work
 	task := pipeline.NewWorker(pipeline.New(sw), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if mf, ok := f.(frames.ServiceMetadata); ok {
 			mu.Lock()
 			seen = append(seen, mf.Service())
@@ -606,8 +606,8 @@ func TestMetadataFromOutsideReachesEveryService(t *testing.T) {
 					}
 				}
 			}
-			events.On(&task.Registry, pipeline.EventFrameReachedDownstream, count(&down))
-			events.On(&task.Registry, pipeline.EventFrameReachedUpstream, count(&up))
+			event.On(&task.Registry, pipeline.EventFrameReachedDownstream, count(&down))
+			event.On(&task.Registry, pipeline.EventFrameReachedUpstream, count(&up))
 			done := make(chan struct{})
 			go func() { _ = task.Run(context.Background()); close(done) }()
 			defer func() { task.Cancel(t.Context(), ""); <-done }()

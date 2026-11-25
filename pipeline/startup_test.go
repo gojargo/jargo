@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // Each processor holds the StartFrame only for its own setup.
@@ -134,7 +134,7 @@ func runStartupToEnd(t *testing.T, w *pipeline.Worker) {
 func onStarted(w *pipeline.Worker, t0 time.Time) func() []time.Duration {
 	var mu sync.Mutex
 	var at []time.Duration
-	events.On(&w.Registry, pipeline.EventPipelineStarted, func(context.Context, *frames.StartFrame) {
+	event.On(&w.Registry, pipeline.EventPipelineStarted, func(context.Context, *frames.StartFrame) {
 		mu.Lock()
 		at = append(at, time.Since(t0))
 		mu.Unlock()
@@ -264,7 +264,7 @@ func TestStartTimeoutCountsFromSetupDone(t *testing.T) {
 func onTimeout(w *pipeline.Worker) func() []frames.Frame {
 	var mu sync.Mutex
 	var got []frames.Frame
-	events.On(&w.Registry, pipeline.EventPipelineTimeout, func(_ context.Context, f frames.Frame) {
+	event.On(&w.Registry, pipeline.EventPipelineTimeout, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		got = append(got, f)
 		mu.Unlock()
@@ -344,11 +344,11 @@ func TestSetupTimeoutNeverStartsThePipeline(t *testing.T) {
 		seen = append(seen, name)
 		mu.Unlock()
 	}
-	events.OnSignal(&w.Registry, pipeline.EventSetupTimeout, func(context.Context) { record("setup_timeout") })
-	events.On(&w.Registry, pipeline.EventPipelineStarted, func(context.Context, *frames.StartFrame) {
+	event.OnSignal(&w.Registry, pipeline.EventSetupTimeout, func(context.Context) { record("setup_timeout") })
+	event.On(&w.Registry, pipeline.EventPipelineStarted, func(context.Context, *frames.StartFrame) {
 		record("pipeline_started")
 	})
-	events.On(&w.Registry, pipeline.EventPipelineTimeout, func(context.Context, frames.Frame) {
+	event.On(&w.Registry, pipeline.EventPipelineTimeout, func(context.Context, frames.Frame) {
 		record("pipeline_timeout")
 	})
 
@@ -413,7 +413,7 @@ func TestIdleTimeoutCountsFromStart(t *testing.T) {
 	})
 	var mu sync.Mutex
 	var idleAt []time.Duration
-	events.OnSignal(&w.Registry, pipeline.EventIdleTimeout, func(context.Context) {
+	event.OnSignal(&w.Registry, pipeline.EventIdleTimeout, func(context.Context) {
 		mu.Lock()
 		idleAt = append(idleAt, time.Since(t0))
 		mu.Unlock()

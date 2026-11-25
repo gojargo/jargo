@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/service/stt"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // slowTranscriber takes delay over each segment and names the transcript after
@@ -56,7 +56,7 @@ func runSegments(t *testing.T, svc *stt.SegmentService, fs []frames.Frame) []str
 	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		defer mu.Unlock()
 		switch fr := f.(type) {
@@ -194,7 +194,7 @@ func finalizedOf(t *testing.T, svc *stt.SegmentService, feed func(*pipeline.Work
 	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if tf, ok := f.(*frames.TranscriptionFrame); ok {
 			mu.Lock()
 			seen = append(seen, tf.Finalized)

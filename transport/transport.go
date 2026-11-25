@@ -15,9 +15,9 @@ import (
 	"time"
 
 	"github.com/gojargo/jargo/audio"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // The events a transport raises about its clients.
@@ -309,7 +309,7 @@ type Transport interface {
 	Output() processor.Processor
 	// Events returns the registry of the events the transport raises, such as
 	// EventClientConnected and EventClientDisconnected.
-	Events() *events.Registry
+	Events() *event.Registry
 	// GetClientID returns the id of a client, as passed to
 	// EventClientConnected. It is the participant id CaptureParticipantVideo
 	// and image requests take. A transport with client events implements it;

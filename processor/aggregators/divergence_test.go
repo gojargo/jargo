@@ -5,10 +5,10 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor/aggregators"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // Tests for what does and does not become part of the user's turn, and for the
@@ -149,7 +149,7 @@ func TestAssistantRunsTheModelOnRequest(t *testing.T) {
 	task := pipeline.NewWorker(pipeline.New(pair.Assistant()), pipeline.WorkerConfig{
 		ReachedUpstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
 		select {
 		case seen <- f:
 		default:
@@ -184,7 +184,7 @@ func TestAssistantConsumesTheRunRequest(t *testing.T) {
 	task := pipeline.NewWorker(pipeline.New(pair.Assistant()), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		select {
 		case seen <- f:
 		default:

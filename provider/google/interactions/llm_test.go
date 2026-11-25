@@ -15,11 +15,11 @@ import (
 	"testing"
 	"time"
 
+	jevent "github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/providertest"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/service/llm"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 //nolint:gochecknoglobals // test fixtures
@@ -105,7 +105,7 @@ type fakeAPI struct {
 }
 
 // reply is one response of the fake API: a status and a body, or a stream that
-// stalls after its events.
+// stalls after its jevent.
 type reply struct {
 	status int
 	body   string
@@ -194,7 +194,7 @@ func runContext(
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 		ReachedUpstreamFilter:   pipeline.AnyFrame,
 	})
-	events.On(&worker.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	jevent.On(&worker.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		switch f.(type) {
 		case *frames.StartFrame, *frames.EndFrame:
 			return
@@ -205,7 +205,7 @@ func runContext(
 		down = append(down, f)
 		mu.Unlock()
 	})
-	events.On(&worker.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
+	jevent.On(&worker.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		up = append(up, f)
 		mu.Unlock()

@@ -25,8 +25,8 @@ import (
 	"github.com/gojargo/jargo/service/tts"
 	"github.com/gojargo/jargo/service/wsservice"
 	"github.com/gojargo/jargo/service/wsutil"
-	uctx "github.com/gojargo/jargo/utils/context"
-	ttstext "github.com/gojargo/jargo/utils/text"
+	ttstext "github.com/gojargo/jargo/text"
+	"github.com/gojargo/jargo/text/align"
 	"github.com/google/uuid"
 )
 
@@ -443,7 +443,7 @@ type timestampInfo struct {
 // report, each offset by the generations before it so a turn's timestamps keep
 // increasing, and records where the generation's last word ends. A pause tag is
 // taken out of the word it is reported as.
-func (s *realtimeSynthesizer) calculateWordTimes(info *timestampInfo) []uctx.WordTiming {
+func (s *realtimeSynthesizer) calculateWordTimes(info *timestampInfo) []align.WordTiming {
 	alignment := info.WordAlignment
 	words, starts, ends := alignment.Words, alignment.WordStartTimeSeconds, alignment.WordEndTimeSeconds
 	if len(words) == 0 || len(starts) == 0 || len(words) != len(starts) {
@@ -451,9 +451,9 @@ func (s *realtimeSynthesizer) calculateWordTimes(info *timestampInfo) []uctx.Wor
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := make([]uctx.WordTiming, 0, len(words))
+	out := make([]align.WordTiming, 0, len(words))
 	for i, word := range words {
-		out = append(out, uctx.WordTiming{Word: breakTag.ReplaceAllString(word, ""), Offset: s.cumulativeTime + starts[i]})
+		out = append(out, align.WordTiming{Word: breakTag.ReplaceAllString(word, ""), Offset: s.cumulativeTime + starts[i]})
 	}
 	if len(ends) > 0 {
 		s.generationEndTime = s.cumulativeTime + ends[len(ends)-1]
@@ -869,7 +869,7 @@ func (s *realtimeSynthesizer) RunTTSTimed(
 	ctx context.Context,
 	text, contextID string,
 	yield func(f frames.Frame) error,
-	_ func(words []uctx.WordTiming, opts tts.WordTimingOptions) error,
+	_ func(words []align.WordTiming, opts tts.WordTimingOptions) error,
 ) error {
 	return s.RunTTS(ctx, text, contextID, yield)
 }

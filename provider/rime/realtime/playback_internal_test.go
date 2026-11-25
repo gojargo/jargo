@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // Stops of the bot's speech must keep the interruption reports right for the
@@ -19,7 +19,7 @@ import (
 // observeStops counts the stops of the bot's speech the service has handled.
 func observeStops(s *Service) *atomic.Int64 {
 	var stops atomic.Int64
-	events.On(s.Events(), processor.EventAfterProcessFrame, func(_ context.Context, f frames.Frame) {
+	event.On(s.Events(), processor.EventAfterProcessFrame, func(_ context.Context, f frames.Frame) {
 		if _, ok := f.(*frames.BotStoppedSpeakingFrame); ok {
 			stops.Add(1)
 		}

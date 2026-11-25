@@ -11,10 +11,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/service/stt"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 const frameDuration = 20 * time.Millisecond
@@ -47,12 +47,12 @@ func run(t *testing.T, svc *stt.StreamService, d time.Duration, inject ...inject
 		ReachedUpstreamFilter:   pipeline.AnyFrame,
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		res.up = append(res.up, f)
 		mu.Unlock()
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		res.down = append(res.down, f)
 		mu.Unlock()

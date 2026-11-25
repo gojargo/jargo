@@ -9,13 +9,13 @@ import (
 	"time"
 
 	"github.com/gojargo/jargo/audio/turn"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/processor/aggregators"
 	"github.com/gojargo/jargo/processor/turns"
 	"github.com/gojargo/jargo/service/llm"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // speechTimeout is how long the speech-timeout stop strategy these tests run
@@ -49,7 +49,7 @@ func sendAndCollectWith(t *testing.T, params pipeline.Params, ps []processor.Pro
 		Params:                  params,
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		got = append(got, f)
 		mu.Unlock()
@@ -259,7 +259,7 @@ func TestMultipleInferencesInOneTurnPreserveTheAggregation(t *testing.T) {
 		inferences++
 		mu.Unlock()
 	})
-	events.On(pair.User().Events(), aggregators.EventUserTurnStopped,
+	event.On(pair.User().Events(), aggregators.EventUserTurnStopped,
 		func(_ context.Context, s aggregators.UserTurnStopped) {
 			mu.Lock()
 			stopped = &s

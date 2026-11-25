@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // fatalOnText fails for good on any text.
@@ -34,7 +34,7 @@ func TestAFatalErrorCancelsWithItsReason(t *testing.T) {
 	w := pipeline.NewWorker(pipeline.New(p), pipeline.WorkerConfig{IdleTimeout: -1})
 	var mu sync.Mutex
 	var finished frames.Frame
-	events.On(&w.Registry, pipeline.EventPipelineFinished, func(_ context.Context, f frames.Frame) {
+	event.On(&w.Registry, pipeline.EventPipelineFinished, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		finished = f
 		mu.Unlock()

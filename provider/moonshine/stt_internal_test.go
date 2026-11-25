@@ -10,13 +10,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/service/settings"
 	"github.com/gojargo/jargo/service/stt"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // errBoom is a model that fails to load.
@@ -296,7 +296,7 @@ func runSegment(t *testing.T, svc *stt.SegmentService, pcm []byte, rate int) []*
 		Params:                  pipeline.Params{AudioInSampleRate: rate},
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if tf, ok := f.(*frames.TranscriptionFrame); ok {
 			mu.Lock()
 			got = append(got, tf)
@@ -370,7 +370,7 @@ func update(t *testing.T, svc *stt.SegmentService, field string, value any) {
 func pushedErrors(svc *stt.SegmentService) func() []string {
 	var mu sync.Mutex
 	var errs []string
-	events.On(svc.Events(), processor.EventError, func(_ context.Context, ef *frames.ErrorFrame) {
+	event.On(svc.Events(), processor.EventError, func(_ context.Context, ef *frames.ErrorFrame) {
 		mu.Lock()
 		errs = append(errs, ef.Error)
 		mu.Unlock()

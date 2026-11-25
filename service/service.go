@@ -59,7 +59,7 @@ func New(name string, self processor.Processor, opts ...processor.Option) *Base 
 // fails: each failed attempt to restore it, and giving up. The handler is given
 // the error's message.
 //
-//	events.On(svc.Events(), service.EventConnectionError,
+//	event.On(svc.Events(), service.EventConnectionError,
 //	    func(ctx context.Context, msg string) { … })
 const EventConnectionError = "on_connection_error"
 

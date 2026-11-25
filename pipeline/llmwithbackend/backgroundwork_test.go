@@ -7,11 +7,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline/jobcontext"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/service/llm"
-	"github.com/gojargo/jargo/utils/events"
 	"github.com/gojargo/jargo/workers/llmworker"
 )
 
@@ -28,7 +28,7 @@ type workRecorder struct {
 // recordWork watches what svc pushes.
 func recordWork(svc *llm.Base) *workRecorder {
 	r := &workRecorder{ids: make(map[uint64]bool)}
-	events.On(svc.Events(), processor.EventBeforePushFrame, func(_ context.Context, f frames.Frame) {
+	event.On(svc.Events(), processor.EventBeforePushFrame, func(_ context.Context, f frames.Frame) {
 		r.mu.Lock()
 		defer r.mu.Unlock()
 		// The second half of a broadcast names the first as its sibling.

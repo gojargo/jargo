@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // connectingService is still connecting while it is set up: its setup returns
@@ -69,7 +69,7 @@ func TestCancelTakesEffectWhileProcessorsAreSettingUp(t *testing.T) {
 	})
 	var finished []frames.Frame
 	var mu sync.Mutex
-	events.On(&task.Registry, pipeline.EventPipelineFinished, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventPipelineFinished, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		finished = append(finished, f)
 		mu.Unlock()

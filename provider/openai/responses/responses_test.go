@@ -9,12 +9,12 @@ import (
 	"testing"
 	"time"
 
+	jevent "github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/providertest"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/service/llm"
 	"github.com/gojargo/jargo/service/llm/adapter"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // mustRequest builds a request and fails the test if the conversion did.
@@ -318,7 +318,7 @@ func TestFailedResponseReportsItsUsage(t *testing.T) {
 			EnableMetrics: true, EnableUsageMetrics: true, SendInitialEmptyMetrics: &noInitial,
 		},
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	jevent.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		defer mu.Unlock()
 		switch fr := f.(type) {
@@ -332,7 +332,7 @@ func TestFailedResponseReportsItsUsage(t *testing.T) {
 			ended <- struct{}{}
 		}
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
+	jevent.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
 		if ef, ok := f.(*frames.ErrorFrame); ok {
 			mu.Lock()
 			errs = append(errs, ef.Error)

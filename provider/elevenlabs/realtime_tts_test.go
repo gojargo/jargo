@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/providertest"
 	"github.com/gojargo/jargo/language"
@@ -27,9 +28,8 @@ import (
 	"github.com/gojargo/jargo/service/settings"
 	"github.com/gojargo/jargo/service/tts"
 	"github.com/gojargo/jargo/service/wsservice"
-	uctx "github.com/gojargo/jargo/utils/context"
-	"github.com/gojargo/jargo/utils/events"
-	"github.com/gojargo/jargo/utils/text"
+	"github.com/gojargo/jargo/text"
+	"github.com/gojargo/jargo/text/align"
 )
 
 // TestRealtimeTTSConfigValidate pins which fields the service requires.
@@ -365,9 +365,9 @@ func (h *fakeHost) AppendWordToAudioContext(_, word string, _ float64) {
 }
 
 // AddWordTimestamps mirrors the base: normalize as asked, then queue each token.
-func (h *fakeHost) AddWordTimestamps(contextID string, words []uctx.WordTiming, opts tts.WordTimingOptions) {
+func (h *fakeHost) AddWordTimestamps(contextID string, words []align.WordTiming, opts tts.WordTimingOptions) {
 	if opts.PreMergeTokens {
-		words = uctx.MergePunctTokens(words)
+		words = align.MergePunctTokens(words)
 	}
 	for _, w := range words {
 		h.AppendWordToAudioContext(contextID, w.Word, w.Offset)
@@ -698,9 +698,9 @@ type offsetHost struct {
 
 func newOffsetHost(ids ...string) *offsetHost { return &offsetHost{fakeHost: newFakeHost(ids...)} }
 
-func (h *offsetHost) AddWordTimestamps(_ string, words []uctx.WordTiming, opts tts.WordTimingOptions) {
+func (h *offsetHost) AddWordTimestamps(_ string, words []align.WordTiming, opts tts.WordTimingOptions) {
 	if opts.PreMergeTokens {
-		words = uctx.MergePunctTokens(words)
+		words = align.MergePunctTokens(words)
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -863,7 +863,7 @@ type wordsHost struct {
 
 func newWordsHost(ids ...string) *wordsHost { return &wordsHost{fakeHost: newFakeHost(ids...)} }
 
-func (h *wordsHost) AddWordTimestamps(contextID string, words []uctx.WordTiming, opts tts.WordTimingOptions) {
+func (h *wordsHost) AddWordTimestamps(contextID string, words []align.WordTiming, opts tts.WordTimingOptions) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for _, w := range words {
@@ -1350,7 +1350,7 @@ func runRealtime(t *testing.T, b *tts.Base) *realtimeRun {
 	t.Helper()
 	r := &realtimeRun{t: t, done: make(chan error, 1)}
 	r.task = pipeline.NewWorker(pipeline.New(b), pipeline.WorkerConfig{ReachedDownstreamFilter: pipeline.AnyFrame})
-	events.On(&r.task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&r.task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		r.mu.Lock()
 		r.down = append(r.down, f)
 		r.mu.Unlock()
@@ -1421,7 +1421,7 @@ func TestRealtimeTTSReportsAFailedConnection(t *testing.T) {
 	b := NewRealtimeTTS(RealtimeTTSConfig{APIKey: "k", Host: server.host})
 	var mu sync.Mutex
 	var reported []string
-	events.On(b.Events(), service.EventConnectionError, func(_ context.Context, msg string) {
+	event.On(b.Events(), service.EventConnectionError, func(_ context.Context, msg string) {
 		mu.Lock()
 		reported = append(reported, msg)
 		mu.Unlock()

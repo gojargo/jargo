@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/pipeline"
@@ -25,8 +26,7 @@ import (
 	"github.com/gojargo/jargo/service/tts"
 	"github.com/gojargo/jargo/service/wsservice"
 	"github.com/gojargo/jargo/service/wsutil"
-	uctx "github.com/gojargo/jargo/utils/context"
-	"github.com/gojargo/jargo/utils/events"
+	"github.com/gojargo/jargo/text/align"
 )
 
 // Tests for the connection held open for the call. Every Smallest request
@@ -203,7 +203,7 @@ func (f *fakeSvc) StopAllMetrics(context.Context) {
 type fakeHost struct {
 	mu     sync.Mutex
 	audio  map[string][]byte
-	words  []uctx.WordTiming
+	words  []align.WordTiming
 	pushed []frames.Frame
 	errors []string
 }
@@ -220,7 +220,7 @@ func (h *fakeHost) AppendToAudioContext(id string, f frames.Frame) {
 
 func (h *fakeHost) AppendWordToAudioContext(string, string, float64) {}
 
-func (h *fakeHost) AddWordTimestamps(_ string, words []uctx.WordTiming, _ tts.WordTimingOptions) {
+func (h *fakeHost) AddWordTimestamps(_ string, words []align.WordTiming, _ tts.WordTimingOptions) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.words = append(h.words, words...)
@@ -288,7 +288,7 @@ func connectedSynth(t *testing.T, server *fakeServer, cfg Config) (*synthesizer,
 
 // driveWords hands the word-timing messages to the synthesizer as the receive
 // loop does, and returns the timings it reported.
-func driveWords(t *testing.T, s *synthesizer, messages ...map[string]any) []uctx.WordTiming {
+func driveWords(t *testing.T, s *synthesizer, messages ...map[string]any) []align.WordTiming {
 	t.Helper()
 	host := newFakeHost()
 	s.host, s.svc = host, &fakeSvc{active: ctxID}
@@ -302,7 +302,7 @@ func driveWords(t *testing.T, s *synthesizer, messages ...map[string]any) []uctx
 }
 
 // assertWords checks the timings reported, allowing for float rounding.
-func assertWords(t *testing.T, got []uctx.WordTiming, want ...uctx.WordTiming) {
+func assertWords(t *testing.T, got []align.WordTiming, want ...align.WordTiming) {
 	t.Helper()
 	if len(got) != len(want) {
 		t.Fatalf("words = %v, want %v", got, want)
@@ -484,7 +484,7 @@ func TestWordTimestampsOffsetAcrossRequests(t *testing.T) {
 		wordMessage("Hello", 0.2, 0.5, "a", 0),
 		wordMessage("World", 0.1, 0.4, "b", 0),
 	)
-	assertWords(t, got, uctx.WordTiming{Word: "Hello", Offset: 0.2}, uctx.WordTiming{Word: "World", Offset: 0.6})
+	assertWords(t, got, align.WordTiming{Word: "Hello", Offset: 0.2}, align.WordTiming{Word: "World", Offset: 0.6})
 }
 
 // The offset compounds across three requests of one turn.
@@ -495,9 +495,9 @@ func TestOffsetAccumulatesAcrossMultipleRequests(t *testing.T) {
 		wordMessage("three", 0.5, 1.0, "c", 0),
 	)
 	assertWords(t, got,
-		uctx.WordTiming{Word: "one", Offset: 0.0},
-		uctx.WordTiming{Word: "two", Offset: 1.0},
-		uctx.WordTiming{Word: "three", Offset: 3.5},
+		align.WordTiming{Word: "one", Offset: 0.0},
+		align.WordTiming{Word: "two", Offset: 1.0},
+		align.WordTiming{Word: "three", Offset: 3.5},
 	)
 }
 
@@ -509,9 +509,9 @@ func TestMultipleWordsInOneRequestShareOffset(t *testing.T) {
 		wordMessage("c", 0.1, 0.5, "r2", 0),
 	)
 	assertWords(t, got,
-		uctx.WordTiming{Word: "a", Offset: 0.0},
-		uctx.WordTiming{Word: "b", Offset: 0.4},
-		uctx.WordTiming{Word: "c", Offset: 1.0},
+		align.WordTiming{Word: "a", Offset: 0.0},
+		align.WordTiming{Word: "b", Offset: 0.4},
+		align.WordTiming{Word: "c", Offset: 1.0},
 	)
 }
 
@@ -528,7 +528,7 @@ func TestWordTimestampOffsetResetsOnNewTurn(t *testing.T) {
 		t.Errorf("offset %v and request %v after a new turn, want both cleared", s.cumulativeTime, s.wtRequestID)
 	}
 	got := driveWords(t, s, wordMessage("Fresh", 0.3, 0.6, "c", 0))
-	assertWords(t, got, uctx.WordTiming{Word: "Fresh", Offset: 0.3})
+	assertWords(t, got, align.WordTiming{Word: "Fresh", Offset: 0.3})
 }
 
 // Spoken text produces audio and the text of each timed word, pushed as its
@@ -785,7 +785,7 @@ func runPipeline(t *testing.T, b *tts.Base) *run {
 	t.Helper()
 	r := &run{t: t, done: make(chan error, 1)}
 	r.task = pipeline.NewWorker(pipeline.New(b), pipeline.WorkerConfig{ReachedDownstreamFilter: pipeline.AnyFrame})
-	events.On(&r.task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&r.task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		r.mu.Lock()
 		r.down = append(r.down, f)
 		r.mu.Unlock()
@@ -856,7 +856,7 @@ func TestReportsAFailedConnection(t *testing.T) {
 	b := NewTTS(Config{APIKey: "k", URL: server.url})
 	var mu sync.Mutex
 	var reported []string
-	events.On(b.Events(), service.EventConnectionError, func(_ context.Context, msg string) {
+	event.On(b.Events(), service.EventConnectionError, func(_ context.Context, msg string) {
 		mu.Lock()
 		reported = append(reported, msg)
 		mu.Unlock()

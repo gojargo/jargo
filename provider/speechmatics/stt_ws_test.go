@@ -15,12 +15,12 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/service/stt"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // Tests for the transcription session. Speechmatics acknowledges the start
@@ -626,7 +626,7 @@ func runService(t *testing.T, endpoint string) *serviceRun {
 	t.Helper()
 	r := &serviceRun{done: make(chan error, 1)}
 	r.svc = NewSTT(Config{APIKey: "test-key", URL: endpoint, SampleRate: 16000})
-	events.On(r.svc.Events(), processor.EventError, func(_ context.Context, ef *frames.ErrorFrame) {
+	event.On(r.svc.Events(), processor.EventError, func(_ context.Context, ef *frames.ErrorFrame) {
 		r.mu.Lock()
 		defer r.mu.Unlock()
 		r.errors = append(r.errors, ef)

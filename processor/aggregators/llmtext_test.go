@@ -10,14 +10,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor/aggregators"
 	"github.com/gojargo/jargo/processor/rtvi"
 	"github.com/gojargo/jargo/service/tts"
+	"github.com/gojargo/jargo/text"
 	"github.com/gojargo/jargo/transport"
-	"github.com/gojargo/jargo/utils/events"
-	"github.com/gojargo/jargo/utils/text"
 )
 
 // collectAggregated drains the aggregated-text frames after a short grace
@@ -222,14 +222,14 @@ func runLLMText(
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 		ReachedUpstreamFilter:   pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if af, ok := f.(*frames.AggregatedTextFrame); ok {
 			mu.Lock()
 			aggregated = append(aggregated, af)
 			mu.Unlock()
 		}
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
 		if ef, ok := f.(*frames.ErrorFrame); ok {
 			mu.Lock()
 			errors = append(errors, ef)

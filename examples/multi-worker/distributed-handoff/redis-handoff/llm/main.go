@@ -24,11 +24,11 @@ import (
 	"strings"
 
 	redisbus "github.com/gojargo/jargo/bus/network/redis"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/provider/openai/chat"
 	"github.com/gojargo/jargo/service/llm"
-	"github.com/gojargo/jargo/utils/events"
 	"github.com/gojargo/jargo/workers"
 	"github.com/gojargo/jargo/workers/llmworker"
 	"github.com/joho/godotenv"
@@ -103,7 +103,7 @@ func newAcmeLLMWorker(name, systemInstruction string, watch []string) *acmeLLMWo
 		Bridged: []string{},
 	})
 	// The sibling workers are watched once the worker has started.
-	events.On(w.Events(), pipeline.EventPipelineStarted, func(ctx context.Context, _ *frames.StartFrame) {
+	event.On(w.Events(), pipeline.EventPipelineStarted, func(ctx context.Context, _ *frames.StartFrame) {
 		w.WatchWorkers(ctx, watch...)
 	})
 	return w

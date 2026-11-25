@@ -8,13 +8,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/processor/aggregators"
 	"github.com/gojargo/jargo/service/tts"
-	"github.com/gojargo/jargo/utils/events"
-	ttstext "github.com/gojargo/jargo/utils/text"
+	ttstext "github.com/gojargo/jargo/text"
 )
 
 // skipTTSResponse is an LLM response the LLM marked to skip TTS, as it streams
@@ -41,7 +41,7 @@ func runFrames(t *testing.T, feed []frames.Frame, procs ...processor.Processor) 
 	var mu sync.Mutex
 	var got []frames.Frame
 	task := pipeline.NewWorker(pipeline.New(procs...), pipeline.WorkerConfig{ReachedDownstreamFilter: pipeline.AnyFrame})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		// The frames a reply is made of; what the worker adds around them (its
 		// own messages to the client, the service's metadata) is left out.
 		switch f.(type) {

@@ -8,12 +8,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/errclass"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor/aggregators"
 	"github.com/gojargo/jargo/service/llm"
-	errs "github.com/gojargo/jargo/utils/errors"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // The failures a tool handler returns in these tests.
@@ -78,7 +78,7 @@ func runFailingCall(t *testing.T, handler llm.FunctionCallHandler) (*callWatch, 
 	task := pipeline.NewWorker(pipeline.New(svc, probe, pair.Assistant()), pipeline.WorkerConfig{})
 	// An error travels upstream, so it is collected where application code sees
 	// it rather than at a probe below the service.
-	events.On(&task.Registry, pipeline.EventPipelineError, func(_ context.Context, ef *frames.ErrorFrame) {
+	event.On(&task.Registry, pipeline.EventPipelineError, func(_ context.Context, ef *frames.ErrorFrame) {
 		watch.mu.Lock()
 		watch.errors = append(watch.errors, ef)
 		watch.mu.Unlock()
@@ -144,8 +144,8 @@ func TestAToolFailureDoesNotWriteOffTheService(t *testing.T) {
 	watch.mu.Lock()
 	defer watch.mu.Unlock()
 	ef := watch.errors[0]
-	if ef.Category != errs.Application {
-		t.Errorf("category: got %q, want %q", ef.Category, errs.Application)
+	if ef.Category != errclass.Application {
+		t.Errorf("category: got %q, want %q", ef.Category, errclass.Application)
 	}
 	src, ok := ef.Source.(interface{ Usable() bool })
 	if !ok {
@@ -336,7 +336,7 @@ func TestAPanickingHandlerSettlesItsCall(t *testing.T) {
 	if len(watch.results) != 1 || watch.results[0].Result != want {
 		t.Fatalf("results = %v, want the call settled with the failure result", watch.results)
 	}
-	if len(watch.errors) != 1 || watch.errors[0].Category != errs.Application {
+	if len(watch.errors) != 1 || watch.errors[0].Category != errclass.Application {
 		t.Errorf("errors = %v, want one application error", watch.errors)
 	}
 }
@@ -359,7 +359,7 @@ func runCanceledCall(t *testing.T, opts []llm.Option, interrupt bool) *callWatch
 	convo := toolConvo("get_weather")
 	pair := aggregators.New(convo)
 	task := pipeline.NewWorker(pipeline.New(svc, probe, pair.Assistant()), pipeline.WorkerConfig{})
-	events.On(&task.Registry, pipeline.EventPipelineError, func(_ context.Context, ef *frames.ErrorFrame) {
+	event.On(&task.Registry, pipeline.EventPipelineError, func(_ context.Context, ef *frames.ErrorFrame) {
 		watch.mu.Lock()
 		watch.errors = append(watch.errors, ef)
 		watch.mu.Unlock()

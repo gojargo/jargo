@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // ttfbCounter counts the time-to-first-byte measurements reaching the end of the
@@ -62,7 +62,7 @@ func runMeasured(
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 		Params:                  pipeline.Params{EnableMetrics: true, SendInitialEmptyMetrics: &no},
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(ctx context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(ctx context.Context, f frames.Frame) {
 		c.observe(ctx, f)
 		w.observe(ctx, f)
 	})

@@ -11,13 +11,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/expressive"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/service/llm"
 	"github.com/gojargo/jargo/service/settings"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 func calmHappy() *expressive.ExpressionCapabilities {
@@ -65,10 +65,10 @@ func runWith(
 	})
 	started := make(chan struct{})
 	var once sync.Once
-	events.On(&task.Registry, pipeline.EventPipelineStarted, func(context.Context, frames.Frame) {
+	event.On(&task.Registry, pipeline.EventPipelineStarted, func(context.Context, frames.Frame) {
 		once.Do(func() { close(started) })
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		reached = append(reached, f)
 		mu.Unlock()

@@ -11,13 +11,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/processor/aggregators"
 	"github.com/gojargo/jargo/processor/rtvi"
 	"github.com/gojargo/jargo/service/llm"
 	"github.com/gojargo/jargo/service/settings"
-	"github.com/gojargo/jargo/utils/events"
 	"github.com/google/uuid"
 )
 
@@ -26,7 +26,7 @@ import (
 // before the node's LLM response starts, so they must be fast; start a
 // goroutine for slow work.
 //
-//	events.On(fm.Events(), flows.EventNodeEntered,
+//	event.On(fm.Events(), flows.EventNodeEntered,
 //	    func(ctx context.Context, entered flows.NodeEntered) { … })
 const EventNodeEntered = "on_node_entered"
 
@@ -101,7 +101,7 @@ type Config struct {
 // cannot be written as a JSON object is left out of the message, with a
 // warning; the handlers of EventNodeEntered still receive it.
 type FlowManager struct {
-	events events.Registry
+	events event.Registry
 
 	enq      Enqueuer
 	aggs     *aggregators.Pair
@@ -170,7 +170,7 @@ func New(cfg Config) (*FlowManager, error) {
 
 // Events is the registry the manager raises its events on: see
 // EventNodeEntered.
-func (fm *FlowManager) Events() *events.Registry { return &fm.events }
+func (fm *FlowManager) Events() *event.Registry { return &fm.events }
 
 // State is the data a flow keeps across nodes: what the assistant has gathered
 // so far, and anything else the handlers need to share. It is safe for

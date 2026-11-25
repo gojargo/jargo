@@ -10,13 +10,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/expressive"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/processor/aggregators"
 	"github.com/gojargo/jargo/processor/turns"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 //nolint:gochecknoglobals // test fixtures
@@ -218,7 +218,7 @@ func stoppedTurns(t *testing.T, params pipeline.Params, turnsToSend ...[]any) []
 	pair := speechTimeoutPair(frames.NewLLMContext(""))
 	var mu sync.Mutex
 	var stopped []aggregators.UserTurnStopped
-	events.On(pair.User().Events(), aggregators.EventUserTurnStopped,
+	event.On(pair.User().Events(), aggregators.EventUserTurnStopped,
 		func(_ context.Context, s aggregators.UserTurnStopped) {
 			mu.Lock()
 			stopped = append(stopped, s)

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/errclass"
 	"github.com/gojargo/jargo/expressive"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/validate"
@@ -22,9 +23,8 @@ import (
 	"github.com/gojargo/jargo/service/tts"
 	"github.com/gojargo/jargo/service/wsservice"
 	"github.com/gojargo/jargo/service/wsutil"
-	uctx "github.com/gojargo/jargo/utils/context"
-	errs "github.com/gojargo/jargo/utils/errors"
-	ttstext "github.com/gojargo/jargo/utils/text"
+	ttstext "github.com/gojargo/jargo/text"
+	"github.com/gojargo/jargo/text/align"
 )
 
 const (
@@ -255,7 +255,7 @@ func (s *timedTTSSynthesizer) RunTTSTimed(
 	ctx context.Context,
 	text, contextID string,
 	yield func(f frames.Frame) error,
-	_ func(words []uctx.WordTiming, opts tts.WordTimingOptions) error,
+	_ func(words []align.WordTiming, opts tts.WordTimingOptions) error,
 ) error {
 	return s.RunTTS(ctx, text, contextID, yield)
 }
@@ -702,12 +702,12 @@ func (m *ttsMessage) errorCodeText() string {
 // Its error code is an HTTP status (402 when the account is out of credit, 401
 // for a rejected key, and so on); a code that is missing or not a whole number
 // leaves the category unset, which reports it as unknown.
-func classifyErrorCode(code json.RawMessage) errs.Category {
+func classifyErrorCode(code json.RawMessage) errclass.Category {
 	status, err := strconv.Atoi(string(code))
 	if err != nil {
-		return errs.Unset
+		return errclass.Unset
 	}
-	return errs.ClassifyHTTPStatusCode(status)
+	return errclass.ClassifyHTTPStatusCode(status)
 }
 
 // handleMessage handles one server message, dispatching it to the stream it
@@ -767,7 +767,7 @@ func (s *ttsSynthesizer) handleError(ctx context.Context, m *ttsMessage) {
 		msg := fmt.Sprintf("Soniox TTS error %s %s (stream %s): %s",
 			m.errorCodeText(), m.ErrorType, streamID, m.ErrorMessage)
 		var opts []processor.ErrorOption
-		if category := classifyErrorCode(m.ErrorCode); category != errs.Unset {
+		if category := classifyErrorCode(m.ErrorCode); category != errclass.Unset {
 			opts = append(opts, processor.WithErrorCategory(category))
 		}
 		s.host.PushError(ctx, msg, nil, false, opts...)
@@ -796,7 +796,7 @@ func (s *ttsSynthesizer) handleTerminated(streamID string) {
 	}
 	if final.word != "" {
 		s.host.AddWordTimestamps(streamID,
-			[]uctx.WordTiming{{Word: final.word, Offset: final.start}}, tts.WordTimingOptions{})
+			[]align.WordTiming{{Word: final.word, Offset: final.start}}, tts.WordTimingOptions{})
 	}
 	s.finishContext(streamID)
 }
@@ -819,7 +819,7 @@ func (s *ttsSynthesizer) finishContext(contextID string) {
 // asterisks that stress a word, as in *really*, are left out of it. Chinese and
 // Japanese never use spaces, so each of their characters is a word, punctuation
 // left out. Lists that do not line up are reported and yield nothing.
-func (s *ttsSynthesizer) toWordTimes(streamID string, t *ttsTimings) []uctx.WordTiming {
+func (s *ttsSynthesizer) toWordTimes(streamID string, t *ttsTimings) []align.WordTiming {
 	chars, starts := t.Characters, t.Starts
 	if len(chars) != len(starts) {
 		slog.Error("soniox tts: timestamp mismatch", "characters", len(chars), "starts", len(starts))
@@ -827,14 +827,14 @@ func (s *ttsSynthesizer) toWordTimes(streamID string, t *ttsTimings) []uctx.Word
 	}
 
 	if s.spacelessLanguage() {
-		words, _ := uctx.CharsAsWords(chars, starts)
+		words, _ := align.CharsAsWords(chars, starts)
 		return words
 	}
 
 	s.stateMu.Lock()
 	defer s.stateMu.Unlock()
 	current := s.partials[streamID]
-	var words []uctx.WordTiming
+	var words []align.WordTiming
 	for i, char := range chars {
 		if char == "*" {
 			continue
@@ -842,7 +842,7 @@ func (s *ttsSynthesizer) toWordTimes(streamID string, t *ttsTimings) []uctx.Word
 		inTag := strings.LastIndex(current.word, "[") > strings.LastIndex(current.word, "]")
 		if char == " " && !inTag {
 			if current.word != "" {
-				words = append(words, uctx.WordTiming{Word: current.word, Offset: current.start})
+				words = append(words, align.WordTiming{Word: current.word, Offset: current.start})
 				current.word = ""
 			}
 			continue

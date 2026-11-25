@@ -6,10 +6,10 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/service/tts"
-	"github.com/gojargo/jargo/utils/events"
-	ttstext "github.com/gojargo/jargo/utils/text"
+	ttstext "github.com/gojargo/jargo/text"
 )
 
 // requestRecorder collects what each announced request carried.
@@ -19,7 +19,7 @@ type requestRecorder struct {
 }
 
 func (r *requestRecorder) attach(b *tts.Base) {
-	events.On(b.Events(), tts.EventTTSRequest, func(_ context.Context, req tts.TTSRequest) {
+	event.On(b.Events(), tts.EventTTSRequest, func(_ context.Context, req tts.TTSRequest) {
 		r.mu.Lock()
 		r.got = append(r.got, req)
 		r.mu.Unlock()

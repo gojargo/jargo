@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/service/stt"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // runSpeechResults feeds the given results through a stream service and returns
@@ -25,7 +25,7 @@ func runSpeechResults(t *testing.T, results [][]stt.Result) []string {
 	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		defer mu.Unlock()
 		switch f.(type) {
@@ -179,7 +179,7 @@ func TestSpeechBoundaryCanCarryText(t *testing.T) {
 			task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{
 				ReachedDownstreamFilter: pipeline.AnyFrame,
 			})
-			events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+			event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 				mu.Lock()
 				defer mu.Unlock()
 				switch fr := f.(type) {

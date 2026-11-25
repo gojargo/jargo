@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/errclass"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/language"
@@ -22,9 +23,8 @@ import (
 	"github.com/gojargo/jargo/service/tts"
 	"github.com/gojargo/jargo/service/wsservice"
 	"github.com/gojargo/jargo/service/wsutil"
-	uctx "github.com/gojargo/jargo/utils/context"
-	errs "github.com/gojargo/jargo/utils/errors"
-	ttstext "github.com/gojargo/jargo/utils/text"
+	ttstext "github.com/gojargo/jargo/text"
+	"github.com/gojargo/jargo/text/align"
 )
 
 const (
@@ -799,9 +799,9 @@ func (s *synthesizer) handleWordBoundaries(m *ttsServerMessage) {
 	// Word times are on the session's timeline; audio_start_ms is where this
 	// request's audio starts on it.
 	offsetMs := start - m.AudioStartMs
-	words := make([]uctx.WordTiming, 0, len(m.Words))
+	words := make([]align.WordTiming, 0, len(m.Words))
 	for _, w := range m.Words {
-		words = append(words, uctx.WordTiming{Word: w.Word, Offset: (offsetMs + w.Start) / 1000})
+		words = append(words, align.WordTiming{Word: w.Word, Offset: (offsetMs + w.Start) / 1000})
 	}
 	if len(words) > 0 && s.host != nil {
 		s.host.AddWordTimestamps(contextID, words, tts.WordTimingOptions{})
@@ -831,24 +831,24 @@ func (s *synthesizer) handleError(ctx context.Context, m *ttsServerMessage) {
 	}
 	s.mu.Unlock()
 
-	var category errs.Category
+	var category errclass.Category
 	switch {
 	case m.Retryable:
 		if routineErrorTypes[m.ErrorType] {
 			slog.Debug(text)
 			return
 		}
-		category = errs.Server
+		category = errclass.Server
 		if m.ErrorCode == errorCodeRateLimited {
-			category = errs.RateLimit
+			category = errclass.RateLimit
 		}
 	case !begun:
-		category = errs.InvalidRequest
+		category = errclass.InvalidRequest
 		if m.ErrorCode == errorCodeUnauthorized {
-			category = errs.Authentication
+			category = errclass.Authentication
 		}
 	default:
-		category = errs.Unknown
+		category = errclass.Unknown
 	}
 	s.svc.PushError(ctx, text, nil, false, processor.WithErrorCategory(category))
 }
@@ -955,7 +955,7 @@ func (s *synthesizer) RunTTSTimed(
 	ctx context.Context,
 	text, contextID string,
 	yield func(f frames.Frame) error,
-	_ func(words []uctx.WordTiming, opts tts.WordTimingOptions) error,
+	_ func(words []align.WordTiming, opts tts.WordTimingOptions) error,
 ) error {
 	return s.RunTTS(ctx, text, contextID, yield)
 }

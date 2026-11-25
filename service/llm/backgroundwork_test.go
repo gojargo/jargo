@@ -7,11 +7,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/service/llm"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // An async call is work the conversation waits on; a synchronous one holds it.
@@ -27,7 +27,7 @@ type callFrames struct {
 
 func watchCallFrames(svc *llm.Base) *callFrames {
 	w := &callFrames{ids: make(map[uint64]bool)}
-	events.On(svc.Events(), processor.EventBeforePushFrame, func(_ context.Context, f frames.Frame) {
+	event.On(svc.Events(), processor.EventBeforePushFrame, func(_ context.Context, f frames.Frame) {
 		switch f.(type) {
 		case *frames.FunctionCallsStartedFrame, *frames.FunctionCallInProgressFrame,
 			*frames.FunctionCallResultFrame, *frames.FunctionCallCancelFrame,

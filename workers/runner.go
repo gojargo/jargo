@@ -11,8 +11,8 @@ import (
 	"syscall"
 
 	"github.com/gojargo/jargo/bus"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/registry"
-	"github.com/gojargo/jargo/utils/events"
 	"github.com/google/uuid"
 )
 
@@ -102,7 +102,7 @@ func (e *workerEntry) finished() bool {
 // ends when that pipeline does. A bot whose helpers wait on the bus forever
 // ends by calling End or Cancel instead.
 type Runner struct {
-	events.Registry
+	event.Registry
 
 	name    string
 	msgBus  *bus.Bus

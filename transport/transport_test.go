@@ -11,11 +11,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/transport"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // fakeInput is an input transport whose StartReading emits a fixed number of
@@ -61,7 +61,7 @@ func TestBaseInputPushesAudioDownstream(t *testing.T) {
 
 	in := newFakeInput(params, 3)
 	task := pipeline.NewWorker(pipeline.New(in), taskParams)
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if _, ok := f.(*frames.InputAudioRawFrame); ok {
 			if got.Add(1) == 3 {
 				close(done)
@@ -100,7 +100,7 @@ func TestBaseInputRoutesUpstreamAudioThroughFilter(t *testing.T) {
 	// No frames of its own: the only audio is the one queued below.
 	in := newFakeInput(params, 0)
 	task := pipeline.NewWorker(pipeline.New(in), taskParams)
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, fr frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, fr frames.Frame) {
 		if af, ok := fr.(*frames.InputAudioRawFrame); ok {
 			got <- af.Audio
 		}
@@ -138,7 +138,7 @@ func TestBaseInputRoutesUpstreamUserAudioThroughFilter(t *testing.T) {
 	task := pipeline.NewWorker(pipeline.New(in), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, fr frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, fr frames.Frame) {
 		if af, ok := fr.(*frames.UserAudioRawFrame); ok {
 			got <- af
 		}
@@ -288,7 +288,7 @@ func TestBaseInputRoutesFilterEnable(t *testing.T) {
 	task := pipeline.NewWorker(pipeline.New(in), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if _, ok := f.(frames.FilterControlFrame); ok {
 			forwarded.Add(1)
 		}
@@ -330,7 +330,7 @@ func TestBaseInputForwardsFilterControlWithoutFilter(t *testing.T) {
 	task := pipeline.NewWorker(pipeline.New(in), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if _, ok := f.(frames.FilterControlFrame); ok {
 			got <- f
 		}
@@ -438,7 +438,7 @@ func TestBaseInputAppliesFilter(t *testing.T) {
 
 	in := newFakeInput(params, 3)
 	task := pipeline.NewWorker(pipeline.New(in), taskParams)
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, fr frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, fr frames.Frame) {
 		af, ok := fr.(*frames.InputAudioRawFrame)
 		if !ok {
 			return
@@ -635,7 +635,7 @@ func TestBaseOutputEndFrameDeliversPendingTimedFrames(t *testing.T) {
 	task := pipeline.NewWorker(pipeline.New(o), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		defer mu.Unlock()
 		switch fr := f.(type) {
@@ -683,7 +683,7 @@ func TestBaseOutputCancelDoesNotReportBotStopped(t *testing.T) {
 	task := pipeline.NewWorker(pipeline.New(o), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		defer mu.Unlock()
 		switch f.(type) {
@@ -782,12 +782,12 @@ func TestBaseOutputShortTurnSignalsBotSpeaking(t *testing.T) {
 
 	o := newFakeOutput(params)
 	task := pipeline.NewWorker(pipeline.New(o), taskParams)
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		down = append(down, f)
 		mu.Unlock()
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		up = append(up, f)
 		mu.Unlock()
@@ -958,7 +958,7 @@ func TestBaseOutputKeepsUninterruptibleFramesThroughBargeIn(t *testing.T) {
 
 	o := newBlockingOutput(params)
 	task := pipeline.NewWorker(pipeline.New(o), taskParams)
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if _, ok := f.(*uninterruptibleMarkerFrame); ok {
 			seen <- struct{}{}
 		}
@@ -1033,7 +1033,7 @@ func TestBaseOutputOrdersSyncFramesWithAudio(t *testing.T) {
 
 	o := newFakeOutput(params)
 	task := pipeline.NewWorker(pipeline.New(o), taskParams)
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		switch f.(type) {
 		case *frames.TTSAudioRawFrame:
 			mu.Lock()
@@ -1133,7 +1133,7 @@ func TestBaseOutputReportsReady(t *testing.T) {
 
 	o := newReadyOutput(params)
 	task := pipeline.NewWorker(pipeline.New(o), taskParams)
-	events.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
 		if _, ok := f.(*frames.OutputTransportReadyFrame); ok {
 			ready <- struct{}{}
 		}
@@ -1520,7 +1520,7 @@ func TestBaseOutputForwardsWordFramesInOrder(t *testing.T) {
 
 	o := newFakeOutput(params)
 	task := pipeline.NewWorker(pipeline.New(o), taskParams)
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		defer mu.Unlock()
 		switch fr := f.(type) {
@@ -1587,7 +1587,7 @@ func TestBaseOutputInterruptionDropsUnplayedWordFrames(t *testing.T) {
 
 	o := newPacedOutput(params) // ~3ms per chunk write
 	task := pipeline.NewWorker(pipeline.New(o), taskParams)
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if fr, ok := f.(*frames.TTSTextFrame); ok {
 			lateSeen <- fr.Text
 		}
@@ -1693,7 +1693,7 @@ func TestBaseOutputDoesNotEscalateSendFailures(t *testing.T) {
 	task := pipeline.NewWorker(pipeline.New(o), pipeline.WorkerConfig{
 		ReachedUpstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
 		if fr, ok := f.(*frames.ErrorFrame); ok {
 			select {
 			case errs <- fr.Error:
@@ -1788,7 +1788,7 @@ func TestBaseOutputDoesNotForwardAudioTheTransportDeclined(t *testing.T) {
 	task := pipeline.NewWorker(pipeline.New(o), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if _, ok := f.(*frames.TTSAudioRawFrame); ok {
 			forwarded <- struct{}{}
 		}
@@ -1829,7 +1829,7 @@ func TestBaseInputFilteredAudioKeepsItsFrame(t *testing.T) {
 	task := pipeline.NewWorker(pipeline.New(in), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, fr frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, fr frames.Frame) {
 		if af, ok := fr.(*frames.InputAudioRawFrame); ok {
 			got <- af
 		}

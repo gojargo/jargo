@@ -12,13 +12,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gojargo/jargo/errclass"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/provider/openai/internal/apierror"
 	"github.com/gojargo/jargo/provider/openai/internal/sdkretry"
 	"github.com/gojargo/jargo/service/llm"
 	"github.com/gojargo/jargo/service/llm/adapter"
-	errs "github.com/gojargo/jargo/utils/errors"
 )
 
 const (
@@ -820,4 +820,4 @@ func (s *LLMService) ModelSupportsResponseSchema(model string) bool {
 // ClassifyError implements processor.ErrorClassifier: a content filter's
 // refusal is content the provider refused, not the permanent invalid request
 // its status says.
-func (s *LLMService) ClassifyError(err error) errs.Category { return apierror.Classify(err) }
+func (s *LLMService) ClassifyError(err error) errclass.Category { return apierror.Classify(err) }

@@ -12,12 +12,12 @@ import (
 	"time"
 
 	"cloud.google.com/go/speech/apiv2/speechpb"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/service/settings"
 	"github.com/gojargo/jargo/service/stt"
-	"github.com/gojargo/jargo/utils/events"
 	"golang.org/x/oauth2"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -661,7 +661,7 @@ func runGoogleSTT(t *testing.T, cfg STTConfig) *sttRun {
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 		ReachedUpstreamFilter:   pipeline.AnyFrame,
 	})
-	events.On(&r.task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&r.task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		switch f.(type) {
 		case *frames.TranscriptionFrame, *frames.InterimTranscriptionFrame:
 			r.mu.Lock()
@@ -669,7 +669,7 @@ func runGoogleSTT(t *testing.T, cfg STTConfig) *sttRun {
 			r.mu.Unlock()
 		}
 	})
-	events.On(&r.task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
+	event.On(&r.task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
 		if ef, ok := f.(*frames.ErrorFrame); ok {
 			r.mu.Lock()
 			r.errors = append(r.errors, ef)

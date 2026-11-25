@@ -22,6 +22,7 @@ import (
 	"os"
 
 	"github.com/gojargo/jargo/audio/vad"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
@@ -34,7 +35,6 @@ import (
 	"github.com/gojargo/jargo/transport"
 	"github.com/gojargo/jargo/transport/wsserver"
 	"github.com/gojargo/jargo/transport/wsserver/evalws"
-	"github.com/gojargo/jargo/utils/events"
 	"github.com/gojargo/jargo/workers"
 )
 
@@ -126,14 +126,14 @@ func runBot(ctx context.Context, t transport.Transport, args runner.Arguments) e
 		{llm, "check OPENAI_API_KEY and the model"},
 	}
 	for _, w := range whatToCheck {
-		events.On(w.processor.Events(), processor.EventUsableChanged, func(_ context.Context, usable bool) {
+		event.On(w.processor.Events(), processor.EventUsableChanged, func(_ context.Context, usable bool) {
 			if !usable {
 				slog.Error(w.processor.Name()+" can no longer do its job", "what_to_check", w.check)
 			}
 		})
 	}
 
-	events.On(ttsSwitcher.Strategy().Events(), pipeline.EventServiceSwitched,
+	event.On(ttsSwitcher.Strategy().Events(), pipeline.EventServiceSwitched,
 		func(_ context.Context, service processor.Processor) {
 			slog.Info("TTS failed over to " + service.Name() + "; the bot keeps talking")
 		})
@@ -142,7 +142,7 @@ func runBot(ctx context.Context, t transport.Transport, args runner.Arguments) e
 	// Category says what kind of failure it was, which is what distinguishes
 	// "wrong API key" from "this voice doesn't exist", while the source's
 	// Usable says whether it is worth trying again.
-	events.On(&worker.Registry, pipeline.EventPipelineError, func(_ context.Context, f *frames.ErrorFrame) {
+	event.On(&worker.Registry, pipeline.EventPipelineError, func(_ context.Context, f *frames.ErrorFrame) {
 		if f.Source != nil && !f.Source.Usable() {
 			slog.Error(f.Source.Name()+" can no longer do its job", "category", f.Category, "error", f.Error)
 			return
@@ -154,14 +154,14 @@ func runBot(ctx context.Context, t transport.Transport, args runner.Arguments) e
 		slog.Warn(source+" hit a problem it can recover from", "error", f.Error)
 	})
 
-	events.On(t.Events(), transport.EventClientConnected, func(context.Context, any) {
+	event.On(t.Events(), transport.EventClientConnected, func(context.Context, any) {
 		slog.Info("Client connected")
 		// Kick off the conversation.
 		convo.AddMessage(frames.Message{Role: frames.RoleDeveloper, Text: "Please introduce yourself to the user."})
 		worker.QueueFrames([]frames.Frame{frames.NewLLMRunFrame()})
 	})
 
-	events.On(t.Events(), transport.EventClientDisconnected, func(ctx context.Context, _ any) {
+	event.On(t.Events(), transport.EventClientDisconnected, func(ctx context.Context, _ any) {
 		slog.Info("Client disconnected")
 		worker.Cancel(ctx, "client disconnected")
 	})

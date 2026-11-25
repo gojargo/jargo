@@ -14,13 +14,13 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/service/settings"
 	"github.com/gojargo/jargo/service/stt"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // sevenLanguages is one more distinct base code than Cartesia accepts as hints.
@@ -146,7 +146,7 @@ func runHints(t *testing.T, cfg TurnsSTTConfig) *hintsRun {
 	r := &hintsRun{server: &hintsServer{}}
 	cfg.APIKey, cfg.URL, cfg.SampleRate = "k", r.server.start(t), 16000
 	svc := NewTurnsSTT(cfg)
-	events.On(svc.Events(), processor.EventError, func(_ context.Context, ef *frames.ErrorFrame) {
+	event.On(svc.Events(), processor.EventError, func(_ context.Context, ef *frames.ErrorFrame) {
 		r.mu.Lock()
 		r.errors = append(r.errors, ef)
 		r.mu.Unlock()

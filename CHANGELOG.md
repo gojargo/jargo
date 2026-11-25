@@ -222,6 +222,24 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **BREAKING: the `utils` packages are gone.** Each one moved to a package
+  named for what it provides, and the ones only jargo itself uses became
+  internal. Nothing else changed in them. Update imports and qualifiers:
+
+  | Before | After |
+  |---|---|
+  | `utils/events` (`events.On`, `events.Registry`, ...) | `event` (`event.On`, `event.Registry`, ...) |
+  | `utils/text` | `text` |
+  | `utils/context` | `text/align` (package `align`) |
+  | `utils/errors` (`errors.ClassifyError`, `errors.Category`, ...) | `errclass` (`errclass.Classify`, `errclass.Category`, ...) |
+  | `utils/notify` | `processor/notify` |
+  | `utils/network` (`network.QuickFailureConfig`, ...) | `retry` (`retry.QuickFailureConfig`, ...) |
+  | `utils/images`, `utils/security`, `utils/shared`, `utils/timeutil`, `utils/yamlutil` | internal |
+
+  The most common change in a bot is the event import:
+  `"github.com/gojargo/jargo/utils/events"` becomes
+  `"github.com/gojargo/jargo/event"`, and `events.On(...)` becomes
+  `event.On(...)`. The origin check reads `JARGO_ALLOWED_ORIGINS` as before.
 - **BREAKING: the `adapter` packages moved next to what they serve.** Each
   provider's LLM adapter and TTS expression adapter now lives in that
   provider's package, so no public package shares its name with a provider any

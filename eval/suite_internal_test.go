@@ -18,8 +18,8 @@ import (
 	"time"
 
 	"github.com/gojargo/jargo/classifier"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // helperEnv makes the test binary stand in for a bot: "argv" prints its
@@ -1315,7 +1315,7 @@ func TestSuiteUpdateEventIsTyped(t *testing.T) {
 		Bot: "missing", Scenario: "none", ScenarioPath: filepath.Join(dir, "none.yaml"), BotPath: filepath.Join(dir, "x"),
 	}}, 1)
 	var statuses []string
-	events.On(&suite.Registry, EventUpdate, func(_ context.Context, run *SuiteRun) {
+	event.On(&suite.Registry, EventUpdate, func(_ context.Context, run *SuiteRun) {
 		statuses = append(statuses, run.Status)
 	})
 	if err := suite.Run(t.Context(), dir, SuiteRunOptions{}); err != nil {

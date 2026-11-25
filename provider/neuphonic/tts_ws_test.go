@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/pipeline"
@@ -25,8 +26,7 @@ import (
 	"github.com/gojargo/jargo/service/tts"
 	"github.com/gojargo/jargo/service/wsservice"
 	"github.com/gojargo/jargo/service/wsutil"
-	uctx "github.com/gojargo/jargo/utils/context"
-	"github.com/gojargo/jargo/utils/events"
+	"github.com/gojargo/jargo/text/align"
 )
 
 // Tests for the connection held open for the call. Neuphonic is configured by
@@ -216,7 +216,7 @@ func (h *fakeHost) AppendToAudioContext(id string, f frames.Frame) {
 
 func (h *fakeHost) AppendWordToAudioContext(string, string, float64) {}
 
-func (h *fakeHost) AddWordTimestamps(string, []uctx.WordTiming, tts.WordTimingOptions) {}
+func (h *fakeHost) AddWordTimestamps(string, []align.WordTiming, tts.WordTimingOptions) {}
 
 func (h *fakeHost) RemoveAudioContext(string) {}
 
@@ -614,7 +614,7 @@ func runPipeline(t *testing.T, b *tts.Base) *run {
 	t.Helper()
 	r := &run{t: t, done: make(chan error, 1)}
 	r.task = pipeline.NewWorker(pipeline.New(b), pipeline.WorkerConfig{ReachedDownstreamFilter: pipeline.AnyFrame})
-	events.On(&r.task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&r.task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		r.mu.Lock()
 		r.down = append(r.down, f)
 		r.mu.Unlock()
@@ -685,7 +685,7 @@ func TestReportsAFailedConnection(t *testing.T) {
 	b := NewTTS(Config{APIKey: "k", URL: server.url})
 	var mu sync.Mutex
 	var reported []string
-	events.On(b.Events(), service.EventConnectionError, func(_ context.Context, msg string) {
+	event.On(b.Events(), service.EventConnectionError, func(_ context.Context, msg string) {
 		mu.Lock()
 		reported = append(reported, msg)
 		mu.Unlock()

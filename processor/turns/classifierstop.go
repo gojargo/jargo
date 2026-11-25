@@ -10,10 +10,10 @@ import (
 	"time"
 
 	"github.com/gojargo/jargo/classifier"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/processor"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 const (
@@ -115,7 +115,7 @@ type ClassifierStop struct {
 	// ctx bounds the classifications, from Setup to Cleanup.
 	ctx       context.Context //nolint:containedctx // the strategy's lifetime, held for its goroutines
 	cancelCtx context.CancelFunc
-	metricsID events.HandlerID
+	metricsID event.HandlerID
 	hasMetric bool
 
 	turnOpen     bool
@@ -172,7 +172,7 @@ func (s *ClassifierStop) DecisionScheduled() bool { return s.cancelWait != nil }
 func (s *ClassifierStop) Setup(processor.Setup) error {
 	s.env.locked(func() {
 		s.ctx, s.cancelCtx = context.WithCancel(context.Background())
-		s.metricsID = events.On(s.classifier.Events(), classifier.EventMetrics,
+		s.metricsID = event.On(s.classifier.Events(), classifier.EventMetrics,
 			func(_ context.Context, data []frames.MetricsData) {
 				s.env.locked(func() { s.Push(frames.NewMetricsFrame(data...), processor.Downstream) })
 			})

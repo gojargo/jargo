@@ -19,7 +19,7 @@ import (
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/service/tts"
 	"github.com/gojargo/jargo/service/wsutil"
-	uctx "github.com/gojargo/jargo/utils/context"
+	"github.com/gojargo/jargo/text/align"
 )
 
 const (
@@ -466,13 +466,13 @@ func (s *synthesizer) handleAudio(contextID string, m *wsMessage) error {
 	}
 
 	if ts := m.AudioTimestamps; ts != nil {
-		var words []uctx.WordTiming
+		var words []align.WordTiming
 		for i, char := range ts.GraphChars {
 			if i >= len(ts.GraphTimes) {
 				break
 			}
 			if times := ts.GraphTimes[i]; len(times) >= 2 {
-				words = append(words, uctx.WordTiming{Word: char, Offset: times[0]})
+				words = append(words, align.WordTiming{Word: char, Offset: times[0]})
 			}
 		}
 		if len(words) > 0 {

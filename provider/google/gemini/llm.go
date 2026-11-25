@@ -14,13 +14,13 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/gojargo/jargo/errclass"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/provider/google/internal/stream"
 	"github.com/gojargo/jargo/service/llm"
 	"github.com/gojargo/jargo/service/llm/adapter"
 	"github.com/gojargo/jargo/service/settings"
-	errs "github.com/gojargo/jargo/utils/errors"
 	"github.com/google/uuid"
 )
 
@@ -216,7 +216,7 @@ func (s *Service) RunInference(
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return "", errs.NewHTTPStatusError(resp.StatusCode, fmt.Errorf("%w %d: %s", errStatus, resp.StatusCode, msg))
+		return "", errclass.NewHTTPStatusError(resp.StatusCode, fmt.Errorf("%w %d: %s", errStatus, resp.StatusCode, msg))
 	}
 	var answer genChunk
 	if err := json.NewDecoder(resp.Body).Decode(&answer); err != nil {
@@ -629,7 +629,7 @@ func (s *Service) streamChunks(req *http.Request, rs *responseStream) error {
 		},
 		StatusError: func(resp *http.Response) error {
 			msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-			return errs.NewHTTPStatusError(resp.StatusCode,
+			return errclass.NewHTTPStatusError(resp.StatusCode,
 				fmt.Errorf("%w %d: %s", errStatus, resp.StatusCode, msg))
 		},
 	}, func(ctx context.Context, data string) error {

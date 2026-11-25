@@ -76,7 +76,7 @@ pipeline ends, rather than being cut off mid-sentence.
 ```go
 params.SessionTimeout = 10 * time.Minute
 t, _ := wsserver.Accept(w, r, ser, params)
-events.On(t.Events(), wsserver.EventSessionTimeout, func(ctx context.Context, _ struct{}) {
+event.On(t.Events(), wsserver.EventSessionTimeout, func(ctx context.Context, _ struct{}) {
     task.QueueFrame(frames.NewTTSSpeakFrame("We are out of time. Goodbye."))
     task.StopWhenDone()
 })
@@ -219,7 +219,7 @@ over:
 
 ```go
 nav := ivr.NewNavigator(ivr.NavigatorConfig{LLM: llm, Goal: "Reach the billing department."})
-events.On(nav.Processor().Events(), ivr.EventIVRStatusChanged, func(ctx context.Context, s ivr.Status) {
+event.On(nav.Processor().Events(), ivr.EventIVRStatusChanged, func(ctx context.Context, s ivr.Status) {
     // completed: hand over to the bot; stuck: hang up or retry.
 })
 
@@ -244,7 +244,7 @@ detector, err := voicemail.New(voicemail.Config{Classifier: c})
 if err != nil {
     return err
 }
-events.OnSignal(detector.Events(), voicemail.EventVoicemailDetected, func(ctx context.Context) {
+event.OnSignal(detector.Events(), voicemail.EventVoicemailDetected, func(ctx context.Context) {
     _ = detector.PushFrame(ctx, frames.NewTTSSpeakFrame("Please call us back."), processor.Downstream)
 })
 

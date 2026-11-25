@@ -13,8 +13,8 @@ import (
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/service/tts"
-	uctx "github.com/gojargo/jargo/utils/context"
-	ttstext "github.com/gojargo/jargo/utils/text"
+	ttstext "github.com/gojargo/jargo/text"
+	"github.com/gojargo/jargo/text/align"
 )
 
 // RealtimeTTSConfig configures the Azure AI Speech streaming TTS service.
@@ -414,7 +414,7 @@ func (s *realtimeSynthesizer) wordProcessorTaskHandler(ctx context.Context) {
 		s.mu.Unlock()
 		if contextID != "" {
 			s.base.AddWordTimestamps(contextID,
-				[]uctx.WordTiming{{Word: item.word, Offset: item.timestamp}}, tts.WordTimingOptions{})
+				[]align.WordTiming{{Word: item.word, Offset: item.timestamp}}, tts.WordTimingOptions{})
 		}
 	}
 }
@@ -568,7 +568,7 @@ func (s *realtimeSynthesizer) RunTTSTimed(
 	ctx context.Context,
 	text, contextID string,
 	yield func(f frames.Frame) error,
-	_ func(words []uctx.WordTiming, opts tts.WordTimingOptions) error,
+	_ func(words []align.WordTiming, opts tts.WordTimingOptions) error,
 ) error {
 	return s.RunTTS(ctx, text, contextID, yield)
 }

@@ -15,7 +15,7 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/service/tts"
-	uctx "github.com/gojargo/jargo/utils/context"
+	"github.com/gojargo/jargo/text/align"
 )
 
 const text = "Hello world."
@@ -46,10 +46,10 @@ func list(ms ...string) string { return "[" + strings.Join(ms, ",") + "]" }
 
 // wordTimes feeds chunks of speech marks through an accumulator and collects
 // its words.
-func wordTimes(t *testing.T, txt string, offset float64, chunks ...string) []uctx.WordTiming {
+func wordTimes(t *testing.T, txt string, offset float64, chunks ...string) []align.WordTiming {
 	t.Helper()
 	a := newSpeechMarkAccumulator(txt, offset)
-	var out []uctx.WordTiming
+	var out []align.WordTiming
 	for _, c := range chunks {
 		out = append(out, a.add(marks(t, c))...)
 	}
@@ -62,11 +62,11 @@ func wordTimes(t *testing.T, txt string, offset float64, chunks ...string) []uct
 var streamingMarks = list(mark("Hello", 0, 5, 0, 469), mark("world.", 6, 12, 469, 1152))
 
 // wt is a word timed at offset seconds.
-func wt(word string, offset float64) uctx.WordTiming {
-	return uctx.WordTiming{Word: word, Offset: offset}
+func wt(word string, offset float64) align.WordTiming {
+	return align.WordTiming{Word: word, Offset: offset}
 }
 
-func assertWords(t *testing.T, got, want []uctx.WordTiming) {
+func assertWords(t *testing.T, got, want []align.WordTiming) {
 	t.Helper()
 	if len(got) != len(want) {
 		t.Fatalf("words = %v, want %v", got, want)
@@ -81,12 +81,12 @@ func assertWords(t *testing.T, got, want []uctx.WordTiming) {
 // Speech marks become (word, seconds) pairs and an utterance end time.
 
 func TestMarksConvertMillisecondsToSeconds(t *testing.T) {
-	assertWords(t, wordTimes(t, text, 0, streamingMarks), []uctx.WordTiming{wt("Hello", 0), wt("world.", 0.469)})
+	assertWords(t, wordTimes(t, text, 0, streamingMarks), []align.WordTiming{wt("Hello", 0), wt("world.", 0.469)})
 }
 
 // The offset sequences words across the utterances of one turn.
 func TestTimeOffsetShiftsWords(t *testing.T) {
-	assertWords(t, wordTimes(t, text, 2.5, streamingMarks), []uctx.WordTiming{wt("Hello", 2.5), wt("world.", 2.969)})
+	assertWords(t, wordTimes(t, text, 2.5, streamingMarks), []align.WordTiming{wt("Hello", 2.5), wt("world.", 2.969)})
 }
 
 func TestEndTimeTracksTheLastMarkAndIgnoresTheOffset(t *testing.T) {
@@ -100,7 +100,7 @@ func TestEndTimeTracksTheLastMarkAndIgnoresTheOffset(t *testing.T) {
 func TestNonWordMarksAreSkipped(t *testing.T) {
 	ms := list(`{"type": "sentence", "start": 0, "end": 12, "start_time": 0, "end_time": 1152}`,
 		mark("Hello", 0, 5, 0, 469))
-	assertWords(t, wordTimes(t, text, 0, ms), []uctx.WordTiming{wt("Hello", 0)})
+	assertWords(t, wordTimes(t, text, 0, ms), []align.WordTiming{wt("Hello", 0)})
 }
 
 func TestEmptyMarksProduceNothing(t *testing.T) {
@@ -115,7 +115,7 @@ func TestEmptyMarksProduceNothing(t *testing.T) {
 
 // Speechify flattens typographic apostrophes; the offsets recover them.
 func TestNormalizedValueIsReplacedByTheOriginalSpelling(t *testing.T) {
-	assertWords(t, wordTimes(t, "you’d like", 0, list(mark("you'd", 0, 5, 0, 0))), []uctx.WordTiming{wt("you’d", 0)})
+	assertWords(t, wordTimes(t, "you’d like", 0, list(mark("you'd", 0, 5, 0, 0))), []align.WordTiming{wt("you’d", 0)})
 }
 
 func TestUnusableOffsetsFallBackToTheValue(t *testing.T) {
@@ -127,7 +127,7 @@ func TestUnusableOffsetsFallBackToTheValue(t *testing.T) {
 		"fractional start": `{"type": "word", "start": 6.0, "end": 12, "value": "world."}`,
 	} {
 		t.Run(name, func(t *testing.T) {
-			assertWords(t, wordTimes(t, text, 0, list(unusable)), []uctx.WordTiming{wt("world.", 0)})
+			assertWords(t, wordTimes(t, text, 0, list(unusable)), []align.WordTiming{wt("world.", 0)})
 		})
 	}
 }
@@ -141,7 +141,7 @@ const hyphenated = "I like text-to-speech systems."
 func TestAbuttingMarksJoinIntoOneWord(t *testing.T) {
 	ms := list(mark("text", 7, 11, 0, 0), mark("-", 11, 12, 0, 0), mark("to", 12, 14, 0, 0),
 		mark("-", 14, 15, 0, 0), mark("speech", 15, 21, 0, 0), mark("systems.", 22, 30, 0, 0))
-	assertWords(t, wordTimes(t, hyphenated, 0, ms), []uctx.WordTiming{wt("text-to-speech", 0), wt("systems.", 0)})
+	assertWords(t, wordTimes(t, hyphenated, 0, ms), []align.WordTiming{wt("text-to-speech", 0), wt("systems.", 0)})
 }
 
 // A run of abutting marks can straddle two speech.chunk events.
@@ -149,26 +149,26 @@ func TestASplitWordIsJoinedAcrossChunks(t *testing.T) {
 	got := wordTimes(t, hyphenated, 0,
 		list(mark("text", 7, 11, 0, 0), mark("-", 11, 12, 0, 0), mark("to", 12, 14, 0, 0), mark("-", 14, 15, 0, 0)),
 		list(mark("speech", 15, 21, 0, 0), mark("systems.", 22, 30, 0, 0)))
-	assertWords(t, got, []uctx.WordTiming{wt("text-to-speech", 0), wt("systems.", 0)})
+	assertWords(t, got, []align.WordTiming{wt("text-to-speech", 0), wt("systems.", 0)})
 }
 
 func TestAJoinedWordKeepsTheFirstMarksTimestamp(t *testing.T) {
 	ms := list(mark("text", 7, 11, 500, 0), mark("-", 11, 12, 900, 0))
-	assertWords(t, wordTimes(t, hyphenated, 0, ms), []uctx.WordTiming{wt("text-", 0.5)})
+	assertWords(t, wordTimes(t, hyphenated, 0, ms), []align.WordTiming{wt("text-", 0.5)})
 }
 
 // Only words the text can still extend are held back for the next chunk.
 func TestAWordIsReleasedAsSoonAsTheTextShowsItCannotContinue(t *testing.T) {
 	a := newSpeechMarkAccumulator(hyphenated, 0)
 	got := a.add(marks(t, list(mark("I", 0, 1, 0, 0), mark("like", 2, 6, 0, 0))))
-	assertWords(t, got, []uctx.WordTiming{wt("I", 0), wt("like", 0)})
+	assertWords(t, got, []align.WordTiming{wt("I", 0), wt("like", 0)})
 }
 
 // The text ends mid-run when the trailing mark is not the final character.
 func TestAWordLeftPendingAtTheEndOfTheStreamIsFlushed(t *testing.T) {
 	a := newSpeechMarkAccumulator(hyphenated, 0)
 	a.add(marks(t, list(mark("text", 7, 11, 0, 0), mark("-", 11, 12, 0, 0))))
-	assertWords(t, a.flush(), []uctx.WordTiming{wt("text-", 0)})
+	assertWords(t, a.flush(), []align.WordTiming{wt("text-", 0)})
 	assertWords(t, a.flush(), nil)
 }
 
@@ -278,12 +278,12 @@ func TestHTTPTTSStreamsAudioAndWords(t *testing.T) {
 	})
 
 	var out []frames.Frame
-	var words []uctx.WordTiming
+	var words []align.WordTiming
 	run := func() {
 		err := s.RunTTSTimed(t.Context(), text, "c1", func(f frames.Frame) error {
 			out = append(out, f)
 			return nil
-		}, func(w []uctx.WordTiming, _ tts.WordTimingOptions) error {
+		}, func(w []align.WordTiming, _ tts.WordTimingOptions) error {
 			words = append(words, w...)
 			return nil
 		})
@@ -310,16 +310,16 @@ func TestHTTPTTSStreamsAudioAndWords(t *testing.T) {
 	if f, ok := out[0].(*frames.TTSAudioRawFrame); !ok || string(f.Audio) != string(pcm) || f.SampleRate != 24000 {
 		t.Errorf("yielded %v, want the audio at the synthesized 24 kHz", out[0])
 	}
-	assertWords(t, words, []uctx.WordTiming{wt("Hello", 0), wt("world.", 0.469)})
+	assertWords(t, words, []align.WordTiming{wt("Hello", 0), wt("world.", 0.469)})
 
 	words = nil
 	run()
-	assertWords(t, words, []uctx.WordTiming{wt("Hello", 2), wt("world.", 2.469)})
+	assertWords(t, words, []align.WordTiming{wt("Hello", 2), wt("world.", 2.469)})
 
 	s.OnTurnContextCompleted(t.Context(), "c1")
 	words = nil
 	run()
-	assertWords(t, words, []uctx.WordTiming{wt("Hello", 0), wt("world.", 0.469)})
+	assertWords(t, words, []align.WordTiming{wt("Hello", 0), wt("world.", 0.469)})
 }
 
 // A refused request and a failure reported midway are yielded as errors.

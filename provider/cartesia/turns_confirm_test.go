@@ -11,11 +11,11 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/errclass"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/service/stt"
-	errs "github.com/gojargo/jargo/utils/errors"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // fakeInk2 is a fake turn-detection endpoint. It leaves its first connections
@@ -103,7 +103,7 @@ func runTurns(t *testing.T, endpoint string, wait, d time.Duration) (*stt.Stream
 	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{
 		IdleTimeout: -1, ReachedUpstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
 		if ef, ok := f.(*frames.ErrorFrame); ok {
 			mu.Lock()
 			errors = append(errors, ef)
@@ -178,7 +178,7 @@ func TestTurnsRejectedSettingsAreNotRetried(t *testing.T) {
 	if svc.Usable() {
 		t.Error("the service is still usable after its settings were rejected")
 	}
-	if len(errors) != 1 || errors[0].Category != errs.InvalidRequest ||
+	if len(errors) != 1 || errors[0].Category != errclass.InvalidRequest ||
 		!strings.Contains(errors[0].Error, "model_not_found") {
 		t.Errorf("errors = %v, want one invalid-request error naming model_not_found", errors)
 	}

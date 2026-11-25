@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // Tests for the lifecycle events the Task reports and for the filters selecting
@@ -48,7 +48,7 @@ func TestPipelineStartedReportsTheStartFrame(t *testing.T) {
 		calls int
 	)
 	task := pipeline.NewWorker(pipeline.New(newEcho()), pipeline.WorkerConfig{})
-	events.On(&task.Registry, pipeline.EventPipelineStarted, func(_ context.Context, _ *frames.StartFrame) {
+	event.On(&task.Registry, pipeline.EventPipelineStarted, func(_ context.Context, _ *frames.StartFrame) {
 		mu.Lock()
 		calls++
 		mu.Unlock()
@@ -97,12 +97,12 @@ func TestPipelineErrorReportsBothKinds(t *testing.T) {
 				sawCancel bool
 			)
 			task := pipeline.NewWorker(pipeline.New(newRaiser(tt.send())), pipeline.WorkerConfig{})
-			events.On(&task.Registry, pipeline.EventPipelineError, func(_ context.Context, ef *frames.ErrorFrame) {
+			event.On(&task.Registry, pipeline.EventPipelineError, func(_ context.Context, ef *frames.ErrorFrame) {
 				mu.Lock()
 				reported = append(reported, ef)
 				mu.Unlock()
 			})
-			events.On(&task.Registry, pipeline.EventPipelineFinished, func(_ context.Context, f frames.Frame) {
+			event.On(&task.Registry, pipeline.EventPipelineFinished, func(_ context.Context, f frames.Frame) {
 				mu.Lock()
 				_, sawCancel = f.(*frames.CancelFrame)
 				mu.Unlock()
@@ -144,7 +144,7 @@ func TestReachedFilterSelectsFrames(t *testing.T) {
 		task := pipeline.NewWorker(pipeline.New(newEcho()), pipeline.WorkerConfig{
 			ReachedDownstreamFilter: filter,
 		})
-		events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 			mu.Lock()
 			seen = append(seen, f)
 			mu.Unlock()
@@ -204,7 +204,7 @@ func TestAddReachedFilterWidensTheSelection(t *testing.T) {
 	task := pipeline.NewWorker(pipeline.New(newEcho()), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.FrameTypes(&frames.TextFrame{}),
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		seen = append(seen, f)
 		mu.Unlock()
@@ -273,7 +273,7 @@ func TestHeartbeatsCrossThePipeline(t *testing.T) {
 			HeartbeatPeriod:  20 * time.Millisecond,
 		},
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, _ frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, _ frames.Frame) {
 		mu.Lock()
 		beats++
 		mu.Unlock()
@@ -319,7 +319,7 @@ func TestHeartbeatTimeoutKeepsReporting(t *testing.T) {
 			HeartbeatMonitorTimeout: 40 * time.Millisecond,
 		},
 	})
-	events.OnSignal(&task.Registry, pipeline.EventHeartbeatTimeout, func(context.Context) {
+	event.OnSignal(&task.Registry, pipeline.EventHeartbeatTimeout, func(context.Context) {
 		mu.Lock()
 		reports++
 		done := reports >= 2
@@ -354,12 +354,12 @@ func TestIdlePipelineIsCanceled(t *testing.T) {
 	task := pipeline.NewWorker(pipeline.New(newEcho()), pipeline.WorkerConfig{
 		IdleTimeout: 80 * time.Millisecond,
 	})
-	events.OnSignal(&task.Registry, pipeline.EventIdleTimeout, func(context.Context) {
+	event.OnSignal(&task.Registry, pipeline.EventIdleTimeout, func(context.Context) {
 		mu.Lock()
 		reports++
 		mu.Unlock()
 	})
-	events.On(&task.Registry, pipeline.EventPipelineFinished, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventPipelineFinished, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		finished = f
 		mu.Unlock()
@@ -393,7 +393,7 @@ func TestIdleTimeoutCanLeaveTheRunAlone(t *testing.T) {
 		IdleTimeout:         50 * time.Millisecond,
 		CancelOnIdleTimeout: &no,
 	})
-	events.OnSignal(&task.Registry, pipeline.EventIdleTimeout, func(context.Context) {
+	event.OnSignal(&task.Registry, pipeline.EventIdleTimeout, func(context.Context) {
 		mu.Lock()
 		reports++
 		done := reports >= 2
@@ -427,7 +427,7 @@ func TestActivityKeepsThePipelineAlive(t *testing.T) {
 	task := pipeline.NewWorker(pipeline.New(newEcho()), pipeline.WorkerConfig{
 		IdleTimeout: 100 * time.Millisecond,
 	})
-	events.OnSignal(&task.Registry, pipeline.EventIdleTimeout, func(context.Context) {
+	event.OnSignal(&task.Registry, pipeline.EventIdleTimeout, func(context.Context) {
 		mu.Lock()
 		reports++
 		mu.Unlock()
@@ -466,7 +466,7 @@ func TestStartMetadataRidesTheStartFrame(t *testing.T) {
 			StartMetadata: map[string]any{"call_id": "abc-123"},
 		},
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		seen = f.Base().Metadata()
 		mu.Unlock()
@@ -495,7 +495,7 @@ func TestQueueFrameUpstreamEntersAtTheEnd(t *testing.T) {
 		ReachedUpstreamFilter:   pipeline.FrameTypes(&frames.TextFrame{}),
 		ReachedDownstreamFilter: pipeline.FrameTypes(&frames.StartFrame{}),
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
 		tf, ok := f.(*frames.TextFrame)
 		if !ok {
 			return
@@ -504,7 +504,7 @@ func TestQueueFrameUpstreamEntersAtTheEnd(t *testing.T) {
 		seen = append(seen, tf.Text)
 		mu.Unlock()
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, _ frames.Frame) {})
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, _ frames.Frame) {})
 
 	done := runTask(t, task)
 	// Give the pipeline a moment to come up: a frame pushed before the
@@ -580,7 +580,7 @@ func TestASlowObserverDoesNotHoldUpThePipeline(t *testing.T) {
 		Observers:               []pipeline.Observer{slow},
 		ReachedDownstreamFilter: pipeline.FrameTypes(&frames.TextFrame{}),
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, _ frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, _ frames.Frame) {
 		once.Do(func() { close(arrived) })
 	})
 
@@ -798,12 +798,12 @@ func TestOnReachedDownstreamRegistersLateHandlers(t *testing.T) {
 	task := pipeline.NewWorker(pipeline.New(newEcho()), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.FrameTypes(&frames.TextFrame{}),
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		first = append(first, f)
 		mu.Unlock()
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		later = append(later, f)
 		mu.Unlock()
@@ -834,7 +834,7 @@ func TestSetReachedFilterReplacesTheSelection(t *testing.T) {
 	task := pipeline.NewWorker(pipeline.New(newEcho()), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		seen = append(seen, f)
 		mu.Unlock()
@@ -894,7 +894,7 @@ func TestUpstreamReachedFiltersSelectWhatIsReported(t *testing.T) {
 				errFrom = frames.NewErrorFrame("upstream report")
 			)
 			task := pipeline.NewWorker(pipeline.New(newUpstreamOnce(errFrom)), pipeline.WorkerConfig{})
-			events.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
+			event.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
 				if _, ok := f.(*frames.ErrorFrame); ok {
 					mu.Lock()
 					sawErr = true
@@ -935,7 +935,7 @@ func TestProviderTurnFramesKeepThePipelineAlive(t *testing.T) {
 		IdleTimeout:         idleTimeout,
 		CancelOnIdleTimeout: new(bool), // report the quiet, leave the run alone
 	})
-	events.OnSignal(&task.Registry, pipeline.EventIdleTimeout, func(context.Context) {
+	event.OnSignal(&task.Registry, pipeline.EventIdleTimeout, func(context.Context) {
 		mu.Lock()
 		reports++
 		mu.Unlock()

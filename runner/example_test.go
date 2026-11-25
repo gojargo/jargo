@@ -4,12 +4,12 @@ import (
 	"context"
 	"os"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/provider/cartesia"
 	"github.com/gojargo/jargo/runner"
 	"github.com/gojargo/jargo/transport"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // A bot is one function, called for every session. It builds the session's
@@ -31,7 +31,7 @@ func Example() {
 		worker := pipeline.NewWorker(pipeline.New(tts, t.Output()), pipeline.WorkerConfig{
 			IdleTimeout: args.Base().PipelineIdleTimeout,
 		})
-		events.On(t.Events(), transport.EventClientConnected, func(context.Context, any) {
+		event.On(t.Events(), transport.EventClientConnected, func(context.Context, any) {
 			worker.QueueFrames([]frames.Frame{frames.NewTTSSpeakFrame("Hello there!"), frames.NewEndFrame()})
 		})
 		return worker.Run(ctx)

@@ -19,7 +19,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/gojargo/jargo/utils/events"
+	"github.com/gojargo/jargo/event"
 	"gopkg.in/yaml.v3"
 )
 
@@ -135,7 +135,7 @@ const (
 	DefaultSpawn = "{bot} --port {port}"
 	// EventUpdate fires with a *SuiteRun whenever that run changes status:
 	//
-	//	events.On(&suite.Registry, eval.EventUpdate, func(ctx context.Context, run *eval.SuiteRun) { … })
+	//	event.On(&suite.Registry, eval.EventUpdate, func(ctx context.Context, run *eval.SuiteRun) { … })
 	//
 	// Runs are mutated in place, so handlers run synchronously, on the
 	// goroutine running that run, and must return promptly; they see the run
@@ -1002,12 +1002,12 @@ func runFilesFor(run *SuiteRun, logsDir, recordDir string) runFiles {
 //	manifest, err := eval.LoadManifest("manifest.yaml", eval.ManifestOverrides{})
 //	suite := eval.NewSuite(manifest)
 //	suite.Filter("voice", "", "")
-//	events.On(&suite.Registry, eval.EventUpdate, func(_ context.Context, run *eval.SuiteRun) {
+//	event.On(&suite.Registry, eval.EventUpdate, func(_ context.Context, run *eval.SuiteRun) {
 //		fmt.Println(run.Scenario, run.Status)
 //	})
 //	err = suite.Run(ctx, "logs", eval.SuiteRunOptions{})
 type Suite struct {
-	events.Registry
+	event.Registry
 
 	// Manifest is the parsed manifest.
 	Manifest *Manifest

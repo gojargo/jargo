@@ -23,7 +23,7 @@ import (
 	"github.com/gojargo/jargo/service/tts"
 	"github.com/gojargo/jargo/service/wsservice"
 	"github.com/gojargo/jargo/service/wsutil"
-	uctx "github.com/gojargo/jargo/utils/context"
+	"github.com/gojargo/jargo/text/align"
 )
 
 // realtimeTTSPath is the multi-stream-input endpoint. Multi-stream is what
@@ -245,7 +245,7 @@ type timedRealtimeSynthesizer struct {
 // wordClock is the word timing state of one context's alignment stream.
 type wordClock struct {
 	// acc carries a word split across alignment messages until it ends.
-	acc uctx.CharAccumulator
+	acc align.CharAccumulator
 	// cumulative is how much of this context's audio earlier messages accounted
 	// for, in seconds. ElevenLabs times each message from the start of the audio
 	// it carries, so the offsets have to be rebased onto the context's timeline;
@@ -583,7 +583,7 @@ func (s *realtimeSynthesizer) finishContext(id string) {
 	if s.cfg.WordTimestamps {
 		// The closing word ends on the utterance, not on a space.
 		s.mu.Lock()
-		var last uctx.WordTiming
+		var last align.WordTiming
 		var ok bool
 		if clock := s.wordClocks[id]; clock != nil {
 			last, ok = clock.acc.Flush()
@@ -591,7 +591,7 @@ func (s *realtimeSynthesizer) finishContext(id string) {
 		spaceless := s.spaceless
 		s.mu.Unlock()
 		if ok {
-			s.host.AddWordTimestamps(id, []uctx.WordTiming{last}, tts.WordTimingOptions{IncludesInterFrameSpaces: spaceless})
+			s.host.AddWordTimestamps(id, []align.WordTiming{last}, tts.WordTimingOptions{IncludesInterFrameSpaces: spaceless})
 		}
 	}
 	// The stop frame rides the queue behind the audio, so it is pushed only once
@@ -604,7 +604,7 @@ func (s *realtimeSynthesizer) finishContext(id string) {
 
 // wordTimesFromAlignment folds one alignment message into the words it
 // completes, on its context's own clock.
-func (s *realtimeSynthesizer) wordTimesFromAlignment(id string, a *charAlignment) []uctx.WordTiming {
+func (s *realtimeSynthesizer) wordTimesFromAlignment(id string, a *charAlignment) []align.WordTiming {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.wordClocks == nil {
@@ -614,7 +614,7 @@ func (s *realtimeSynthesizer) wordTimesFromAlignment(id string, a *charAlignment
 	if clock == nil {
 		// Each word reports where it ends, so the context after this one is
 		// timed from there rather than from where its last word starts.
-		clock = &wordClock{acc: uctx.CharAccumulator{WordEnds: true}}
+		clock = &wordClock{acc: align.CharAccumulator{WordEnds: true}}
 		s.wordClocks[id] = clock
 	}
 	starts := make([]float64, len(a.CharStartTimesMs))
@@ -909,7 +909,7 @@ func (s *timedRealtimeSynthesizer) RunTTSTimed(
 	ctx context.Context,
 	text, contextID string,
 	yield func(f frames.Frame) error,
-	_ func(words []uctx.WordTiming, opts tts.WordTimingOptions) error,
+	_ func(words []align.WordTiming, opts tts.WordTimingOptions) error,
 ) error {
 	return s.RunTTS(ctx, text, contextID, yield)
 }

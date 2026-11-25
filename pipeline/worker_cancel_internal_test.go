@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // passthrough forwards every frame, standing for an ordinary pipeline.
@@ -41,10 +41,10 @@ func startedWorker(t *testing.T) (w *Worker, finished func() []frames.Frame, sto
 	var got []frames.Frame
 	ready := make(chan struct{})
 	var once sync.Once
-	events.On(&w.Registry, EventPipelineStarted, func(context.Context, *frames.StartFrame) {
+	event.On(&w.Registry, EventPipelineStarted, func(context.Context, *frames.StartFrame) {
 		once.Do(func() { close(ready) })
 	})
-	events.On(&w.Registry, EventPipelineFinished, func(_ context.Context, f frames.Frame) {
+	event.On(&w.Registry, EventPipelineFinished, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		got = append(got, f)
 		mu.Unlock()

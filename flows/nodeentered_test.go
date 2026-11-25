@@ -12,9 +12,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor/rtvi"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // Tests for function and node metadata, the EventNodeEntered event, the RTVI
@@ -26,7 +26,7 @@ func managerWithEntered(t *testing.T, opts ...func(*Config)) (*FlowManager, *fak
 	t.Helper()
 	fm, enq := newManager(t, opts...)
 	entered := &[]NodeEntered{}
-	events.On(fm.Events(), EventNodeEntered, func(_ context.Context, e NodeEntered) {
+	event.On(fm.Events(), EventNodeEntered, func(_ context.Context, e NodeEntered) {
 		*entered = append(*entered, e)
 	})
 	return fm, enq, entered
@@ -287,7 +287,7 @@ func TestMetadataThatIsNotJSONIsLeftOutOfTheRTVIMessage(t *testing.T) {
 func TestRTVIMessageFollowsTheHandlersAndPrecedesTheLLMRun(t *testing.T) {
 	fm, enq := newManager(t)
 	queuedAtHandler := -1
-	events.On(fm.Events(), EventNodeEntered, func(context.Context, NodeEntered) {
+	event.On(fm.Events(), EventNodeEntered, func(context.Context, NodeEntered) {
 		queuedAtHandler = len(enq.frames())
 	})
 
@@ -427,7 +427,7 @@ func TestHandlerRunsAfterTheNodeIsSetAndBeforeTheLLMRuns(t *testing.T) {
 	var current string
 	var before []string
 	calls := 0
-	events.On(fm.Events(), EventNodeEntered, func(context.Context, NodeEntered) {
+	event.On(fm.Events(), EventNodeEntered, func(context.Context, NodeEntered) {
 		calls++
 		current = fm.CurrentNode()
 		before = queuedFrameTypes(enq)
@@ -455,10 +455,10 @@ func TestHandlerRunsAfterTheNodeIsSetAndBeforeTheLLMRuns(t *testing.T) {
 func TestFailingHandlerDoesNotStopTheTransition(t *testing.T) {
 	fm, enq := newManager(t)
 	var later []string
-	events.On(fm.Events(), EventNodeEntered, func(context.Context, NodeEntered) {
+	event.On(fm.Events(), EventNodeEntered, func(context.Context, NodeEntered) {
 		panic("handler failed") //nolint:forbidigo // the failing handler under test
 	})
-	events.On(fm.Events(), EventNodeEntered, func(_ context.Context, e NodeEntered) {
+	event.On(fm.Events(), EventNodeEntered, func(_ context.Context, e NodeEntered) {
 		later = append(later, e.Node)
 	})
 

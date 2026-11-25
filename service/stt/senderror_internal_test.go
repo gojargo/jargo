@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // errSendRefused is a session refusing audio.
@@ -50,7 +50,7 @@ func sendErrors(t *testing.T, st Stream) []string {
 	var mu sync.Mutex
 	var errs []string
 	task := pipeline.NewWorker(pipeline.New(s), pipeline.WorkerConfig{ReachedUpstreamFilter: pipeline.AnyFrame})
-	events.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
 		if ef, ok := f.(*frames.ErrorFrame); ok {
 			mu.Lock()
 			errs = append(errs, ef.Error)

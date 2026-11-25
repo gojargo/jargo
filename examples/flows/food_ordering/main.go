@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/gojargo/jargo/audio/vad"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/examples/flows/utils"
 	"github.com/gojargo/jargo/flows"
 	"github.com/gojargo/jargo/frames"
@@ -44,7 +45,6 @@ import (
 	"github.com/gojargo/jargo/transport"
 	"github.com/gojargo/jargo/transport/wsserver"
 	"github.com/gojargo/jargo/transport/wsserver/evalws"
-	"github.com/gojargo/jargo/utils/events"
 	"github.com/gojargo/jargo/workers"
 )
 
@@ -422,7 +422,7 @@ func runBot(ctx context.Context, t transport.Transport, args runner.Arguments) e
 		return err
 	}
 
-	events.On(t.Events(), transport.EventClientConnected, func(ctx context.Context, _ any) {
+	event.On(t.Events(), transport.EventClientConnected, func(ctx context.Context, _ any) {
 		slog.Info("Client connected")
 		// Kick off the conversation with the initial node.
 		if err := flowManager.Initialize(ctx, createInitialNode()); err != nil {
@@ -430,7 +430,7 @@ func runBot(ctx context.Context, t transport.Transport, args runner.Arguments) e
 		}
 	})
 
-	events.On(t.Events(), transport.EventClientDisconnected, func(ctx context.Context, _ any) {
+	event.On(t.Events(), transport.EventClientDisconnected, func(ctx context.Context, _ any) {
 		slog.Info("Client disconnected")
 		r.Cancel(ctx, "client disconnected")
 	})

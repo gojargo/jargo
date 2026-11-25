@@ -6,9 +6,9 @@ import (
 	"log/slog"
 	"sync"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // The built-in action types.
@@ -63,7 +63,7 @@ func NewActionFinishedFrame() *ActionFinishedFrame {
 type Watcher interface {
 	// Events is where the handler for the frames reaching the end of the
 	// pipeline is attached.
-	Events() *events.Registry
+	Events() *event.Registry
 	SetReachedDownstreamFilter(f pipeline.FrameFilter)
 }
 
@@ -110,7 +110,7 @@ func newActionManager(enq Enqueuer, watch Watcher, fm *FlowManager) *actionManag
 			&FunctionActionFrame{},
 			&frames.BotStoppedSpeakingFrame{},
 		))
-		events.On(watch.Events(), pipeline.EventFrameReachedDownstream,
+		event.On(watch.Events(), pipeline.EventFrameReachedDownstream,
 			func(_ context.Context, f frames.Frame) { am.frameReachedDownstream(f) })
 	}
 	return am

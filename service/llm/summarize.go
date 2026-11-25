@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"github.com/gojargo/jargo/frames"
-	uctx "github.com/gojargo/jargo/utils/context"
+	"github.com/gojargo/jargo/text/align"
 )
 
 // The ways a summary generation can fail before it reaches the model.
@@ -46,7 +46,7 @@ func GenerateSummary(
 	inf Inferencer,
 	request *frames.LLMContextSummaryRequestFrame,
 ) (string, int, error) {
-	selected := uctx.GetMessagesToSummarize(request.Context, request.MinMessagesToKeep)
+	selected := align.GetMessagesToSummarize(request.Context, request.MinMessagesToKeep)
 	if len(selected.Messages) == 0 {
 		return "", -1, ErrNothingToSummarize
 	}
@@ -56,7 +56,7 @@ func GenerateSummary(
 		"last_index", selected.LastSummarizedIndex,
 		"target_tokens", request.TargetContextTokens)
 
-	transcript := uctx.FormatMessagesForSummary(selected.Messages)
+	transcript := align.FormatMessagesForSummary(selected.Messages)
 	convo := frames.NewLLMContext("")
 	convo.SetMessages([]frames.Message{{
 		Role: frames.RoleUser,

@@ -11,7 +11,7 @@ import (
 	"strings"
 	"unicode"
 
-	uctx "github.com/gojargo/jargo/utils/context"
+	"github.com/gojargo/jargo/text/align"
 )
 
 // markSpan returns a mark's character span within the synthesized text, if it
@@ -97,9 +97,9 @@ func newSpeechMarkAccumulator(text string, timeOffset float64) *speechMarkAccumu
 // add takes one event's speech marks, the speech_marks payload of a
 // speech.chunk event (absent on an audio-only event), and returns the words
 // they complete.
-func (a *speechMarkAccumulator) add(speechMarks any) []uctx.WordTiming {
+func (a *speechMarkAccumulator) add(speechMarks any) []align.WordTiming {
 	marks, _ := speechMarks.([]any)
-	var words []uctx.WordTiming
+	var words []align.WordTiming
 	for _, raw := range marks {
 		mark, ok := raw.(map[string]any)
 		if !ok {
@@ -118,7 +118,7 @@ func (a *speechMarkAccumulator) add(speechMarks any) []uctx.WordTiming {
 			words = append(words, a.flush()...)
 			value, _ := mark["value"].(string)
 			if value = strings.TrimSpace(value); value != "" {
-				words = append(words, uctx.WordTiming{Word: value, Offset: startTime})
+				words = append(words, align.WordTiming{Word: value, Offset: startTime})
 			}
 			continue
 		}
@@ -138,7 +138,7 @@ func (a *speechMarkAccumulator) add(speechMarks any) []uctx.WordTiming {
 }
 
 // flush releases the word still being assembled, if any.
-func (a *speechMarkAccumulator) flush() []uctx.WordTiming {
+func (a *speechMarkAccumulator) flush() []align.WordTiming {
 	if a.pending == nil {
 		return nil
 	}
@@ -148,7 +148,7 @@ func (a *speechMarkAccumulator) flush() []uctx.WordTiming {
 	if word == "" {
 		return nil
 	}
-	return []uctx.WordTiming{{Word: word, Offset: p.startTime}}
+	return []align.WordTiming{{Word: word, Offset: p.startTime}}
 }
 
 // sseEvent is one server-sent event: its name and its decoded data, with the

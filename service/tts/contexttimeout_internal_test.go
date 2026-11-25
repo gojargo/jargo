@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // runBase drives base with send, honoring sleepFrames between them, and returns
@@ -20,7 +20,7 @@ func runBase(t *testing.T, base *Base, send ...frames.Frame) []frames.Frame {
 	})
 	var mu sync.Mutex
 	var down []frames.Frame
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		down = append(down, f)
 		mu.Unlock()

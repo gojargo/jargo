@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/service/tts"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // handOffSynth stands for a provider holding a connection of its own: RunTTS
@@ -46,7 +46,7 @@ func processingMetrics(t *testing.T, syn tts.Synthesizer, text string) int {
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 		Params:                  pipeline.Params{EnableMetrics: true, SendInitialEmptyMetrics: &noInitial},
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if mf, ok := f.(*frames.MetricsFrame); ok {
 			for _, d := range mf.Data {
 				if _, ok := d.(frames.ProcessingMetricsData); ok {

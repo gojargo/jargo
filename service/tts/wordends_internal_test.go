@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"github.com/gojargo/jargo/frames"
-	uctx "github.com/gojargo/jargo/utils/context"
-	"github.com/gojargo/jargo/utils/timeutil"
+	"github.com/gojargo/jargo/internal/timeutil"
+	"github.com/gojargo/jargo/text/align"
 )
 
 // perCallWordSynth answers inline, the way an HTTP provider does, reporting the
@@ -21,7 +21,7 @@ import (
 // reports no words for that call.
 type perCallWordSynth struct {
 	mu    sync.Mutex
-	calls [][]uctx.WordTiming
+	calls [][]align.WordTiming
 }
 
 func (s *perCallWordSynth) SampleRate() int { return alignSampleRate }
@@ -33,10 +33,10 @@ func (s *perCallWordSynth) RunTTS(_ context.Context, _, _ string, yield func(fra
 func (s *perCallWordSynth) RunTTSTimed(
 	ctx context.Context, text, contextID string,
 	yield func(frames.Frame) error,
-	word func([]uctx.WordTiming, WordTimingOptions) error,
+	word func([]align.WordTiming, WordTimingOptions) error,
 ) error {
 	s.mu.Lock()
-	var words []uctx.WordTiming
+	var words []align.WordTiming
 	if len(s.calls) > 0 {
 		words, s.calls = s.calls[0], s.calls[1:]
 	}
@@ -71,7 +71,7 @@ func wordPTSByText(down []frames.Frame) map[string]int64 {
 // arrives while the one before is still playing. It is timed from where that
 // context's words end, not where its last word starts.
 func TestNextContextWordsStartWherePreviousWordsEnd(t *testing.T) {
-	synth := &perCallWordSynth{calls: [][]uctx.WordTiming{
+	synth := &perCallWordSynth{calls: [][]align.WordTiming{
 		{{Word: "Hello", Offset: 0.0, End: 0.3}, {Word: "there.", Offset: 0.3, End: 0.8}},
 		{{Word: "Bye", Offset: 0.0, End: 0.2}, {Word: "now.", Offset: 0.2, End: 0.5}},
 	}}
@@ -91,7 +91,7 @@ func TestNextContextWordsStartWherePreviousWordsEnd(t *testing.T) {
 // interruption: where they would have ended does not delay the next context's
 // words.
 func TestInterruptionForgetsWhereDroppedWordsEnd(t *testing.T) {
-	synth := &perCallWordSynth{calls: [][]uctx.WordTiming{
+	synth := &perCallWordSynth{calls: [][]align.WordTiming{
 		{{Word: "Hello.", Offset: 0.0, End: 30.0}},
 		{{Word: "Bye.", Offset: 0.0, End: 0.2}},
 	}}

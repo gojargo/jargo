@@ -12,9 +12,9 @@ import (
 	"time"
 
 	"github.com/gojargo/jargo/bus"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/pipeline/jobcontext"
 	"github.com/gojargo/jargo/registry"
-	"github.com/gojargo/jargo/utils/events"
 	"github.com/gojargo/jargo/workers"
 )
 
@@ -1458,7 +1458,7 @@ func TestWorkerErrorReachesTheParent(t *testing.T) {
 
 	var mu sync.Mutex
 	var got []registry.WorkerErrorData
-	events.On(parent.Events(), workers.EventWorkerFailed,
+	event.On(parent.Events(), workers.EventWorkerFailed,
 		func(_ context.Context, data registry.WorkerErrorData) {
 			mu.Lock()
 			got = append(got, data)

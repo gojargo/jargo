@@ -11,9 +11,9 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // dgResults is a live transcription result as Deepgram sends it.
@@ -75,7 +75,7 @@ func runTranscription(t *testing.T, endpoint string) *transcriptionRun {
 	svc := NewSTT(sttConfigFor(endpoint))
 	run := &transcriptionRun{done: make(chan error, 1), got: make(chan frames.Frame, 16)}
 	run.task = pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{ReachedDownstreamFilter: pipeline.AnyFrame})
-	events.On(&run.task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&run.task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		switch f.(type) {
 		case *frames.TranscriptionFrame, *frames.InterimTranscriptionFrame, *frames.TranscriptionFinalizedFrame:
 			run.mu.Lock()

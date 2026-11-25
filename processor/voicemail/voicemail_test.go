@@ -11,12 +11,12 @@ import (
 	"time"
 
 	"github.com/gojargo/jargo/classifier"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/processor/voicemail"
 	llmservice "github.com/gojargo/jargo/service/llm"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 const (
@@ -177,7 +177,7 @@ func run(t *testing.T, procs []processor.Processor, script ...any) ([]frames.Fra
 		mu   sync.Mutex
 		down []frames.Frame
 	)
-	events.On(&w.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&w.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		down = append(down, f)
 		mu.Unlock()
@@ -477,7 +477,7 @@ func TestHandlerEndsTheWorker(t *testing.T) {
 	for _, dir := range []processor.Direction{processor.Upstream, processor.Downstream} {
 		t.Run(dir.String(), func(t *testing.T) {
 			d, _ := newDetector(t, voicemail.Config{}, answer{label: "voicemail", confidence: 0.95})
-			events.OnSignal(d.Events(), voicemail.EventVoicemailDetected, func(ctx context.Context) {
+			event.OnSignal(d.Events(), voicemail.EventVoicemailDetected, func(ctx context.Context) {
 				end := frames.NewEndWorkerFrame()
 				end.Reason = "Voicemail detected."
 				_ = d.PushFrame(ctx, end, dir)

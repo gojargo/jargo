@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/service/llm"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // errConnection is what a provider reports when the exchange itself failed.
@@ -57,14 +57,14 @@ func TestACompletionTimeoutIsReportedAndAnnounced(t *testing.T) {
 		ReachedUpstreamFilter:   pipeline.AnyFrame,
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
 		if fr, ok := f.(*frames.ErrorFrame); ok {
 			mu.Lock()
 			errs = append(errs, fr.Error)
 			mu.Unlock()
 		}
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		defer mu.Unlock()
 		switch f.(type) {
@@ -128,14 +128,14 @@ func TestAnOrdinaryFailureIsNotAnnouncedAsATimeout(t *testing.T) {
 		ReachedUpstreamFilter:   pipeline.AnyFrame,
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
 		if fr, ok := f.(*frames.ErrorFrame); ok {
 			mu.Lock()
 			errs = append(errs, fr.Error)
 			mu.Unlock()
 		}
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		defer mu.Unlock()
 		if _, ok := f.(*frames.LLMFullResponseEndFrame); ok {

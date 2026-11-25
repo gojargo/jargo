@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // waitTimeout bounds every wait in these tests.
@@ -214,7 +214,7 @@ func (r *sttRun) start(t *testing.T, downstream ...processor.Processor) {
 		IdleTimeout:           -1,
 		ReachedUpstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&r.task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
+	event.On(&r.task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
 		r.mu.Lock()
 		defer r.mu.Unlock()
 		r.up = append(r.up, f)

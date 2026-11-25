@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gojargo/jargo/errclass"
 	"github.com/gojargo/jargo/frames"
-	errs "github.com/gojargo/jargo/utils/errors"
 )
 
 // This package cannot use internal/providertest: that package builds on this one
@@ -349,12 +349,12 @@ func TestGenerateStatusError(t *testing.T) {
 func TestGenerateStatusErrorCategory(t *testing.T) {
 	cases := []struct {
 		status int
-		want   errs.Category
+		want   errclass.Category
 	}{
-		{http.StatusUnauthorized, errs.Authentication},
-		{http.StatusNotFound, errs.InvalidRequest},
-		{http.StatusTooManyRequests, errs.RateLimit},
-		{http.StatusServiceUnavailable, errs.Server},
+		{http.StatusUnauthorized, errclass.Authentication},
+		{http.StatusNotFound, errclass.InvalidRequest},
+		{http.StatusTooManyRequests, errclass.RateLimit},
+		{http.StatusServiceUnavailable, errclass.Server},
 	}
 	for _, c := range cases {
 		t.Run(strconv.Itoa(c.status), func(t *testing.T) {
@@ -365,10 +365,10 @@ func TestGenerateStatusErrorCategory(t *testing.T) {
 
 			svc := NewLLM(LLMConfig{APIKey: "k", BaseURL: srv.URL})
 			err := svc.Generate(t.Context(), frames.NewLLMContext(""), func(string) error { return nil })
-			if got, ok := errs.ExtractHTTPStatusCode(err); !ok || got != c.status {
+			if got, ok := errclass.ExtractHTTPStatusCode(err); !ok || got != c.status {
 				t.Fatalf("status = %d (%t), want %d", got, ok, c.status)
 			}
-			if got := errs.ClassifyError(err); got != c.want {
+			if got := errclass.Classify(err); got != c.want {
 				t.Errorf("category = %q, want %q", got, c.want)
 			}
 		})
@@ -580,17 +580,17 @@ func TestEncodeBodyWithoutExtra(t *testing.T) {
 func TestContentFilterKeepsTheLLMUsable(t *testing.T) {
 	cases := []struct {
 		name, body string
-		want       errs.Category
+		want       errclass.Category
 	}{
 		{
 			"content filter",
 			`{"error":{"message":"The response was filtered","param":"prompt","code":"content_filter","status":400}}`,
-			errs.ContentFiltered,
+			errclass.ContentFiltered,
 		},
 		{
 			"other bad request",
 			`{"error":{"message":"Invalid value","type":"invalid_request_error","code":"invalid_value"}}`,
-			errs.InvalidRequest,
+			errclass.InvalidRequest,
 		},
 	}
 	for _, c := range cases {
@@ -608,7 +608,7 @@ func TestContentFilterKeepsTheLLMUsable(t *testing.T) {
 			if ef.Category != c.want {
 				t.Errorf("error frame category = %q, want %q", ef.Category, c.want)
 			}
-			if usable := svc.Usable(); usable != (c.want == errs.ContentFiltered) {
+			if usable := svc.Usable(); usable != (c.want == errclass.ContentFiltered) {
 				t.Errorf("Usable = %v after a %s", usable, c.name)
 			}
 		})

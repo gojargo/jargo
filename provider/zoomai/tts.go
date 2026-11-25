@@ -12,12 +12,12 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/gojargo/jargo/errclass"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/internal/zoomaiutil"
 	"github.com/gojargo/jargo/service/settings"
 	"github.com/gojargo/jargo/service/tts"
-	errs "github.com/gojargo/jargo/utils/errors"
 )
 
 const (
@@ -185,7 +185,7 @@ func (s *httpSynthesizer) RunTTS(ctx context.Context, text, _ string, yield func
 // an error naming the request's tracking ID, and ends this request alone.
 func (s *httpSynthesizer) synthesize(ctx context.Context, text string, yield func(f frames.Frame) error) error {
 	trackingID := zoomaiutil.NewTrackingID()
-	fail := func(message string, cause error, category errs.Category) error {
+	fail := func(message string, cause error, category errclass.Category) error {
 		if ctx.Err() != nil {
 			// An interruption closed the request, which is how Zoom TTS is told
 			// to stop synthesizing.
@@ -198,7 +198,7 @@ func (s *httpSynthesizer) synthesize(ctx context.Context, text string, yield fun
 	}
 	requestFailed := func(err error) error {
 		return fail(fmt.Sprintf("Zoom TTS request failed (%s %s): %v", headerTrackingID, trackingID, err),
-			err, errs.Unset)
+			err, errclass.Unset)
 	}
 
 	// Non-ASCII text stays UTF-8 rather than \u escapes, which keeps a request
@@ -226,7 +226,7 @@ func (s *httpSynthesizer) synthesize(ctx context.Context, text string, yield fun
 	if resp.StatusCode != http.StatusOK {
 		detail := describeError(resp)
 		return fail(fmt.Sprintf("Zoom TTS error: %s (%s %s)", detail, headerTrackingID, trackingID),
-			nil, errs.ClassifyHTTPStatusCode(resp.StatusCode))
+			nil, errclass.ClassifyHTTPStatusCode(resp.StatusCode))
 	}
 	slog.DebugContext(ctx, "zoom tts: synthesizing", headerTrackingID, trackingID)
 	tts.StartUsageMetrics(ctx, text)
@@ -247,7 +247,7 @@ func (s *httpSynthesizer) synthesize(ctx context.Context, text string, yield fun
 			// Once audio is streaming the status can't change, so a synthesis
 			// failure ends the response early instead.
 			return fail(fmt.Sprintf("Zoom TTS stream ended early (%s %s): %v",
-				headerTrackingID, trackingID, readErr), readErr, errs.Server)
+				headerTrackingID, trackingID, readErr), readErr, errclass.Server)
 		case readErr != nil:
 			return requestFailed(readErr)
 		}

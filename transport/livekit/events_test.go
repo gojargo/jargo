@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/transport"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // TestOnParticipantDisconnectedDeliversWhoLeftFirst checks a departure before
@@ -106,7 +106,7 @@ func TestFirstParticipantAndDataEvents(t *testing.T) {
 	firsts := make(chan string, 4)
 	data := make(chan string, 4)
 	apps := make(chan string, 4)
-	events.On(tr.Events(), EventFirstParticipantJoined, func(_ context.Context, id string) { firsts <- id })
+	event.On(tr.Events(), EventFirstParticipantJoined, func(_ context.Context, id string) { firsts <- id })
 	tr.Events().Add(EventDataReceived, func(_ context.Context, _ any, args ...any) {
 		raw, _ := args[0].([]byte)
 		data <- string(raw)
@@ -177,7 +177,7 @@ func runInput(t *testing.T, tr *Transport) *frameLog {
 	w := pipeline.NewWorker(pipeline.New(tr.Input()), pipeline.WorkerConfig{
 		IdleTimeout: -1, ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&w.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&w.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		log.add(f)
 	})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -235,7 +235,7 @@ func TestDTMFIsRaisedAndPushed(t *testing.T) {
 	conn := &Connection{}
 	tr := NewTransport(conn, transport.DefaultParams())
 	raised := make(chan DTMFEvent, 4)
-	events.On(tr.Events(), EventDTMF, func(_ context.Context, e DTMFEvent) { raised <- e })
+	event.On(tr.Events(), EventDTMF, func(_ context.Context, e DTMFEvent) { raised <- e })
 	log := runInput(t, tr)
 
 	conn.deliverDTMF(DTMFEvent{Tone: "5", Digit: "5", Code: 5, ParticipantID: "sip"})
@@ -267,10 +267,10 @@ func TestRoomEventsAreRaised(t *testing.T) {
 	tr := NewTransport(conn, transport.DefaultParams())
 	got := make(chan string, 16)
 	tr.Events().Add(EventConnected, func(context.Context, any, ...any) { got <- "connected" })
-	events.On(tr.Events(), EventAudioTrackUnsubscribed, func(_ context.Context, id string) {
+	event.On(tr.Events(), EventAudioTrackUnsubscribed, func(_ context.Context, id string) {
 		got <- "unsubscribed:" + id
 	})
-	events.On(tr.Events(), EventActiveSpeakerChanged, func(_ context.Context, c Client) {
+	event.On(tr.Events(), EventActiveSpeakerChanged, func(_ context.Context, c Client) {
 		got <- "speaker:" + c.ID
 	})
 	tr.Events().Add(EventBeforeDisconnect, func(context.Context, any, ...any) { got <- "before" })

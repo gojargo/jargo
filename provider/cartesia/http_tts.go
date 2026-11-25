@@ -15,12 +15,12 @@ import (
 	"io"
 	"net/http"
 
+	"github.com/gojargo/jargo/errclass"
 	"github.com/gojargo/jargo/expressive"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/service/tts"
-	errs "github.com/gojargo/jargo/utils/errors"
 )
 
 const (
@@ -194,7 +194,7 @@ func (s *httpSynthesizer) RunTTS(
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, httpTTSErrorBodyLimit))
-		return errs.NewHTTPStatusError(resp.StatusCode,
+		return errclass.NewHTTPStatusError(resp.StatusCode,
 			fmt.Errorf("%w %d: %s", errHTTPTTSStatus, resp.StatusCode, msg))
 	}
 	tts.StartUsageMetrics(ctx, text)

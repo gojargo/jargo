@@ -29,7 +29,7 @@ import (
 	"github.com/gojargo/jargo/internal/ordered"
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/internal/zoomaiutil"
-	"github.com/gojargo/jargo/utils/network"
+	"github.com/gojargo/jargo/retry"
 )
 
 const (
@@ -391,7 +391,7 @@ func (c *Client) post(ctx context.Context, body []byte) (map[string]any, error) 
 		}
 		if r.status == tooManyRequests || r.status == overloaded {
 			wait := max(
-				network.ExponentialBackoffTime(attempt, minRetryWait, maxRetryWait, retryMultiplier),
+				retry.ExponentialBackoffTime(attempt, minRetryWait, maxRetryWait, retryMultiplier),
 				retryAfter(r.header),
 			)
 			if attempt > c.maxRetries || wait > time.Until(deadline) {

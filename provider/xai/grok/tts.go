@@ -21,7 +21,7 @@ import (
 	"github.com/gojargo/jargo/service/tts"
 	"github.com/gojargo/jargo/service/wsservice"
 	"github.com/gojargo/jargo/service/wsutil"
-	uctx "github.com/gojargo/jargo/utils/context"
+	"github.com/gojargo/jargo/text/align"
 )
 
 const (
@@ -257,7 +257,7 @@ type ttsSynthesizer struct {
 	tsMu sync.Mutex
 	// tsContextID is the context the words being assembled belong to.
 	tsContextID string
-	words       uctx.CharAccumulator
+	words       align.CharAccumulator
 }
 
 // timedTTSSynthesizer adds word timing on top of ttsSynthesizer. It implements
@@ -274,7 +274,7 @@ func (s *timedTTSSynthesizer) RunTTSTimed(
 	ctx context.Context,
 	text, contextID string,
 	yield func(f frames.Frame) error,
-	_ func(words []uctx.WordTiming, opts tts.WordTimingOptions) error,
+	_ func(words []align.WordTiming, opts tts.WordTimingOptions) error,
 ) error {
 	return s.RunTTS(ctx, text, contextID, yield)
 }
@@ -562,10 +562,10 @@ func (s *ttsSynthesizer) handleAudioDone(ctx context.Context, contextID string) 
 		return
 	}
 	s.tsMu.Lock()
-	var last []uctx.WordTiming
+	var last []align.WordTiming
 	if s.tsContextID == contextID {
 		if w, ok := s.words.Flush(); ok {
-			last = []uctx.WordTiming{w}
+			last = []align.WordTiming{w}
 		}
 	}
 	s.resetTimestampStateLocked()

@@ -40,9 +40,9 @@ import (
 	"time"
 
 	"github.com/gojargo/jargo/bus"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/pipeline/jobcontext"
 	"github.com/gojargo/jargo/registry"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // The events a worker raises. Attach handlers with the Add method it inherits
@@ -218,7 +218,7 @@ var nameCounter atomic.Uint64
 // its data messages on separate goroutines, so a cancel arrives while the work
 // it is calling off is still being handled.
 type Base struct {
-	events.Registry
+	event.Registry
 
 	// self is the worker this base belongs to, so a hook reaches the worker's
 	// own version rather than the base's.
@@ -344,10 +344,10 @@ func (w *Base) base() *Base { return w }
 func (w *Base) Name() string { return w.name }
 
 // Events is the worker's event registry, which is where a typed handler is
-// attached with events.On:
+// attached with event.On:
 //
-//	events.On(worker.Events(), pipeline.EventPipelineFinished, handler)
-func (w *Base) Events() *events.Registry { return &w.Registry }
+//	event.On(worker.Events(), pipeline.EventPipelineFinished, handler)
+func (w *Base) Events() *event.Registry { return &w.Registry }
 
 // Bridged reports whether the worker is bridged onto the bus. A worker that
 // wraps its pipeline in bus edges overrides it.

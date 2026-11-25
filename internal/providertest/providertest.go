@@ -17,9 +17,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gojargo/jargo/errclass"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/provider/openai/chat"
-	errs "github.com/gojargo/jargo/utils/errors"
 )
 
 // CompatLLMBuilder builds an OpenAI-compatible LLM service from a config, i.e.
@@ -85,11 +85,11 @@ func CompatLLM(t *testing.T, wantName, wantModel string, build CompatLLMBuilder)
 		// will keep giving, which is a question about the status it refused
 		// with. A provider that reports the status only in the message leaves
 		// every refusal looking alike.
-		for status, want := range map[int]errs.Category{
-			http.StatusUnauthorized:       errs.Authentication,
-			http.StatusNotFound:           errs.InvalidRequest,
-			http.StatusTooManyRequests:    errs.RateLimit,
-			http.StatusServiceUnavailable: errs.Server,
+		for status, want := range map[int]errclass.Category{
+			http.StatusUnauthorized:       errclass.Authentication,
+			http.StatusNotFound:           errclass.InvalidRequest,
+			http.StatusTooManyRequests:    errclass.RateLimit,
+			http.StatusServiceUnavailable: errclass.Server,
 		} {
 			t.Run(strconv.Itoa(status), func(t *testing.T) {
 				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -99,10 +99,10 @@ func CompatLLM(t *testing.T, wantName, wantModel string, build CompatLLMBuilder)
 
 				svc := build(chat.LLMConfig{APIKey: "k", BaseURL: srv.URL})
 				err := svc.Generate(t.Context(), frames.NewLLMContext(""), func(string) error { return nil })
-				if got, ok := errs.ExtractHTTPStatusCode(err); !ok || got != status {
+				if got, ok := errclass.ExtractHTTPStatusCode(err); !ok || got != status {
 					t.Fatalf("status = %d (%t), want %d", got, ok, status)
 				}
-				if got := errs.ClassifyError(err); got != want {
+				if got := errclass.Classify(err); got != want {
 					t.Errorf("category = %q, want %q", got, want)
 				}
 			})

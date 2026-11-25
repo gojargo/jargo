@@ -13,13 +13,13 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/gojargo/jargo/errclass"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/provider/google/internal/gcloud"
 	"github.com/gojargo/jargo/service/settings"
 	"github.com/gojargo/jargo/service/tts"
-	errs "github.com/gojargo/jargo/utils/errors"
 	"golang.org/x/oauth2"
 )
 
@@ -406,7 +406,7 @@ func (s *ttsSynthesizer) fetchPCM(req *http.Request) ([]byte, error) {
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return nil, errs.NewHTTPStatusError(resp.StatusCode, fmt.Errorf("%w %d: %s", errStatus, resp.StatusCode, msg))
+		return nil, errclass.NewHTTPStatusError(resp.StatusCode, fmt.Errorf("%w %d: %s", errStatus, resp.StatusCode, msg))
 	}
 	var out struct {
 		AudioContent string `json:"audioContent"` //nolint:tagliatelle // Google REST uses camelCase keys

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	errs "github.com/gojargo/jargo/utils/errors"
+	"github.com/gojargo/jargo/errclass"
 )
 
 // refusingServer refuses every WebSocket handshake with status, explaining it
@@ -38,7 +38,7 @@ func TestFluxSTTRefusalReportsDeepgramsReason(t *testing.T) {
 	if want := "Deepgram refused the connection (HTTP 400): " + reason; err == nil || err.Error() != want {
 		t.Errorf("error = %v, want %q", err, want)
 	}
-	if got := errs.ClassifyError(err); !got.IsPermanent() {
+	if got := errclass.Classify(err); !got.IsPermanent() {
 		t.Errorf("category = %v, want a permanent one", got)
 	}
 }

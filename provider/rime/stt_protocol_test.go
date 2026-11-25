@@ -15,10 +15,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/errclass"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/provider/rime/internal/rimepb"
 	"github.com/gojargo/jargo/provider/rime/internal/rimepcm"
-	errs "github.com/gojargo/jargo/utils/errors"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -360,8 +360,8 @@ func TestSTTInsufficientCreditsIsAQuotaFailure(t *testing.T) {
 		code: codes.PermissionDenied, detail: "No credits", errorKind: kindInsufficientCredits,
 	}
 	ef := r.waitErrors(t, 1)[0]
-	if ef.Category != errs.Quota {
-		t.Errorf("category = %v, want %v", ef.Category, errs.Quota)
+	if ef.Category != errclass.Quota {
+		t.Errorf("category = %v, want %v", ef.Category, errclass.Quota)
 	}
 	if re := asRimeError(ef.Err); re == nil || re.kind != kindBilling {
 		t.Errorf("error = %v, want a billing failure", ef.Err)
@@ -379,16 +379,16 @@ func TestSTTInsufficientCreditsIsAQuotaFailure(t *testing.T) {
 func TestSTTGRPCFailureCategoryAndRequestID(t *testing.T) {
 	cases := []struct {
 		code     codes.Code
-		category errs.Category
+		category errclass.Category
 		usable   bool
 	}{
-		{codes.Unauthenticated, errs.Authentication, false},
-		{codes.PermissionDenied, errs.Authorization, false},
-		{codes.InvalidArgument, errs.InvalidRequest, false},
-		{codes.ResourceExhausted, errs.Unknown, true},
-		{codes.Unavailable, errs.Connectivity, true},
-		{codes.DeadlineExceeded, errs.Connectivity, true},
-		{codes.Internal, errs.Unknown, true},
+		{codes.Unauthenticated, errclass.Authentication, false},
+		{codes.PermissionDenied, errclass.Authorization, false},
+		{codes.InvalidArgument, errclass.InvalidRequest, false},
+		{codes.ResourceExhausted, errclass.Unknown, true},
+		{codes.Unavailable, errclass.Connectivity, true},
+		{codes.DeadlineExceeded, errclass.Connectivity, true},
+		{codes.Internal, errclass.Unknown, true},
 	}
 	for _, c := range cases {
 		t.Run(c.code.String(), func(t *testing.T) {

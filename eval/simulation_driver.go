@@ -14,7 +14,7 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/pytext"
 	"github.com/gojargo/jargo/service/llm"
-	"github.com/gojargo/jargo/utils/text"
+	"github.com/gojargo/jargo/text"
 )
 
 // The simulation driver: lets the persona hold the conversation, then judges the

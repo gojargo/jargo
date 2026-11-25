@@ -6,13 +6,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor/aggregators"
 	"github.com/gojargo/jargo/processor/turns"
 	"github.com/gojargo/jargo/provider/anthropic"
 	"github.com/gojargo/jargo/service/llm/adapter"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // Tests for what an aggregator reports about the turns it assembles: the events
@@ -63,7 +63,7 @@ func watchAssistant(a *aggregators.AssistantAggregator) *turnLog {
 		l.started++
 		l.mu.Unlock()
 	})
-	events.On(a.Events(), aggregators.EventAssistantTurnStopped,
+	event.On(a.Events(), aggregators.EventAssistantTurnStopped,
 		func(_ context.Context, t aggregators.AssistantTurnStopped) {
 			l.mu.Lock()
 			l.assistant = append(l.assistant, t)
@@ -156,7 +156,7 @@ func TestAssistantAnnouncesTheTurnToThePipeline(t *testing.T) {
 	task := pipeline.NewWorker(pipeline.New(pair.Assistant()), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		select {
 		case seen <- f:
 		default:
@@ -196,7 +196,7 @@ func TestAssistantStampsTheMessageItWrote(t *testing.T) {
 	task := pipeline.NewWorker(pipeline.New(pair.Assistant()), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		select {
 		case seen <- f:
 		default:
@@ -238,13 +238,13 @@ func TestUserReportsTheTurnItCollected(t *testing.T) {
 		},
 	}))
 	log := &turnLog{}
-	events.On(pair.User().Events(), aggregators.EventUserTurnStopped,
+	event.On(pair.User().Events(), aggregators.EventUserTurnStopped,
 		func(_ context.Context, tr aggregators.UserTurnStopped) {
 			log.mu.Lock()
 			log.user = append(log.user, tr)
 			log.mu.Unlock()
 		})
-	events.On(pair.User().Events(), aggregators.EventUserTurnMessageAdded,
+	event.On(pair.User().Events(), aggregators.EventUserTurnMessageAdded,
 		func(_ context.Context, m aggregators.UserTurnMessageAdded) {
 			log.mu.Lock()
 			log.messages = append(log.messages, m)
@@ -369,7 +369,7 @@ func TestAssistantRecordsAThought(t *testing.T) {
 
 	var mu sync.Mutex
 	var thoughts []aggregators.AssistantThought
-	events.On(pair.Assistant().Events(), aggregators.EventAssistantThought,
+	event.On(pair.Assistant().Events(), aggregators.EventAssistantThought,
 		func(_ context.Context, th aggregators.AssistantThought) {
 			mu.Lock()
 			thoughts = append(thoughts, th)
@@ -498,12 +498,12 @@ func TestUserAnnouncesTheTurnToThePipeline(t *testing.T) {
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 		ReachedUpstreamFilter:   pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		down = append(down, f)
 		mu.Unlock()
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		up = append(up, f)
 		mu.Unlock()

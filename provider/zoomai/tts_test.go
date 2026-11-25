@@ -16,12 +16,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/errclass"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/providertest"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/service/tts"
-	errs "github.com/gojargo/jargo/utils/errors"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // Tests for the Zoom TTS service, against a local HTTP server.
@@ -150,12 +150,12 @@ func runTest(t *testing.T, svc *tts.Base, steps ...step) (down, up []frames.Fram
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 		ReachedUpstreamFilter:   pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		down = append(down, f)
 		mu.Unlock()
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		up = append(up, f)
 		mu.Unlock()
@@ -328,8 +328,8 @@ func TestUnsupportedVoiceReportsZoomReasonAndMakesTheServiceUnusable(t *testing.
 			t.Errorf("error = %q, want it to contain %q", errors[0].Error, want)
 		}
 	}
-	if errors[0].Category != errs.InvalidRequest {
-		t.Errorf("category = %q, want %q", errors[0].Category, errs.InvalidRequest)
+	if errors[0].Category != errclass.InvalidRequest {
+		t.Errorf("category = %q, want %q", errors[0].Category, errclass.InvalidRequest)
 	}
 	if len(audioFrames(down)) != 0 {
 		t.Error("audio was emitted for a refused request")
@@ -352,8 +352,8 @@ func TestUnavailableServiceLeavesTheServiceUsable(t *testing.T) {
 	if !strings.Contains(errors[0].Error, "HTTP 503 SERVICE_UNAVAILABLE") {
 		t.Errorf("error = %q", errors[0].Error)
 	}
-	if errors[0].Category != errs.Server {
-		t.Errorf("category = %q, want %q", errors[0].Category, errs.Server)
+	if errors[0].Category != errclass.Server {
+		t.Errorf("category = %q, want %q", errors[0].Category, errclass.Server)
 	}
 	if !svc.Usable() {
 		t.Error("the service is unusable after a failure it can recover from")
@@ -396,8 +396,8 @@ func TestStreamThatEndsEarlyIsReported(t *testing.T) {
 	if !strings.Contains(errors[0].Error, "stream ended early") {
 		t.Errorf("error = %q, want it to say the stream ended early", errors[0].Error)
 	}
-	if errors[0].Category != errs.Server {
-		t.Errorf("category = %q, want %q", errors[0].Category, errs.Server)
+	if errors[0].Category != errclass.Server {
+		t.Errorf("category = %q, want %q", errors[0].Category, errclass.Server)
 	}
 }
 

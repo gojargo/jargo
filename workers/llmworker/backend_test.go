@@ -13,11 +13,11 @@ import (
 	"time"
 
 	"github.com/gojargo/jargo/bus"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline/jobcontext"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/service/llm"
-	"github.com/gojargo/jargo/utils/events"
 	"github.com/gojargo/jargo/workers"
 	"github.com/gojargo/jargo/workers/llmworker"
 )
@@ -318,7 +318,7 @@ func waitStarted(t *testing.T, started <-chan struct{}) {
 func inProgressHandled(backend *llmworker.BackendWorker, name string) <-chan struct{} {
 	done := make(chan struct{})
 	var once sync.Once
-	events.On(backend.AssistantAggregator().Events(), processor.EventAfterProcessFrame,
+	event.On(backend.AssistantAggregator().Events(), processor.EventAfterProcessFrame,
 		func(_ context.Context, f frames.Frame) {
 			if fr, ok := f.(*frames.FunctionCallInProgressFrame); ok && fr.ToolName == name {
 				once.Do(func() { close(done) })

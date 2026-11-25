@@ -8,9 +8,9 @@ import (
 	"testing"
 
 	sdk "github.com/anthropics/anthropic-sdk-go"
+	"github.com/gojargo/jargo/errclass"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/service/llm/adapter"
-	errs "github.com/gojargo/jargo/utils/errors"
 )
 
 // mustParams converts the conversation and fails the test if the conversion
@@ -260,17 +260,17 @@ func TestNewParamsWithoutCaching(t *testing.T) {
 func TestSDKRefusalsClassify(t *testing.T) {
 	cases := map[string]struct {
 		status int
-		want   errs.Category
+		want   errclass.Category
 	}{
-		"rejected key":  {http.StatusUnauthorized, errs.Authentication},
-		"unknown model": {http.StatusNotFound, errs.InvalidRequest},
-		"rate limited":  {http.StatusTooManyRequests, errs.RateLimit},
-		"a bad moment":  {http.StatusServiceUnavailable, errs.Server},
+		"rejected key":  {http.StatusUnauthorized, errclass.Authentication},
+		"unknown model": {http.StatusNotFound, errclass.InvalidRequest},
+		"rate limited":  {http.StatusTooManyRequests, errclass.RateLimit},
+		"a bad moment":  {http.StatusServiceUnavailable, errclass.Server},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
 			err := fmt.Errorf("generate: %w", &sdk.Error{StatusCode: c.status})
-			if got := errs.ClassifyError(err); got != c.want {
+			if got := errclass.Classify(err); got != c.want {
 				t.Errorf("category = %q, want %q", got, c.want)
 			}
 		})

@@ -8,11 +8,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/errclass"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
-	errs "github.com/gojargo/jargo/utils/errors"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // diarizingRunner transcribes every segment into two speaker runs, attributed
@@ -28,7 +28,7 @@ func (r *diarizingRunner) RunSTT(_ context.Context, _ []byte, _ int) iter.Seq[fr
 		r.svc.StartProcessingMetrics()
 		if r.reject != 0 {
 			ef := frames.NewErrorFrame("rejected")
-			ef.Err = errs.NewHTTPStatusError(r.reject, nil)
+			ef.Err = errclass.NewHTTPStatusError(r.reject, nil)
 			yield(ef)
 			return
 		}
@@ -108,12 +108,12 @@ func TestSegmentRunnerErrorIsReportedAndClassified(t *testing.T) {
 	runner.svc = svc
 
 	var reported []*frames.ErrorFrame
-	events.On(svc.Events(), processor.EventError, func(_ context.Context, ef *frames.ErrorFrame) {
+	event.On(svc.Events(), processor.EventError, func(_ context.Context, ef *frames.ErrorFrame) {
 		reported = append(reported, ef)
 	})
 	svc.pushSegmentFrames(t.Context(), svc.RunSTT()(t.Context(), make([]byte, 320), 16000))
 
-	if len(reported) != 1 || reported[0].Category != errs.Authentication {
+	if len(reported) != 1 || reported[0].Category != errclass.Authentication {
 		t.Fatalf("reported = %v, want one authentication error", reported)
 	}
 	if svc.Usable() {

@@ -27,11 +27,11 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/gojargo/jargo/audio"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/internal/security"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/transport"
-	"github.com/gojargo/jargo/utils/events"
-	"github.com/gojargo/jargo/utils/security"
 )
 
 // readLimit bounds a single inbound WebSocket message. Telephony media messages
@@ -68,7 +68,7 @@ type closableSerializer interface {
 // The events a WebSocket transport raises. Each carries nothing, because the
 // session it concerns is this one:
 //
-//	events.On(tr.Events(), wsserver.EventClientDisconnected,
+//	event.On(tr.Events(), wsserver.EventClientDisconnected,
 //	    func(ctx context.Context, _ struct{}) { … })
 const (
 	// EventClientConnected fires once the client is on the line and the
@@ -276,7 +276,7 @@ func (t *Transport) Done() <-chan struct{} { return t.sess.done }
 
 // Events is the registry of events this transport raises. See
 // EventClientConnected, EventClientDisconnected and EventSessionTimeout.
-func (t *Transport) Events() *events.Registry { return t.inputTransport().Events() }
+func (t *Transport) Events() *event.Registry { return t.inputTransport().Events() }
 
 // Session owns one WebSocket connection and serializes writes, which
 // coder/websocket requires.

@@ -7,13 +7,13 @@ import (
 	"io"
 	"net/http"
 
+	"github.com/gojargo/jargo/errclass"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/provider/openai/chat"
 	"github.com/gojargo/jargo/provider/openai/internal/apierror"
 	"github.com/gojargo/jargo/service/llm"
 	"github.com/gojargo/jargo/service/llm/adapter"
-	errs "github.com/gojargo/jargo/utils/errors"
 )
 
 // HTTPService streams a Responses turn over one request.
@@ -241,4 +241,4 @@ func (s *HTTPService) reportUsage(ctx context.Context, state *streamState) {
 // ClassifyError implements processor.ErrorClassifier: a content filter's
 // refusal is content the provider refused, not the permanent invalid request
 // its status says.
-func (s *HTTPService) ClassifyError(err error) errs.Category { return apierror.Classify(err) }
+func (s *HTTPService) ClassifyError(err error) errclass.Category { return apierror.Classify(err) }

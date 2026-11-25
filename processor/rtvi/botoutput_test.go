@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor/rtvi"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // The bot-output events have no tests upstream, so the ones below are ours.
@@ -34,7 +34,7 @@ func outputHarness(
 		Observers:               []pipeline.Observer{rtvi.NewObserverWithParams(proc, params)},
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if m, ok := f.(*frames.OutputTransportMessageUrgentFrame); ok {
 			if msg, ok := m.Message.(rtvi.Message); ok {
 				out <- msg

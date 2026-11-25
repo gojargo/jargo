@@ -6,11 +6,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/service/stt"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // ttfbWatcher collects the time-to-first-byte a service reports.
@@ -61,7 +61,7 @@ func newMeasuredTask(svc processor.Processor, w *ttfbWatcher) *pipeline.Worker {
 			SendInitialEmptyMetrics: &no,
 		},
 	})
-	events.On(&worker.Registry, pipeline.EventFrameReachedDownstream,
+	event.On(&worker.Registry, pipeline.EventFrameReachedDownstream,
 		func(_ context.Context, f frames.Frame) { w.observe(f) })
 	return worker
 }
@@ -169,7 +169,7 @@ func TestStreamServiceReportsNoProcessingTime(t *testing.T) {
 			SendInitialEmptyMetrics: &no,
 		},
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream,
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream,
 		func(_ context.Context, f frames.Frame) { w.observe(f) })
 
 	runDone := make(chan error, 1)
@@ -247,7 +247,7 @@ func TestStreamServiceReportsOnlyTheInitialTTFBWhenAsked(t *testing.T) {
 			ReportOnlyInitialTTFB:   true,
 		},
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream,
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream,
 		func(_ context.Context, f frames.Frame) { w.observe(f) })
 
 	runDone := make(chan error, 1)
@@ -441,7 +441,7 @@ func TestStreamServiceRefusesATranscriptThatPredatesTheSpeech(t *testing.T) {
 func waitForTranscript(t *testing.T, task *pipeline.Worker) {
 	t.Helper()
 	seen := make(chan struct{}, 1)
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if _, ok := f.(*frames.TranscriptionFrame); ok {
 			select {
 			case seen <- struct{}{}:

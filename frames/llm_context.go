@@ -9,7 +9,7 @@ import (
 	"sync"
 
 	"github.com/gojargo/jargo/expressive"
-	"github.com/gojargo/jargo/utils/images"
+	"github.com/gojargo/jargo/internal/imageenc"
 )
 
 // Role identifies who authored a conversation message.
@@ -256,7 +256,7 @@ func CreateImageURLMessage(role Role, url, text string) Message {
 // encoded as a JPEG, or the MIME type of an image already encoded, such as
 // "image/jpeg", which keeps its bytes. The image travels as a data URL.
 func CreateImageMessage(role Role, format string, width, height int, image []byte, text string) (Message, error) {
-	data, contentType, err := images.Encode(image, width, height, format)
+	data, contentType, err := imageenc.Encode(image, width, height, format)
 	if err != nil {
 		return Message{}, err
 	}

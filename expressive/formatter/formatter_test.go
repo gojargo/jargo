@@ -13,7 +13,7 @@ import (
 	"github.com/gojargo/jargo/provider/cartesia"
 	"github.com/gojargo/jargo/provider/elevenlabs"
 	"github.com/gojargo/jargo/provider/minimax"
-	"github.com/gojargo/jargo/utils/text"
+	"github.com/gojargo/jargo/text"
 )
 
 // declaredAdapter declares sounds and delivery, and formats delivery as

@@ -23,7 +23,7 @@ import (
 	"github.com/gojargo/jargo/service/llm/adapter"
 	"github.com/gojargo/jargo/service/settings"
 	"github.com/gojargo/jargo/service/wsutil"
-	textutil "github.com/gojargo/jargo/utils/text"
+	textutil "github.com/gojargo/jargo/text"
 	"github.com/google/uuid"
 )
 

@@ -17,14 +17,14 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/errclass"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/provider/rime/internal/rimepb"
 	"github.com/gojargo/jargo/service/settings"
 	"github.com/gojargo/jargo/service/tts"
-	errs "github.com/gojargo/jargo/utils/errors"
-	"github.com/gojargo/jargo/utils/events"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 )
@@ -227,12 +227,12 @@ func runTTSTest(t *testing.T, svc *tts.Base, steps ...step) (down, up []frames.F
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 		ReachedUpstreamFilter:   pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		down = append(down, f)
 		mu.Unlock()
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		up = append(up, f)
 		mu.Unlock()
@@ -907,7 +907,7 @@ func TestV1TTSContextErrorReportsAndSkipsTheRestOfTheTurn(t *testing.T) {
 	if len(rimeErrors) != 2 {
 		t.Fatalf("Rime errors = %v, want 2", rimeErrors)
 	}
-	if rimeErrors[0].Category != errs.Server {
+	if rimeErrors[0].Category != errclass.Server {
 		t.Errorf("category = %q, want server", rimeErrors[0].Category)
 	}
 	if n := len(framesOf[*frames.TTSAudioRawFrame](down)); n != 0 {
@@ -949,7 +949,7 @@ func TestV1TTSPermanentContextErrorLeavesTheServiceUsable(t *testing.T) {
 	)
 
 	errors := framesOf[*frames.ErrorFrame](up)
-	if len(errors) == 0 || errors[0].Category != errs.Unknown {
+	if len(errors) == 0 || errors[0].Category != errclass.Unknown {
 		t.Errorf("errors = %v, want one categorized unknown", errors)
 	}
 	if texts := spokenTexts(down); len(texts) != 0 {
@@ -1035,7 +1035,7 @@ func TestV1TTSReadyErrorIsReportedWithItsCategory(t *testing.T) {
 	if len(errors) == 0 || !strings.Contains(errors[0].Error, "unauthenticated") {
 		t.Fatalf("errors = %v, want Rime's unauthenticated error", errors)
 	}
-	if errors[0].Category != errs.Authentication {
+	if errors[0].Category != errclass.Authentication {
 		t.Errorf("category = %q, want authentication", errors[0].Category)
 	}
 	if reqs := f.received(); len(reqs) != 0 {

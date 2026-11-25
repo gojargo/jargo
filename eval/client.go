@@ -23,6 +23,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/gojargo/jargo/audio/vad"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/pytext"
 	"github.com/gojargo/jargo/pipeline"
@@ -36,7 +37,6 @@ import (
 	"github.com/gojargo/jargo/service/stt"
 	"github.com/gojargo/jargo/transport/wsclient"
 	"github.com/gojargo/jargo/transport/wsserver/evalws"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // The harness's connection to the bot under test.
@@ -739,7 +739,7 @@ func (c *Client) Start(ctx context.Context) error {
 		})
 
 	botConnection := []any{c.transport.Input(), c.transport.Output()}
-	events.On(&c.worker.Registry, pipeline.EventPipelineError, func(_ context.Context, ef *frames.ErrorFrame) {
+	event.On(&c.worker.Registry, pipeline.EventPipelineError, func(_ context.Context, ef *frames.ErrorFrame) {
 		// An error before bot-ready ends the handshake. The transport connects
 		// to the bot as it is set up, so a refused connection (an HTTP 403 for
 		// a spent token, nothing listening) surfaces here, as does the
@@ -1193,15 +1193,15 @@ func (c *Client) newTransport() *ClientTransport {
 	}
 	tr := NewClientTransport(c.connectURL(), params, c.connectionFlags(), c.recorder)
 
-	events.On(tr.Events(), wsclient.EventConnected, func(context.Context, *websocket.Conn) {
+	event.On(tr.Events(), wsclient.EventConnected, func(context.Context, *websocket.Conn) {
 		c.connected.Store(true)
 	})
-	events.OnSignal(tr.Events(), wsclient.EventBotReady, func(context.Context) {
+	event.OnSignal(tr.Events(), wsclient.EventBotReady, func(context.Context) {
 		c.connected.Store(true)
 		c.checkAudioSupport(tr.BotCapabilities())
 		c.endHandshake()
 	})
-	events.On(tr.Events(), wsclient.EventDisconnected, func(context.Context, *websocket.Conn) {
+	event.On(tr.Events(), wsclient.EventDisconnected, func(context.Context, *websocket.Conn) {
 		// The bot ended the call by closing the connection; our own teardown
 		// closes it too, and that is not the bot's doing.
 		if c.stopping.Load() {

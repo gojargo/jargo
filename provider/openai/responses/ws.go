@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/errclass"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/provider/openai/chat"
@@ -21,7 +22,6 @@ import (
 	"github.com/gojargo/jargo/service/llm"
 	"github.com/gojargo/jargo/service/llm/adapter"
 	"github.com/gojargo/jargo/service/wsutil"
-	errs "github.com/gojargo/jargo/utils/errors"
 )
 
 // maxTurnAttempts bounds how many times a turn is retried after a recoverable
@@ -763,4 +763,4 @@ func (s *Service) reportUsage(ctx context.Context, state *streamState) {
 
 // ClassifyError implements processor.ErrorClassifier, for the one-shot
 // inferences this service answers over HTTP.
-func (s *Service) ClassifyError(err error) errs.Category { return apierror.Classify(err) }
+func (s *Service) ClassifyError(err error) errclass.Category { return apierror.Classify(err) }

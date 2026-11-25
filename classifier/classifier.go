@@ -30,8 +30,8 @@ import (
 	"time"
 
 	"github.com/gojargo/jargo/audio/resample"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // EventMetrics is raised after every call with its metrics, a
@@ -242,7 +242,7 @@ type Classifier interface {
 	// Model is the model that answers, named in the metrics, or "".
 	Model() string
 	// Events is the classifier's event registry, raising EventMetrics.
-	Events() *events.Registry
+	Events() *event.Registry
 	// Setup prepares the classifier ahead of the first question.
 	Setup(ctx context.Context) error
 	// Cleanup releases what the classifier holds.
@@ -276,11 +276,11 @@ var nameCounter atomic.Uint64
 // A classifier raises EventMetrics after every call; its owner puts the data in
 // a MetricsFrame:
 //
-//	events.On(c.Events(), classifier.EventMetrics, func(ctx context.Context, data []frames.MetricsData) {
+//	event.On(c.Events(), classifier.EventMetrics, func(ctx context.Context, data []frames.MetricsData) {
 //		_ = p.PushFrame(ctx, frames.NewMetricsFrame(data...), processor.Downstream)
 //	})
 type Base struct {
-	registry events.Registry
+	registry event.Registry
 	name     string
 	asker    Asker
 }
@@ -303,7 +303,7 @@ func (b *Base) Name() string { return b.name }
 func (b *Base) String() string { return b.name }
 
 // Events is the classifier's event registry, raising EventMetrics.
-func (b *Base) Events() *events.Registry { return &b.registry }
+func (b *Base) Events() *event.Registry { return &b.registry }
 
 // Setup prepares the classifier ahead of the first question. The base has
 // nothing to prepare.

@@ -3,7 +3,7 @@ package elevenlabs
 import (
 	"strings"
 
-	"github.com/gojargo/jargo/utils/text"
+	"github.com/gojargo/jargo/text"
 )
 
 // PhonemeModels are the models that read SSML <phoneme> tags. ElevenLabs' docs

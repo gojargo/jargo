@@ -10,11 +10,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/transport"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // A barge-in keeps the send loop running and only drains what it had queued of
@@ -111,7 +111,7 @@ func runLogged(t *testing.T, out processor.Processor) (*pipeline.Worker, *frameL
 	task := pipeline.NewWorker(pipeline.New(out), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		log.add(f)
 	})
 	runDone := make(chan error, 1)

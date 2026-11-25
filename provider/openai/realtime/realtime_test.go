@@ -11,10 +11,10 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/provider/openai/realtime"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 func TestConfigValidate(t *testing.T) {
@@ -93,8 +93,8 @@ func TestRealtimeStreamsEvents(t *testing.T) {
 		got = append(got, f)
 		mu.Unlock()
 	}
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, record)
-	events.On(&task.Registry, pipeline.EventFrameReachedUpstream, record)
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, record)
+	event.On(&task.Registry, pipeline.EventFrameReachedUpstream, record)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)

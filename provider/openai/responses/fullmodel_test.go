@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
+	jevent "github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
-	"github.com/gojargo/jargo/utils/events"
 	"go.opentelemetry.io/otel"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
@@ -37,7 +37,7 @@ func TestTheModelTheResponseNamesLabelsTheNextSpans(t *testing.T) {
 	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{
 		EnableTracing: true, ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	jevent.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if _, ok := f.(*frames.LLMFullResponseEndFrame); ok {
 			ended <- struct{}{}
 		}

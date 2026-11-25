@@ -10,7 +10,7 @@ import (
 	"io"
 	"net/http"
 
-	errs "github.com/gojargo/jargo/utils/errors"
+	"github.com/gojargo/jargo/errclass"
 )
 
 // The bounds on how much of a refused response is read: enough of the body to
@@ -27,7 +27,7 @@ const codeContentFilter = "content_filter"
 // Error is a request the API refused: the status it refused with, and the error
 // code the body names, if any.
 type Error struct {
-	*errs.HTTPStatusError
+	*errclass.HTTPStatusError
 	// Code is the body's error code, empty when it named none.
 	Code string
 }
@@ -52,7 +52,7 @@ func FromResponse(resp *http.Response, base error) *Error {
 	_ = json.Unmarshal(body, &parsed)
 	code, _ := parsed.Error.Code.(string)
 	return &Error{
-		HTTPStatusError: errs.NewHTTPStatusError(resp.StatusCode,
+		HTTPStatusError: errclass.NewHTTPStatusError(resp.StatusCode,
 			fmt.Errorf("%w %d: %s", base, resp.StatusCode, msg)),
 		Code: code,
 	}
@@ -63,10 +63,10 @@ func FromResponse(resp *http.Response, base error) *Error {
 // which is content the provider refused, not the permanent invalid request the
 // status maps to. Anything else returns the zero category, leaving the status
 // to decide.
-func Classify(err error) errs.Category {
+func Classify(err error) errclass.Category {
 	if e, ok := errors.AsType[*Error](err); ok &&
 		e.Status == http.StatusBadRequest && e.Code == codeContentFilter {
-		return errs.ContentFiltered
+		return errclass.ContentFiltered
 	}
-	return errs.Unset
+	return errclass.Unset
 }

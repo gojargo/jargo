@@ -6,7 +6,7 @@ import (
 
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
-	"github.com/gojargo/jargo/utils/notify"
+	"github.com/gojargo/jargo/processor/notify"
 )
 
 // GatedContext holds the conversation back from the model until a notifier says

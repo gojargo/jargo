@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/gojargo/jargo/service/tts"
-	uctx "github.com/gojargo/jargo/utils/context"
+	"github.com/gojargo/jargo/text/align"
 )
 
 // timedSynthesizer must satisfy tts.WordTimestamps so the base takes the
@@ -63,13 +63,13 @@ func TestWordTimingsKeepTheirEnds(t *testing.T) {
 		Start: []float64{0.0, 0.4, 1.4},
 		End:   []float64{0.4, 1.4, 1.8},
 	}, false)
-	want := []uctx.WordTiming{{Word: "Hello", Offset: 0.0, End: 0.4}, {Word: "world", Offset: 1.4, End: 1.8}}
+	want := []align.WordTiming{{Word: "Hello", Offset: 0.0, End: 0.4}, {Word: "world", Offset: 1.4, End: 1.8}}
 	if !slices.Equal(got, want) {
 		t.Errorf("got %+v, want %+v", got, want)
 	}
 
 	got, _ = normalizeWordTimings(&wsWordTimings{Words: []string{"Hello"}, Start: []float64{0.0}}, false)
-	if want := []uctx.WordTiming{{Word: "Hello", Offset: 0.0}}; !slices.Equal(got, want) {
+	if want := []align.WordTiming{{Word: "Hello", Offset: 0.0}}; !slices.Equal(got, want) {
 		t.Errorf("got %+v, want %+v", got, want)
 	}
 }
@@ -128,7 +128,7 @@ func TestJapaneseMarksAttachToThePrecedingCharacter(t *testing.T) {
 	for _, batch := range [][]string{{"で", "す", "。"}, {"歯", "科"}} {
 		got, opts := normalizeWordTimings(&wsWordTimings{Words: batch, Start: make([]float64, len(batch))}, true)
 		if opts.PreMergeTokens {
-			got = uctx.MergePunctTokens(got)
+			got = align.MergePunctTokens(got)
 		}
 		for _, w := range got {
 			words = append(words, w.Word)

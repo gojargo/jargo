@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/gojargo/jargo/errclass"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/service/tts"
-	errs "github.com/gojargo/jargo/utils/errors"
-	"github.com/gojargo/jargo/utils/text"
+	"github.com/gojargo/jargo/text"
 )
 
 // LLMText turns the tokens a model streams into aggregated text, using the
@@ -196,7 +196,7 @@ func (p *LLMText) transformText(ctx context.Context, original string, textType f
 			// on untransformed is not safe, as a transform may exist to remove
 			// something, so the aggregation is dropped.
 			p.PushError(ctx, fmt.Sprintf("Error transforming LLM text [%s]: %v", transformed, err), err, false,
-				processor.WithErrorCategory(errs.Application))
+				processor.WithErrorCategory(errclass.Application))
 			return "", false
 		}
 		transformed = out

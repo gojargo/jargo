@@ -14,8 +14,8 @@ import (
 
 	llmclassifier "github.com/gojargo/jargo/classifier/llm"
 	"github.com/gojargo/jargo/eval"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/provider/openai/chat"
-	"github.com/gojargo/jargo/utils/events"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )
@@ -226,7 +226,7 @@ func playSimulation(
 	d := display{out: out, color: isTerminal(out)}
 	if logs.verbose {
 		d.printf("    %s\n", d.paint("conversation:", "1"))
-		events.On(&session.Registry, eval.EventProgress, func(_ context.Context, p eval.SimulationProgress) {
+		event.On(&session.Registry, eval.EventProgress, func(_ context.Context, p eval.SimulationProgress) {
 			d.simulationProgress(p)
 		})
 	}

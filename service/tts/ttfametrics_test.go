@@ -8,11 +8,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/service/tts"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 const toneRate = 16000
@@ -100,7 +100,7 @@ func runRecorded(t *testing.T, svc processor.Processor, metrics, usage bool) (*p
 			SendInitialEmptyMetrics: &noInitial,
 		},
 	})
-	events.On(&w.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&w.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		r.mu.Lock()
 		r.all = append(r.all, arrival{time.Now(), f})
 		r.mu.Unlock()

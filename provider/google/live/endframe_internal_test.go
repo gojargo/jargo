@@ -5,9 +5,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // These tests are not ports of upstream tests: upstream has none for holding
@@ -20,7 +20,7 @@ func runningService(t *testing.T, srv *recordingSession) (*Service, *pipeline.Wo
 	s := New(Config{APIKey: "k", BaseURL: wsURL(srv)})
 	w := pipeline.NewWorker(pipeline.New(s), pipeline.WorkerConfig{})
 	started := make(chan struct{})
-	events.On(&w.Registry, pipeline.EventPipelineStarted, func(context.Context, *frames.StartFrame) { close(started) })
+	event.On(&w.Registry, pipeline.EventPipelineStarted, func(context.Context, *frames.StartFrame) { close(started) })
 	done := make(chan struct{})
 	go func() {
 		_ = w.Run(context.Background())

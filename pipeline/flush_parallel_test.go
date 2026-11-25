@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // flushLeg is one pass of a flush through a processor: its direction, and
@@ -80,7 +80,7 @@ func flushThrough(t *testing.T, p processor.Processor, flushes int) []error {
 	task := pipeline.NewWorker(pipeline.New(p), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if _, ok := f.(*frames.StartFrame); ok {
 			once.Do(func() { close(up) })
 		}
@@ -164,13 +164,13 @@ func TestFlushWithProbeReportsItFlushed(t *testing.T) {
 	task := pipeline.NewWorker(pipeline.New(processor.NewIdentityFilter("Identity")), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if _, ok := f.(*frames.StartFrame); ok {
 			once.Do(func() { close(up) })
 		}
 	})
 	flushed := make(chan uint64, 4)
-	events.On(&task.Registry, pipeline.EventPipelineFlushed, func(_ context.Context, f *frames.PipelineFlushFrame) {
+	event.On(&task.Registry, pipeline.EventPipelineFlushed, func(_ context.Context, f *frames.PipelineFlushFrame) {
 		flushed <- f.FlushID
 	})
 	done := runTask(t, task)

@@ -6,11 +6,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/service/tts"
-	"github.com/gojargo/jargo/utils/events"
-	ttstext "github.com/gojargo/jargo/utils/text"
+	ttstext "github.com/gojargo/jargo/text"
 )
 
 // spacedSynth records the text it was handed and declares whether the provider
@@ -81,7 +81,7 @@ func speakThrough(t *testing.T, syn tts.Synthesizer, agg ttstext.Aggregator, tex
 	// A turn is finished once its audio has been heard, which is the point every
 	// unit of it has been synthesized.
 	stopped := make(chan struct{}, 1)
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if _, ok := f.(*frames.TTSStoppedFrame); ok {
 			select {
 			case stopped <- struct{}{}:
@@ -134,7 +134,7 @@ func TestTrailingSpaceIsNotDoubled(t *testing.T) {
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
 	stopped := make(chan struct{}, 1)
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if _, ok := f.(*frames.TTSStoppedFrame); ok {
 			select {
 			case stopped <- struct{}{}:

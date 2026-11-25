@@ -11,13 +11,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/processor/aggregators"
 	"github.com/gojargo/jargo/service/llm"
 	"github.com/gojargo/jargo/service/llm/adapter"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // fakeToolGen requests one tool call on its first turn, then answers with text.
@@ -188,7 +188,7 @@ func TestToolHandlerDoesNotBlockFrames(t *testing.T) {
 	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if _, ok := f.(*frames.TTSSpeakFrame); ok {
 			select {
 			case spoken <- struct{}{}:
@@ -297,7 +297,7 @@ func TestToolContinuationSeesToolResult(t *testing.T) {
 	task := pipeline.NewWorker(pipe, pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		// The response end stops at the assistant aggregator. Past it, the
 		// continuation's answer, the first reply with text, is announced as the
 		// turn it closes: the tool-only turn before it carries none.
@@ -427,7 +427,7 @@ func TestInterruptionCancelsTheCall(t *testing.T) {
 	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		defer mu.Unlock()
 		switch f.(type) {
@@ -490,7 +490,7 @@ func TestAsyncToolSurvivesInterruption(t *testing.T) {
 	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if fr, ok := f.(*frames.FunctionCallResultFrame); ok {
 			select {
 			case result <- fr.Result:
@@ -535,7 +535,7 @@ func TestMissingFunctionAnswersTheCall(t *testing.T) {
 	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if fr, ok := f.(*frames.FunctionCallResultFrame); ok {
 			select {
 			case result <- fr.Result:
@@ -1637,7 +1637,7 @@ func TestCompletedCallRunsAfterAFailedResponse(t *testing.T) {
 	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{
 		ReachedUpstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
 		if fr, ok := f.(*frames.ErrorFrame); ok {
 			mu.Lock()
 			errs = append(errs, fr.Error)

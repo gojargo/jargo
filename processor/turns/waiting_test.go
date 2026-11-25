@@ -7,12 +7,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/processor/aggregators"
 	"github.com/gojargo/jargo/processor/turns"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // The timeouts the waiting tests run with, and how long they let a timer run to
@@ -340,14 +340,14 @@ func silenceFrames(t *testing.T, ps []processor.Processor, fs ...frames.Frame) (
 		ReachedUpstreamFilter:   pipeline.AnyFrame,
 	})
 	var mu sync.Mutex
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if keep(f) {
 			mu.Lock()
 			down = append(down, f)
 			mu.Unlock()
 		}
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
 		if keep(f) {
 			mu.Lock()
 			up = append(up, f)
@@ -408,7 +408,7 @@ func TestTheUserAggregatorEmitsOnUserWaiting(t *testing.T) {
 	}))
 	var mu sync.Mutex
 	var fired []string
-	events.OnSignal(pair.User().Events(), aggregators.EventUserWaiting, func(context.Context) {
+	event.OnSignal(pair.User().Events(), aggregators.EventUserWaiting, func(context.Context) {
 		mu.Lock()
 		fired = append(fired, "waiting")
 		mu.Unlock()
@@ -440,7 +440,7 @@ func TestTheUserTurnProcessorEmitsOnUserWaiting(t *testing.T) {
 	p := turns.NewUserTurnProcessor(turns.Config{WaitingTimeout: waitingTimeout})
 	var mu sync.Mutex
 	var fired []string
-	events.OnSignal(p.Events(), turns.EventUserWaiting, func(context.Context) {
+	event.OnSignal(p.Events(), turns.EventUserWaiting, func(context.Context) {
 		mu.Lock()
 		fired = append(fired, "waiting")
 		mu.Unlock()

@@ -16,12 +16,12 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/service"
 	"github.com/gojargo/jargo/service/settings"
 	"github.com/gojargo/jargo/service/tts"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 const otherVoiceID = "c18a1cd5-91ef-4b06-841a-e58b8b487e8c"
@@ -285,12 +285,12 @@ func runTest(t *testing.T, svc *tts.Base, ss ...step) (down, up []frames.Frame) 
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 		ReachedUpstreamFilter:   pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		down = append(down, f)
 		mu.Unlock()
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		up = append(up, f)
 		mu.Unlock()
@@ -603,7 +603,7 @@ func TestCanceledInitClosesProvisionalConnection(t *testing.T) {
 	f := documented(t, turnFlow{noAcknowledge: true})
 	b, s := newTTS(Config{APIKey: "test-key", URL: f.url, SampleRate: 24000})
 	var reported bool
-	events.On(b.Events(), service.EventConnectionError, func(context.Context, string) { reported = true })
+	event.On(b.Events(), service.EventConnectionError, func(context.Context, string) { reported = true })
 	ctx, cancel := context.WithCancel(context.Background())
 	time.AfterFunc(50*time.Millisecond, cancel)
 

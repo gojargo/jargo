@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/errclass"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/observers"
 	"github.com/gojargo/jargo/processor"
-	errs "github.com/gojargo/jargo/utils/errors"
 )
 
 // errorRecorder collects everything an Errors observer reports.
@@ -54,7 +54,7 @@ var errNoRoute = errors.New("no route to host")
 
 // raised builds the error frame a processor's PushError would produce: the
 // source and the category are settled by the time the frame travels.
-func raised(msg string, source frames.ErrorSource, err error, category errs.Category) *frames.ErrorFrame {
+func raised(msg string, source frames.ErrorSource, err error, category errclass.Category) *frames.ErrorFrame {
 	ef := frames.NewErrorFrame(msg)
 	ef.Source = source
 	ef.Err = err
@@ -69,8 +69,8 @@ func TestEachErrorIsItsOwnEvent(t *testing.T) {
 	o := observers.NewErrors(observers.ErrorConfig{OnError: r.record})
 
 	failing := processor.NewIdentityFilter("tts")
-	pushFrom(o, raised("first", failing, nil, errs.Server), failing)
-	pushFrom(o, raised("second", failing, nil, errs.Server), failing)
+	pushFrom(o, raised("first", failing, nil, errclass.Server), failing)
+	pushFrom(o, raised("second", failing, nil, errclass.Server), failing)
 
 	all := r.all()
 	if len(all) != 2 || all[0].Message != "first" || all[1].Message != "second" {
@@ -110,8 +110,8 @@ func TestErrorAssembledByHandIsAttributedToItsPusher(t *testing.T) {
 	if e.Processor != pusher.Name() {
 		t.Errorf("processor = %q, want %q", e.Processor, pusher.Name())
 	}
-	if e.Category != errs.Unknown {
-		t.Errorf("category = %q, want %q", e.Category, errs.Unknown)
+	if e.Category != errclass.Unknown {
+		t.Errorf("category = %q, want %q", e.Category, errclass.Unknown)
 	}
 	if e.ExceptionType != "" {
 		t.Errorf("exception type = %q, want empty: no error caused this one", e.ExceptionType)
@@ -126,14 +126,14 @@ func TestErrorReportsTheTypeBehindIt(t *testing.T) {
 
 	failing := processor.NewIdentityFilter("stt")
 	err := &net.OpError{Op: "dial", Err: errNoRoute}
-	pushFrom(o, raised("the provider said no", failing, err, errs.Connectivity), failing)
+	pushFrom(o, raised("the provider said no", failing, err, errclass.Connectivity), failing)
 
 	e := r.only(t)
 	if e.ExceptionType != "*net.OpError" {
 		t.Errorf("exception type = %q, want *net.OpError", e.ExceptionType)
 	}
-	if e.Category != errs.Connectivity {
-		t.Errorf("category = %q, want %q", e.Category, errs.Connectivity)
+	if e.Category != errclass.Connectivity {
+		t.Errorf("category = %q, want %q", e.Category, errclass.Connectivity)
 	}
 }
 
@@ -144,7 +144,7 @@ func TestRecoverableFailureLeavesTheProcessorUsable(t *testing.T) {
 	o := observers.NewErrors(observers.ErrorConfig{OnError: r.record})
 
 	failing := processor.NewIdentityFilter("stt")
-	pushFrom(o, raised("no route to host", failing, nil, errs.Connectivity), failing)
+	pushFrom(o, raised("no route to host", failing, nil, errclass.Connectivity), failing)
 
 	if !r.only(t).ProcessorUsable {
 		t.Error("processor usable = false, want true: connectivity is recoverable")
@@ -161,7 +161,7 @@ func TestPermanentFailureCostsTheProcessorItsUsability(t *testing.T) {
 
 	failing := processor.NewIdentityFilter("stt")
 	failing.SetUsable(t.Context(), false)
-	pushFrom(o, raised("invalid api key", failing, nil, errs.Authentication), failing)
+	pushFrom(o, raised("invalid api key", failing, nil, errclass.Authentication), failing)
 
 	if r.only(t).ProcessorUsable {
 		t.Error("processor usable = true, want false: rejected credentials stay rejected")
@@ -178,7 +178,7 @@ func TestFatalErrorIsReported(t *testing.T) {
 	failing := processor.NewIdentityFilter("llm")
 	ff := frames.NewFatalErrorFrame("the session cannot continue")
 	ff.Source = failing
-	ff.Category = errs.Server
+	ff.Category = errclass.Server
 	pushFrom(o, ff, failing)
 
 	if got := r.only(t).Message; got != "the session cannot continue" {

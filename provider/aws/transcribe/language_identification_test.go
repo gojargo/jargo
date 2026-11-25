@@ -12,13 +12,13 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/transcribestreaming"
 	"github.com/aws/aws-sdk-go-v2/service/transcribestreaming/types"
+	"github.com/gojargo/jargo/errclass"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/service/settings"
 	"github.com/gojargo/jargo/service/stt"
-	errs "github.com/gojargo/jargo/utils/errors"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // languageRequest is the request c opens a session with at 16 kHz.
@@ -144,7 +144,7 @@ func runSettings(t *testing.T, cfg Config) *settingsRun {
 	t.Helper()
 	r := &settingsRun{conn: &recordingConnector{connector: newConnector(cfg), sent: make(chan []byte, 4)}}
 	r.svc = stt.NewStream("TranscribeSTT", r.conn, 16000)
-	events.On(r.svc.Events(), processor.EventError, func(_ context.Context, ef *frames.ErrorFrame) {
+	event.On(r.svc.Events(), processor.EventError, func(_ context.Context, ef *frames.ErrorFrame) {
 		r.mu.Lock()
 		r.errors = append(r.errors, ef)
 		r.mu.Unlock()
@@ -261,7 +261,7 @@ func TestConflictingRuntimeUpdateIsRejectedWhole(t *testing.T) {
 		t.Fatalf("%d errors reported, want 1", len(got))
 	}
 	ef := got[0]
-	if ef.Fatal || ef.Category != errs.Application || !strings.Contains(ef.Err.Error(), "preferred_language requires") {
+	if ef.Fatal || ef.Category != errclass.Application || !strings.Contains(ef.Err.Error(), "preferred_language requires") {
 		t.Errorf("error = %v (%v, fatal %v), want a non-fatal application error naming preferred_language",
 			ef.Err, ef.Category, ef.Fatal)
 	}

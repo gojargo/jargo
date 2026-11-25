@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // Tests for the worker frames a processor pushes upstream to ask the Task to end,
@@ -127,7 +127,7 @@ func TestWorkerFramesEndTheRun(t *testing.T) {
 			task := pipeline.NewWorker(pipe, pipeline.WorkerConfig{
 				ReachedDownstreamFilter: pipeline.AnyFrame,
 			})
-			events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+			event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 				if tt.wantEnd(f) {
 					mu.Lock()
 					saw = true
@@ -162,7 +162,7 @@ func TestCancelWorkerFrameCarriesReason(t *testing.T) {
 	task := pipeline.NewWorker(pipe, pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		defer mu.Unlock()
 		if cf, ok := f.(*frames.CancelFrame); ok {
@@ -227,7 +227,7 @@ func TestFlushProbeRoundTrip(t *testing.T) {
 	task := pipeline.NewWorker(pipe, pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if _, ok := f.(*frames.StartFrame); ok {
 			startOnce.Do(func() { close(up) })
 		}
@@ -279,7 +279,7 @@ func TestFlushProbeMakesTheTripTwice(t *testing.T) {
 	task := pipeline.NewWorker(pipeline.New(spy), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if _, ok := f.(*frames.StartFrame); ok {
 			once.Do(func() { close(up) })
 		}
@@ -318,7 +318,7 @@ func TestFlushWaitsForWorkStartedAtTheTurnaround(t *testing.T) {
 	task := pipeline.NewWorker(pipeline.New(newTurnaround(), rec), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if _, ok := f.(*frames.StartFrame); ok {
 			once.Do(func() { close(up) })
 		}
@@ -445,7 +445,7 @@ func TestFlushWaitsForFramesAlreadyQueued(t *testing.T) {
 		pipeline.New(newHoldText(150*time.Millisecond), rec), pipeline.WorkerConfig{
 			ReachedDownstreamFilter: pipeline.AnyFrame,
 		})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if _, ok := f.(*frames.StartFrame); ok {
 			once.Do(func() { close(up) })
 		}
@@ -549,7 +549,7 @@ func TestCancelBeforeStartReachesSink(t *testing.T) {
 	})
 
 	timedOut := make(chan frames.Frame, 4)
-	events.On(&task.Registry, pipeline.EventPipelineTimeout, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventPipelineTimeout, func(_ context.Context, f frames.Frame) {
 		timedOut <- f
 	})
 
@@ -609,12 +609,12 @@ func TestCancelTimesOutOnASwallowedFrame(t *testing.T) {
 		CancelTimeout:           100 * time.Millisecond,
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventPipelineFinished, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventPipelineFinished, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		finished = f
 		mu.Unlock()
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if _, ok := f.(*frames.StartFrame); ok {
 			close(startedCh)
 		}
@@ -641,7 +641,7 @@ func TestPipelineFinishedReportsTheEndFrame(t *testing.T) {
 		calls []frames.Frame
 	)
 	task := pipeline.NewWorker(pipeline.New(newEcho()), pipeline.WorkerConfig{})
-	events.On(&task.Registry, pipeline.EventPipelineFinished, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventPipelineFinished, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		calls = append(calls, f)
 		mu.Unlock()
@@ -785,7 +785,7 @@ func TestCancelingTheContextShutsThePipelineDown(t *testing.T) {
 		CancelTimeout:           time.Second,
 		ReachedDownstreamFilter: pipeline.FrameTypes(&frames.StartFrame{}),
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream,
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream,
 		func(_ context.Context, _ frames.Frame) { once.Do(func() { close(startedCh) }) })
 
 	ctx, cancel := context.WithCancel(context.Background())

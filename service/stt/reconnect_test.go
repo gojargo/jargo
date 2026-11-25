@@ -8,11 +8,11 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/service"
 	"github.com/gojargo/jargo/service/stt"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // scriptedStream replays canned results, then ends the session the way the test
@@ -151,9 +151,9 @@ func runService(t *testing.T, svc *stt.StreamService, c *collector) (stop func()
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 		ReachedUpstreamFilter:   pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream,
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream,
 		func(_ context.Context, f frames.Frame) { c.downstream(f) })
-	events.On(&task.Registry, pipeline.EventFrameReachedUpstream,
+	event.On(&task.Registry, pipeline.EventFrameReachedUpstream,
 		func(_ context.Context, f frames.Frame) { c.upstream(f) })
 	done := make(chan error, 1)
 	go func() { done <- task.Run(context.Background()) }()
@@ -251,7 +251,7 @@ func TestStreamServiceRaisesTheConnectionErrorEvent(t *testing.T) {
 	c := newCollector()
 	svc := stt.NewStream("FakeSTT", conn, 16000)
 	raised := make(chan string, 8)
-	events.On(svc.Events(), service.EventConnectionError, func(_ context.Context, msg string) {
+	event.On(svc.Events(), service.EventConnectionError, func(_ context.Context, msg string) {
 		raised <- msg
 	})
 	stop := runService(t, svc, c)

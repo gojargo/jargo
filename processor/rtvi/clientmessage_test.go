@@ -7,11 +7,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/processor/rtvi"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // sink records every frame that reaches the end of the pipeline, which is where
@@ -69,7 +69,7 @@ func newClientWith(t *testing.T, cfg pipeline.WorkerConfig) *client {
 	cfg.Observers = []pipeline.Observer{rtvi.NewObserver(proc)}
 	cfg.ReachedDownstreamFilter = pipeline.AnyFrame
 	task := pipeline.NewWorker(pipeline.New(proc, sk), cfg)
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if m, ok := f.(*frames.OutputTransportMessageUrgentFrame); ok {
 			if msg, ok := m.Message.(rtvi.Message); ok {
 				out <- msg
@@ -144,7 +144,7 @@ func TestClientMessageReachesThePipelineAndIsAnswered(t *testing.T) {
 	c := newClient(t)
 
 	heard := make(chan *rtvi.ClientMessageFrame, 1)
-	events.On(c.proc.Events(), rtvi.EventClientMessage,
+	event.On(c.proc.Events(), rtvi.EventClientMessage,
 		func(_ context.Context, f *rtvi.ClientMessageFrame) { heard <- f })
 
 	c.send(t, rtvi.Message{
@@ -377,7 +377,7 @@ func TestSendHelpersAnswerFromOutsideThePipeline(t *testing.T) {
 	c := newClient(t)
 
 	answered := make(chan error, 1)
-	events.On(c.proc.Events(), rtvi.EventClientMessage,
+	event.On(c.proc.Events(), rtvi.EventClientMessage,
 		func(ctx context.Context, f *rtvi.ClientMessageFrame) {
 			answered <- c.proc.SendServerResponse(ctx, f, map[string]any{"ok": true})
 		})
@@ -410,7 +410,7 @@ func TestSendHelpersAnswerFromOutsideThePipeline(t *testing.T) {
 func TestSendErrorResponseRefusesFromOutsideThePipeline(t *testing.T) {
 	c := newClient(t)
 
-	events.On(c.proc.Events(), rtvi.EventClientMessage,
+	event.On(c.proc.Events(), rtvi.EventClientMessage,
 		func(ctx context.Context, f *rtvi.ClientMessageFrame) {
 			_ = c.proc.SendErrorResponse(ctx, f, "no")
 		})

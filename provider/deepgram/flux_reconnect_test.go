@@ -16,11 +16,11 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/service/stt"
 	"github.com/gojargo/jargo/service/wsservice"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // fakeFlux is a Flux server whose failures a test scripts.
@@ -165,7 +165,7 @@ func runFluxPipeline(t *testing.T, cfg FluxConfig, d time.Duration) (*stt.Stream
 		Params:                  pipeline.Params{EnableUsageMetrics: true},
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		res.down = append(res.down, f)
 		mu.Unlock()

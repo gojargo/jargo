@@ -15,13 +15,13 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/gojargo/jargo/errclass"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/provider/google/gemini"
 	"github.com/gojargo/jargo/provider/google/internal/stream"
 	"github.com/gojargo/jargo/service/llm"
 	"github.com/gojargo/jargo/service/llm/adapter"
-	errs "github.com/gojargo/jargo/utils/errors"
 )
 
 // errStatus is returned when the API responds with a non-200 status.
@@ -438,7 +438,7 @@ func (s *Service) newRequest(ctx context.Context, request map[string]any) (*http
 // with.
 func statusError(resp *http.Response) error {
 	msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-	return errs.NewHTTPStatusError(resp.StatusCode, fmt.Errorf("%w %d: %s", errStatus, resp.StatusCode, msg))
+	return errclass.NewHTTPStatusError(resp.StatusCode, fmt.Errorf("%w %d: %s", errStatus, resp.StatusCode, msg))
 }
 
 // event is the subset of a streamed Interactions event the service reads.

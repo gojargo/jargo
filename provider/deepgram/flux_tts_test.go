@@ -16,14 +16,14 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/service"
 	"github.com/gojargo/jargo/service/settings"
 	"github.com/gojargo/jargo/service/tts"
-	"github.com/gojargo/jargo/utils/events"
-	ttstext "github.com/gojargo/jargo/utils/text"
+	ttstext "github.com/gojargo/jargo/text"
 )
 
 // The two chunks of audio the fake Flux endpoint answers a turn with, one each
@@ -211,12 +211,12 @@ func runFluxTTSPipeline(t *testing.T, svc *tts.Base, steps ...any) (down, up []f
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 		ReachedUpstreamFilter:   pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		down = append(down, f)
 		mu.Unlock()
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		up = append(up, f)
 		mu.Unlock()
@@ -828,7 +828,7 @@ func TestFluxTTSServerErrorIsPushed(t *testing.T) {
 	b := s.base
 	var mu sync.Mutex
 	var pushed []*frames.ErrorFrame
-	events.On(b.Events(), processor.EventError, func(_ context.Context, ef *frames.ErrorFrame) {
+	event.On(b.Events(), processor.EventError, func(_ context.Context, ef *frames.ErrorFrame) {
 		mu.Lock()
 		pushed = append(pushed, ef)
 		mu.Unlock()
@@ -882,7 +882,7 @@ func TestFluxTTSRefusedSettingIsPermanent(t *testing.T) {
 	b, s := newFluxTTS(fluxTTSTestConfig(refusingServer(t, http.StatusBadRequest, reason)))
 	var mu sync.Mutex
 	var connectionErrors []string
-	events.On(b.Events(), service.EventConnectionError, func(_ context.Context, msg string) {
+	event.On(b.Events(), service.EventConnectionError, func(_ context.Context, msg string) {
 		mu.Lock()
 		connectionErrors = append(connectionErrors, msg)
 		mu.Unlock()

@@ -11,10 +11,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
-	"github.com/gojargo/jargo/utils/events"
 	"github.com/gojargo/jargo/workers"
 )
 
@@ -93,10 +93,10 @@ func NewSession(depth int, arrived chan<- struct{}) *Session {
 	}
 
 	var startedOnce sync.Once
-	events.On(worker.Events(), pipeline.EventPipelineStarted, func(context.Context, *frames.StartFrame) {
+	event.On(worker.Events(), pipeline.EventPipelineStarted, func(context.Context, *frames.StartFrame) {
 		startedOnce.Do(func() { close(s.started) })
 	})
-	events.On(worker.Events(), pipeline.EventFrameReachedDownstream, func(context.Context, frames.Frame) {
+	event.On(worker.Events(), pipeline.EventFrameReachedDownstream, func(context.Context, frames.Frame) {
 		select {
 		case s.arrived <- struct{}{}:
 		case <-s.quit:

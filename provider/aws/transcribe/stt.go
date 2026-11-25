@@ -13,9 +13,9 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/transcribestreaming"
 	"github.com/aws/aws-sdk-go-v2/service/transcribestreaming/types"
+	"github.com/gojargo/jargo/errclass"
 	"github.com/gojargo/jargo/service/settings"
 	"github.com/gojargo/jargo/service/stt"
-	errs "github.com/gojargo/jargo/utils/errors"
 )
 
 // loadOptions builds the AWS config load options from the static fields. An
@@ -93,11 +93,11 @@ func (c *connector) UpdateSettings(context.Context, settings.Changed) (bool, err
 
 // ClassifyError says what a Transcribe failure means: a refused settings update
 // is the application's mistake.
-func (c *connector) ClassifyError(err error) errs.Category {
+func (c *connector) ClassifyError(err error) errclass.Category {
 	if errors.Is(err, errSettingsRejected) {
-		return errs.Application
+		return errclass.Application
 	}
-	return errs.Unset
+	return errclass.Unset
 }
 
 // SendSampleRate is the rate Transcribe is sent audio at, implementing

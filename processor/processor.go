@@ -16,14 +16,14 @@ import (
 	"time"
 
 	"github.com/gojargo/jargo/clock"
+	"github.com/gojargo/jargo/errclass"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/expressive"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/goid"
 	"github.com/gojargo/jargo/pipeline/capabilities"
 	"github.com/gojargo/jargo/telemetry/metrics"
 	"github.com/gojargo/jargo/telemetry/tracing"
-	errs "github.com/gojargo/jargo/utils/errors"
-	"github.com/gojargo/jargo/utils/events"
 	"go.opentelemetry.io/otel/trace"
 	"go.opentelemetry.io/otel/trace/noop"
 )
@@ -194,7 +194,7 @@ type Processor interface {
 	// EventUsableChanged when the value moves.
 	SetUsable(ctx context.Context, usable bool)
 	// Events returns the registry of events this processor raises.
-	Events() *events.Registry
+	Events() *event.Registry
 }
 
 //nolint:gochecknoglobals // process-wide id source
@@ -265,11 +265,11 @@ type Base struct {
 	// startGate is opened by the StartFrame being queued once the processor is
 	// set up, and is what the input goroutine waits on before it drains
 	// anything.
-	startGate *event
+	startGate *resetEvent
 	// setupDone is clear while a pipeline is setting this processor up. The
 	// StartFrame is held until it is set, so a processor never starts before
 	// its own setup is done, while the ones ahead of it in the pipeline can.
-	setupDone *event
+	setupDone *resetEvent
 	// startReceived records that the StartFrame has been queued. startMu
 	// guards it.
 	startMu       sync.Mutex
@@ -280,9 +280,9 @@ type Base struct {
 	// The events are created with the goroutine they hold.
 	pauseMu           sync.Mutex
 	blockSystemFrames bool
-	inputEvent        *event
+	inputEvent        *resetEvent
 	blockFrames       bool
-	processEvent      *event
+	processEvent      *resetEvent
 	// pendingResume is a resume this processor was asked for by a frame it is
 	// still handling. It is applied once that frame has gone on.
 	pendingResume bool
@@ -323,7 +323,7 @@ type Base struct {
 
 	// events are the events this processor raises: EventUsableChanged and
 	// EventError. See usable.go.
-	events events.Registry
+	events event.Registry
 	// usability tracks whether this processor can still do its job. Flipped by
 	// the errors it reports, so it is already up to date by the time an error
 	// travels.
@@ -721,7 +721,7 @@ func (b *Base) processFrame(ctx context.Context, it item) error {
 		// usability.
 		if cerr := ctx.Err(); cerr == nil || !errors.Is(err, cerr) {
 			b.PushError(ctx, fmt.Sprintf("Error processing frame: %v", err), err, false,
-				WithErrorCategory(errs.Unknown))
+				WithErrorCategory(errclass.Unknown))
 		}
 		return err
 	}
@@ -1173,7 +1173,7 @@ func (b *Base) reportPanic(ctx context.Context, msg string, v any) {
 	err := panicError(v)
 	slog.ErrorContext(ctx, "uncaught panic", "processor", b.name, "panic", v,
 		"stack", string(debug.Stack()))
-	b.PushError(ctx, fmt.Sprintf("%s: %v", msg, err), err, false, WithErrorCategory(errs.Unknown))
+	b.PushError(ctx, fmt.Sprintf("%s: %v", msg, err), err, false, WithErrorCategory(errclass.Unknown))
 }
 
 // ErrPanic is what a panic that was not raised with an error is reported as,

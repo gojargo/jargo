@@ -7,10 +7,10 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/service/llm"
-	uctx "github.com/gojargo/jargo/utils/context"
-	"github.com/gojargo/jargo/utils/events"
+	"github.com/gojargo/jargo/text/align"
 	"github.com/google/uuid"
 )
 
@@ -56,7 +56,7 @@ type SummaryApplied struct {
 // pipeline's own LLM, whose answer comes back as an
 // LLMContextSummaryResultFrame.
 type Summarizer struct {
-	events.Registry
+	event.Registry
 
 	context    *frames.LLMContext
 	autoConfig frames.AutoSummarizationConfig
@@ -195,7 +195,7 @@ func (s *Summarizer) shouldSummarize() bool {
 		return false
 	}
 
-	totalTokens := uctx.EstimateContextTokens(s.context)
+	totalTokens := align.EstimateContextTokens(s.context)
 
 	tokenLimit := s.autoConfig.MaxContextTokens
 	tokenLimitExceeded := tokenLimit != nil && totalTokens >= *tokenLimit

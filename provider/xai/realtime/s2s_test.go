@@ -13,10 +13,10 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/provider/xai/realtime"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // fakeRealtime is a WebSocket server standing in for xAI's Realtime API. It
@@ -147,9 +147,9 @@ func runCollecting(t *testing.T, cfg realtime.Config, upstream bool) (
 		got = append(got, f)
 		mu.Unlock()
 	}
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, record)
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, record)
 	if upstream {
-		events.On(&task.Registry, pipeline.EventFrameReachedUpstream, record)
+		event.On(&task.Registry, pipeline.EventFrameReachedUpstream, record)
 	}
 	done := make(chan error, 1)
 	go func() { done <- task.Run(context.Background()) }()

@@ -7,9 +7,9 @@ import (
 	"testing"
 
 	"github.com/gojargo/jargo/clock"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // TestBeforeAndAfterFrameEvents checks the four events a processor raises around
@@ -22,7 +22,7 @@ func TestBeforeAndAfterFrameEvents(t *testing.T) {
 
 	var mu sync.Mutex
 	fired := map[string][]string{}
-	record := func(name string) events.Handler {
+	record := func(name string) event.Handler {
 		return func(_ context.Context, _ any, args ...any) {
 			f, ok := args[0].(frames.Frame)
 			if !ok {

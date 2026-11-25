@@ -5,9 +5,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gojargo/jargo/errclass"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
-	errs "github.com/gojargo/jargo/utils/errors"
 )
 
 // ErrorEvent is one failure, as the processor that raised it described it.
@@ -17,7 +17,7 @@ type ErrorEvent struct {
 	// Category is why it failed, drawn from [errors.Category] and independent of
 	// the provider that failed: rejected credentials, an unreachable service, a
 	// malformed request and so on.
-	Category errs.Category
+	Category errclass.Category
 	// ExceptionType is the type of the error behind the failure, where one
 	// caused it, and "" where none did. Failures group by this where a message,
 	// carrying the particulars of a single occurrence, is too specific to group
@@ -109,8 +109,8 @@ func (o *Errors) OnPushFrame(data processor.FramePushed) {
 	// A category is settled by the time the frame travels, but an error frame
 	// pushed without going through PushErrorFrame can still carry none.
 	category := ef.Category
-	if category == errs.Unset {
-		category = errs.Unknown
+	if category == errclass.Unset {
+		category = errclass.Unknown
 	}
 
 	exceptionType := ""

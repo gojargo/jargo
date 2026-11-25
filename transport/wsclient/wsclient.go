@@ -20,19 +20,19 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/gojargo/jargo/audio"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/internal/shared"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/transport"
 	"github.com/gojargo/jargo/transport/wsserver"
 	"github.com/gojargo/jargo/transport/wsserver/protobuf"
-	"github.com/gojargo/jargo/utils/events"
-	"github.com/gojargo/jargo/utils/shared"
 )
 
 // The events a WebSocket client transport raises. Each carries the
 // *websocket.Conn the event is about:
 //
-//	events.On(tr.Events(), wsclient.EventConnected,
+//	event.On(tr.Events(), wsclient.EventConnected,
 //	    func(ctx context.Context, conn *websocket.Conn) { … })
 const (
 	// EventConnected fires once the connection to the server is established.
@@ -561,7 +561,7 @@ type Transport struct {
 	name    string
 	params  Params
 	session *Session
-	events  events.Registry
+	events  event.Registry
 	// self is the transport handling connection events: this one, or the
 	// transport built on it.
 	self connectionHandler
@@ -626,7 +626,7 @@ func (t *Transport) SetOutput(out *OutputTransport) {
 
 // Events is the registry of the events this transport raises. See
 // EventConnected and EventDisconnected.
-func (t *Transport) Events() *events.Registry { return &t.events }
+func (t *Transport) Events() *event.Registry { return &t.events }
 
 // CloseError is how the server closed the connection, or nil while it is open
 // (see Session.CloseError). A handler of EventDisconnected reads it to say how

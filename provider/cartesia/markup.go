@@ -4,7 +4,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/gojargo/jargo/utils/text"
+	"github.com/gojargo/jargo/text"
 )
 
 // The markup Cartesia reads inside the text it is given. The helpers below build

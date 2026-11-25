@@ -10,11 +10,11 @@ import (
 	"time"
 
 	"github.com/gojargo/jargo/audio/resample"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/transport"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // constPCM is constant-valued 16-bit mono PCM at 48 kHz, ms long.
@@ -193,7 +193,7 @@ func pushParticipants(t *testing.T, opts options, audio []participantAudio) []fr
 		Params: pipeline.Params{AudioInSampleRate: 16000},
 	})
 	started := make(chan struct{})
-	events.On(&w.Registry, pipeline.EventPipelineStarted, func(context.Context, *frames.StartFrame) { close(started) })
+	event.On(&w.Registry, pipeline.EventPipelineStarted, func(context.Context, *frames.StartFrame) { close(started) })
 	done := make(chan error, 1)
 	go func() { done <- w.Run(context.Background()) }()
 	select {

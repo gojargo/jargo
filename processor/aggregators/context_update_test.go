@@ -7,11 +7,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor/aggregators"
 	"github.com/gojargo/jargo/processor/turns"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // Tests for the frames that mutate the shared LLM context. Each must do two
@@ -35,7 +35,7 @@ func runAggregator(t *testing.T, convo *frames.LLMContext) (*pipeline.Worker, ch
 	task := pipeline.NewWorker(pipeline.New(pair.User()), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		select {
 		case seen <- f:
 		default:
@@ -302,7 +302,7 @@ func TestAssistantMessagesTransformFrame(t *testing.T) {
 		ReachedUpstreamFilter: pipeline.AnyFrame,
 	})
 	seen := make(chan frames.Frame, 32)
-	events.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
 		select {
 		case seen <- f:
 		default:

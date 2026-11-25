@@ -6,11 +6,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor/aggregators"
 	"github.com/gojargo/jargo/processor/turns"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // completionStop decides the user is done when a
@@ -59,7 +59,7 @@ func TestUserAggregatorTriggersLLMOnFinal(t *testing.T) {
 	task := pipeline.NewWorker(pipeline.New(pair.User()), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if _, ok := f.(*frames.LLMContextFrame); ok {
 			select {
 			case triggered <- struct{}{}:
@@ -112,7 +112,7 @@ func TestUserAggregatorTurnTakingGatesOnEndOfTurn(t *testing.T) {
 	task := pipeline.NewWorker(pipeline.New(pair.User()), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if _, ok := f.(*frames.LLMContextFrame); ok {
 			select {
 			case triggered <- struct{}{}:
@@ -177,7 +177,7 @@ func TestUserAggregatorKeepsTheTranscriptThatEndsTheTurn(t *testing.T) {
 	task := pipeline.NewWorker(pipeline.New(pair.User()), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if _, ok := f.(*frames.LLMContextFrame); ok {
 			select {
 			case triggered <- struct{}{}:
@@ -240,7 +240,7 @@ func TestUserAggregatorDoesNotAnswerATranscriptOutsideATurn(t *testing.T) {
 	task := pipeline.NewWorker(pipeline.New(pair.User()), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if _, ok := f.(*frames.LLMContextFrame); ok {
 			runs <- struct{}{}
 		}
@@ -366,7 +366,7 @@ func TestUserAggregatorKeepsTheSpeechThatOpensTheTurn(t *testing.T) {
 	task := pipeline.NewWorker(pipeline.New(pair.User()), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if _, ok := f.(*frames.LLMContextFrame); ok {
 			select {
 			case triggered <- struct{}{}:
@@ -440,7 +440,7 @@ func TestUserAggregatorRunsInferenceBeforeDeferredFinalization(t *testing.T) {
 	task := pipeline.NewWorker(pipeline.New(pair.User()), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if _, ok := f.(*frames.LLMContextFrame); ok {
 			select {
 			case triggered <- struct{}{}:

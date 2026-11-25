@@ -36,7 +36,7 @@ import (
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/processor/turns"
 	"github.com/gojargo/jargo/service/stt"
-	"github.com/gojargo/jargo/utils/text"
+	"github.com/gojargo/jargo/text"
 )
 
 // The placeholder contents a tool-result message holds while its call has not

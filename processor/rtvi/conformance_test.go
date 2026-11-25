@@ -18,11 +18,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor/rtvi"
 	"github.com/gojargo/jargo/processor/rtvi/spec"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // Tests that the server speaks RTVI as its specification says.
@@ -544,7 +544,7 @@ func newSpecSession(t *testing.T, params *rtvi.ObserverParams) *specSession {
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
 	s := &specSession{t: t, proc: proc, task: task, done: make(chan error, 1)}
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if m, ok := f.(*frames.OutputTransportMessageUrgentFrame); ok {
 			if msg, ok := m.Message.(rtvi.Message); ok {
 				w := wire(t, msg)

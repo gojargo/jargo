@@ -16,13 +16,13 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/processor/rtvi"
 	"github.com/gojargo/jargo/transport/wsclient"
 	"github.com/gojargo/jargo/transport/wsclient/rtviclient"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 func rtviMessage(t *testing.T, msgType string, data map[string]any) []byte {
@@ -244,7 +244,7 @@ func TestBotReadyIsHandledBeforeTheBotsNextMessage(t *testing.T) {
 	tr := wsclient.NewRTVITransport(server.url, wsclient.Params{
 		Serializer: &recordingSerializer{Serializer: rtviclient.New(), record: record},
 	})
-	events.OnSignal(tr.Events(), wsclient.EventBotReady, func(context.Context) {
+	event.OnSignal(tr.Events(), wsclient.EventBotReady, func(context.Context) {
 		time.Sleep(100 * time.Millisecond)
 		record("on_bot_ready")
 	})

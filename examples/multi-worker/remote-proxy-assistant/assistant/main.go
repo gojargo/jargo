@@ -28,11 +28,11 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/gojargo/jargo/bus"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/provider/openai/chat"
 	"github.com/gojargo/jargo/service/llm"
 	"github.com/gojargo/jargo/service/wsutil"
-	"github.com/gojargo/jargo/utils/events"
 	"github.com/gojargo/jargo/workers"
 	"github.com/gojargo/jargo/workers/llmworker"
 	"github.com/gojargo/jargo/workers/proxy"
@@ -122,11 +122,11 @@ func websocketEndpoint(w http.ResponseWriter, r *http.Request) {
 
 	runner.AddWorkers(ctx, gateway, assistant)
 
-	events.OnSignal(gateway.Events(), proxy.EventClientConnected, func(context.Context) {
+	event.OnSignal(gateway.Events(), proxy.EventClientConnected, func(context.Context) {
 		slog.Info("WebSocket client connected")
 	})
 
-	events.OnSignal(gateway.Events(), proxy.EventClientDisconnected, func(ctx context.Context) {
+	event.OnSignal(gateway.Events(), proxy.EventClientDisconnected, func(ctx context.Context) {
 		slog.Info("WebSocket client disconnected")
 		runner.Cancel(ctx, "WebSocket client disconnected")
 	})

@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/service/stt"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // The eval session: one conversation with a bot, driven to a result.
@@ -52,7 +52,7 @@ const (
 // SimulationProgress). Records are delivered in order, and Run waits for every
 // handler before it returns:
 //
-//	events.On(&session.Registry, eval.EventProgress, func(ctx context.Context, p eval.Progress) { … })
+//	event.On(&session.Registry, eval.EventProgress, func(ctx context.Context, p eval.Progress) { … })
 const EventProgress = "on_progress"
 
 // errAudioSupportCheck is an AudioSupportCheck of no known value.
@@ -150,7 +150,7 @@ func (p SessionParams) validate() error {
 // for their kind of scenario; SessionFromScenario builds whichever kind a
 // scenario is. It raises EventProgress.
 type Session[R any] struct {
-	events.Registry
+	event.Registry
 
 	kind   Kind
 	name   string

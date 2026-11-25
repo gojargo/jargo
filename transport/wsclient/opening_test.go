@@ -10,10 +10,10 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/transport/wsclient"
 	"github.com/gojargo/jargo/transport/wsserver"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // The opening messages go out first on the connection, ahead of the
@@ -57,7 +57,7 @@ func TestCloseErrorCarriesHowTheServerClosed(t *testing.T) {
 
 	tr := wsclient.NewRTVITransport("ws"+strings.TrimPrefix(srv.URL, "http"), wsclient.Params{})
 	closed := make(chan error, 1)
-	events.On(tr.Events(), wsclient.EventDisconnected, func(context.Context, *websocket.Conn) {
+	event.On(tr.Events(), wsclient.EventDisconnected, func(context.Context, *websocket.Conn) {
 		closed <- tr.CloseError()
 	})
 	noRTVI := false

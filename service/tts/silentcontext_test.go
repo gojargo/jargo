@@ -14,11 +14,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/service/tts"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // silenceDelivery is how long the fake provider takes to answer a request. It is
@@ -96,7 +96,7 @@ func newSilenceHarness(t *testing.T, limit int, syn *silentSynth) *silenceHarnes
 	h.task = pipeline.NewWorker(pipeline.New(base), pipeline.WorkerConfig{
 		ReachedUpstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&h.task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
+	event.On(&h.task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
 		if ef, ok := f.(*frames.ErrorFrame); ok {
 			h.mu.Lock()
 			h.errs = append(h.errs, ef)

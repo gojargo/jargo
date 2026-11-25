@@ -11,10 +11,10 @@ import (
 
 	"github.com/gojargo/jargo/audio/opus"
 	"github.com/gojargo/jargo/audio/resample"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/transport"
-	"github.com/gojargo/jargo/utils/events"
 	"github.com/pion/webrtc/v4"
 )
 
@@ -141,7 +141,7 @@ func NewTransport(conn *Connection, params transport.Params, opts ...Option) *Tr
 func (t *Transport) Input() processor.Processor { return t.in }
 
 // Events returns the registry of the events the transport raises.
-func (t *Transport) Events() *events.Registry { return t.in.Events() }
+func (t *Transport) Events() *event.Registry { return t.in.Events() }
 
 // GetClientID returns the identity of the participant a client event carries,
 // which is the participant id image requests take. A client that is not a

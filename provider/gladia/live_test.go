@@ -12,9 +12,9 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/errclass"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/service/stt"
-	errs "github.com/gojargo/jargo/utils/errors"
 )
 
 // Tests for the live session: Gladia is dialed in two stages, a REST call that
@@ -161,7 +161,7 @@ func TestConnectReportsARefusedSession(t *testing.T) {
 	// The status, not merely a failure: without the check the refusal body is
 	// read as a session and the dial fails afterwards for an unrelated reason,
 	// which tells a caller nothing about why the key was rejected.
-	var status *errs.HTTPStatusError
+	var status *errclass.HTTPStatusError
 	if !errors.As(err, &status) {
 		t.Fatalf("Connect against a refused session = %v, want an HTTP status error", err)
 	}

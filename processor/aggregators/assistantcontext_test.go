@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor/aggregators"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // The conversation-changing frames arriving from the assistant's side of the
@@ -130,7 +130,7 @@ func TestHeldMarkerJoinsTheReplyButNotTheTranscript(t *testing.T) {
 	)
 	pair := aggregators.New(convo)
 	assistant := pair.Assistant()
-	events.On(assistant.Events(), aggregators.EventAssistantTurnStopped,
+	event.On(assistant.Events(), aggregators.EventAssistantTurnStopped,
 		func(_ context.Context, m aggregators.AssistantTurnStopped) {
 			mu.Lock()
 			reported = append(reported, m)

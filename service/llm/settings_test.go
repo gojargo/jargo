@@ -6,11 +6,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/service/llm"
 	"github.com/gojargo/jargo/service/settings"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // settingsGenerator holds settings the way a provider does and records what it
@@ -113,7 +113,7 @@ func TestLLMSettingsUpdateRelabelsTheModel(t *testing.T) {
 		},
 	})
 	var reportedMu sync.Mutex
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		mf, ok := f.(*frames.MetricsFrame)
 		if !ok {
 			return

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/errclass"
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/processor/turns"
@@ -22,7 +23,6 @@ import (
 	"github.com/gojargo/jargo/service/stt"
 	"github.com/gojargo/jargo/service/wsservice"
 	"github.com/gojargo/jargo/service/wsutil"
-	errs "github.com/gojargo/jargo/utils/errors"
 )
 
 const (
@@ -542,7 +542,7 @@ func (s *turnsStream) handleUnconfirmed(data []byte) (bool, error) {
 	case turnsError:
 		err := m.serverError()
 		if m.StatusCode != 0 {
-			err = errs.NewHTTPStatusError(m.StatusCode, err)
+			err = errclass.NewHTTPStatusError(m.StatusCode, err)
 		}
 		s.reportError(err)
 		return false, err

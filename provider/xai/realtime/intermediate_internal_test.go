@@ -11,10 +11,10 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // A speech-to-speech service takes a tool's intermediate results, its final
@@ -91,7 +91,7 @@ func startedService(t *testing.T, srv *recordingSession) *Service {
 	s := New(Config{APIKey: "k", BaseURL: "ws" + strings.TrimPrefix(srv.URL, "http")})
 	w := pipeline.NewWorker(pipeline.New(s), pipeline.WorkerConfig{})
 	started := make(chan struct{})
-	events.On(&w.Registry, pipeline.EventPipelineStarted, func(context.Context, *frames.StartFrame) { close(started) })
+	event.On(&w.Registry, pipeline.EventPipelineStarted, func(context.Context, *frames.StartFrame) { close(started) })
 	done := make(chan error, 1)
 	go func() { done <- w.Run(context.Background()) }()
 	t.Cleanup(func() {
@@ -394,7 +394,7 @@ func TestTheContextScanNeitherErrorsNorResends(t *testing.T) {
 	s := startedService(t, srv)
 	var errs []*frames.ErrorFrame
 	var mu sync.Mutex
-	events.On(s.Events(), processor.EventError, func(_ context.Context, ef *frames.ErrorFrame) {
+	event.On(s.Events(), processor.EventError, func(_ context.Context, ef *frames.ErrorFrame) {
 		mu.Lock()
 		errs = append(errs, ef)
 		mu.Unlock()

@@ -26,6 +26,7 @@ import (
 	"unicode"
 
 	"github.com/gojargo/jargo/audio/onset"
+	"github.com/gojargo/jargo/errclass"
 	"github.com/gojargo/jargo/expressive"
 	"github.com/gojargo/jargo/expressive/formatter"
 	"github.com/gojargo/jargo/frames"
@@ -34,9 +35,8 @@ import (
 	"github.com/gojargo/jargo/service"
 	"github.com/gojargo/jargo/service/settings"
 	"github.com/gojargo/jargo/telemetry/metrics"
-	uctx "github.com/gojargo/jargo/utils/context"
-	errs "github.com/gojargo/jargo/utils/errors"
-	ttstext "github.com/gojargo/jargo/utils/text"
+	ttstext "github.com/gojargo/jargo/text"
+	"github.com/gojargo/jargo/text/align"
 	"github.com/google/uuid"
 )
 
@@ -114,7 +114,7 @@ type WordTimestamps interface {
 		ctx context.Context,
 		text, contextID string,
 		yield func(f frames.Frame) error,
-		word func(words []uctx.WordTiming, opts WordTimingOptions) error,
+		word func(words []align.WordTiming, opts WordTimingOptions) error,
 	) error
 }
 
@@ -253,7 +253,7 @@ type Base struct {
 	skippedAggregator ttstext.Aggregator
 	// sequencer keeps the frames of a synthesis in the order the text was
 	// spoken, so the conversation records it that way.
-	sequencer *uctx.AggregatedFrameSequencer
+	sequencer *align.AggregatedFrameSequencer
 
 	// Audio contexts. serial orders playback across contexts; audioContexts
 	// holds each open context's queue. See audiocontext.go.
@@ -378,7 +378,7 @@ func New(name string, syn Synthesizer) *Base {
 	lang := settingsLanguage(syn)
 	b.aggregator = ttstext.NewSimpleAggregator(frames.TextTypeSentence, lang)
 	b.skippedAggregator = ttstext.NewSimpleAggregator(frames.TextTypeSentence, lang)
-	b.sequencer = uctx.NewAggregatedFrameSequencer(name, false)
+	b.sequencer = align.NewAggregatedFrameSequencer(name, false)
 	if d, ok := syn.(Describer); ok {
 		b.meta = d.Metadata()
 	}
@@ -442,13 +442,13 @@ func (b *Base) SetTextAggregator(a ttstext.Aggregator) {
 	// tokens it assembles them back into sentences and opens a slot only once a
 	// boundary is confirmed; given whole units it opens one per unit. Built here
 	// rather than read at push time because the mode is fixed for the run.
-	b.sequencer = uctx.NewAggregatedFrameSequencer(b.Name(), a.Type() == frames.TextTypeToken)
+	b.sequencer = align.NewAggregatedFrameSequencer(b.Name(), a.Type() == frames.TextTypeToken)
 }
 
 // EventTTSRequest fires just before each unit of text is handed to the
 // synthesizer, carrying a TTSRequest.
 //
-//	events.On(svc.Events(), tts.EventTTSRequest,
+//	event.On(svc.Events(), tts.EventTTSRequest,
 //	    func(ctx context.Context, r tts.TTSRequest) { … })
 const EventTTSRequest = "on_tts_request"
 
@@ -609,7 +609,7 @@ func (b *Base) transformText(
 			// dropped rather than spoken as it stands: a transform may be there to
 			// remove something, and saying it anyway would defeat it.
 			b.PushError(ctx, fmt.Sprintf("transforming text for synthesis [%s]", text), err, false,
-				processor.WithErrorCategory(errs.Application))
+				processor.WithErrorCategory(errclass.Application))
 			return "", false
 		}
 		text = out
@@ -1710,7 +1710,7 @@ func (b *Base) runTTS(
 		slog.WarnContext(ctx, "service is no longer usable, not speaking",
 			"service", b.Name(), "text", prepared)
 	} else if wt, ok := b.syn.(WordTimestamps); ok {
-		word := func(words []uctx.WordTiming, opts WordTimingOptions) error {
+		word := func(words []align.WordTiming, opts WordTimingOptions) error {
 			b.AddWordTimestamps(contextID, words, opts)
 			return nil
 		}
@@ -1954,7 +1954,7 @@ func streamResponse(client *http.Client, req *http.Request, text *string, emit f
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return errs.NewHTTPStatusError(resp.StatusCode, fmt.Errorf("%w %d: %s", errStatus, resp.StatusCode, msg))
+		return errclass.NewHTTPStatusError(resp.StatusCode, fmt.Errorf("%w %d: %s", errStatus, resp.StatusCode, msg))
 	}
 	if text != nil {
 		StartUsageMetrics(req.Context(), *text)

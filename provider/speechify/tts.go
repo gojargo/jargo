@@ -19,8 +19,8 @@ import (
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/service/settings"
 	"github.com/gojargo/jargo/service/tts"
-	uctx "github.com/gojargo/jargo/utils/context"
-	ttstext "github.com/gojargo/jargo/utils/text"
+	ttstext "github.com/gojargo/jargo/text"
+	"github.com/gojargo/jargo/text/align"
 )
 
 // HTTPTTSConfig configures the Speechify HTTP TTS service.
@@ -303,7 +303,7 @@ func (s *synthesizer) RunTTSTimed(
 	ctx context.Context,
 	text, _ string,
 	yield func(f frames.Frame) error,
-	word func(words []uctx.WordTiming, opts tts.WordTimingOptions) error,
+	word func(words []align.WordTiming, opts tts.WordTimingOptions) error,
 ) error {
 	err := s.runTTS(ctx, text, yield, word)
 	if err == nil || ctx.Err() != nil {
@@ -319,7 +319,7 @@ func (s *synthesizer) runTTS(
 	ctx context.Context,
 	text string,
 	yield func(f frames.Frame) error,
-	word func(words []uctx.WordTiming, opts tts.WordTimingOptions) error,
+	word func(words []align.WordTiming, opts tts.WordTimingOptions) error,
 ) error {
 	body, err := json.Marshal(s.buildPayload(text))
 	if err != nil {
@@ -358,14 +358,14 @@ func (s *synthesizer) processStream(
 	r io.Reader,
 	text string,
 	yield func(f frames.Frame) error,
-	word func(words []uctx.WordTiming, opts tts.WordTimingOptions) error,
+	word func(words []align.WordTiming, opts tts.WordTimingOptions) error,
 ) error {
 	s.mu.Lock()
 	offset := s.cumulativeTime
 	s.mu.Unlock()
 	words := newSpeechMarkAccumulator(text, offset)
 	utteranceDuration := 0.0
-	report := func(timed []uctx.WordTiming) error {
+	report := func(timed []align.WordTiming) error {
 		if word == nil || len(timed) == 0 {
 			return nil
 		}

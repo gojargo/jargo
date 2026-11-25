@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/service/wsservice"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // errUnavailable is a transient refusal, the kind a provider recycling its
@@ -88,7 +88,7 @@ func runFailing(t *testing.T, s *StreamService, d time.Duration) []*frames.Error
 	task := pipeline.NewWorker(pipeline.New(s), pipeline.WorkerConfig{
 		ReachedUpstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
 		if ef, ok := f.(*frames.ErrorFrame); ok {
 			mu.Lock()
 			errs = append(errs, ef)

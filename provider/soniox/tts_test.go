@@ -6,8 +6,8 @@ import (
 
 	"github.com/gojargo/jargo/internal/providertest"
 	"github.com/gojargo/jargo/language"
-	uctx "github.com/gojargo/jargo/utils/context"
-	"github.com/gojargo/jargo/utils/text"
+	"github.com/gojargo/jargo/text"
+	"github.com/gojargo/jargo/text/align"
 )
 
 // TestTTSConfigValidate pins which TTSConfig fields the provider requires and
@@ -187,7 +187,7 @@ func synthIn(lang language.Language) *ttsSynthesizer {
 
 func TestToWordTimesAssemblesWords(t *testing.T) {
 	s := synthIn(language.English)
-	want := []uctx.WordTiming{{Word: "Hi", Offset: 0}, {Word: "world.", Offset: 0.3}}
+	want := []align.WordTiming{{Word: "Hi", Offset: 0}, {Word: "world.", Offset: 0.3}}
 	if got := s.toWordTimes("s1", timings("Hi world. ", 0)); !slices.Equal(got, want) {
 		t.Errorf("words = %v, want %v", got, want)
 	}
@@ -198,7 +198,7 @@ func TestToWordTimesCarriesAPartialWordAcrossMessages(t *testing.T) {
 	if got := s.toWordTimes("s1", timings("Hel", 0)); len(got) != 0 {
 		t.Errorf("words = %v, want none before the word ends", got)
 	}
-	want := []uctx.WordTiming{{Word: "Hello", Offset: 0}, {Word: "you", Offset: 0.6}}
+	want := []align.WordTiming{{Word: "Hello", Offset: 0}, {Word: "you", Offset: 0.6}}
 	if got := s.toWordTimes("s1", timings("lo you ", 0.3)); !slices.Equal(got, want) {
 		t.Errorf("words = %v, want %v", got, want)
 	}
@@ -208,7 +208,7 @@ func TestToWordTimesCarriesAPartialWordAcrossMessages(t *testing.T) {
 // terminate.
 func TestToWordTimesBuffersTheFinalWord(t *testing.T) {
 	s := synthIn(language.English)
-	want := []uctx.WordTiming{{Word: "Hi", Offset: 0}}
+	want := []align.WordTiming{{Word: "Hi", Offset: 0}}
 	if got := s.toWordTimes("s1", timings("Hi you", 0)); !slices.Equal(got, want) {
 		t.Errorf("words = %v, want %v", got, want)
 	}
@@ -227,11 +227,11 @@ func TestToWordTimesKeepsStreamsApart(t *testing.T) {
 	if p := s.partials["s2"]; p != (partialWord{word: "wor", start: 1.0}) {
 		t.Errorf("s2 partial = %+v", p)
 	}
-	if got := s.toWordTimes("s1", timings("lo ", 0.3)); !slices.Equal(got, []uctx.WordTiming{{Word: "Hello", Offset: 0}}) {
+	if got := s.toWordTimes("s1", timings("lo ", 0.3)); !slices.Equal(got, []align.WordTiming{{Word: "Hello", Offset: 0}}) {
 		t.Errorf("s1 words = %v", got)
 	}
 	got := s.toWordTimes("s2", timings("ld ", 1.3))
-	if !slices.Equal(got, []uctx.WordTiming{{Word: "world", Offset: 1.0}}) {
+	if !slices.Equal(got, []align.WordTiming{{Word: "world", Offset: 1.0}}) {
 		t.Errorf("s2 words = %v", got)
 	}
 }
@@ -251,9 +251,9 @@ func TestToWordTimesSpacelessLanguagesPerCharacter(t *testing.T) {
 	for _, tc := range []struct {
 		lang language.Language
 		text string
-		want []uctx.WordTiming
+		want []align.WordTiming
 	}{
-		{language.Japanese, "こんにちは、私", []uctx.WordTiming{
+		{language.Japanese, "こんにちは、私", []align.WordTiming{
 			{Word: "こ", Offset: 0},
 			{Word: "ん", Offset: 0.1},
 			{Word: "に", Offset: 0.2},
@@ -261,7 +261,7 @@ func TestToWordTimesSpacelessLanguagesPerCharacter(t *testing.T) {
 			{Word: "は", Offset: 0.4},
 			{Word: "私", Offset: 0.6},
 		}},
-		{language.Chinese, "你好，世界。", []uctx.WordTiming{
+		{language.Chinese, "你好，世界。", []align.WordTiming{
 			{Word: "你", Offset: 0}, {Word: "好", Offset: 0.1}, {Word: "世", Offset: 0.3}, {Word: "界", Offset: 0.4},
 		}},
 	} {
@@ -293,7 +293,7 @@ func TestSpacelessTokensConcatenateWithoutSpaces(t *testing.T) {
 func TestSpacelessPunctuationRecoveredByTheWordTracker(t *testing.T) {
 	const sentence = "こんにちは、私はAIです。"
 	s := synthIn(language.Japanese)
-	tracker := uctx.NewWordCompletionTracker(sentence, "", "")
+	tracker := align.NewWordCompletionTracker(sentence, "", "")
 	complete := false
 	for _, w := range s.toWordTimes("s1", timings(sentence, 0)) {
 		complete = tracker.AddWord(w.Word)

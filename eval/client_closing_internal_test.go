@@ -6,13 +6,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor/aggregators"
 	"github.com/gojargo/jargo/processor/rtvi"
 	"github.com/gojargo/jargo/processor/turns"
 	"github.com/gojargo/jargo/service/llm"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // speechTimeoutStop is a speech timeout standing in for the default turn
@@ -78,7 +78,7 @@ func closingTurns(t *testing.T, steps func(t *testing.T) []step) []closedTurn {
 		mu     sync.Mutex
 		closed []closedTurn
 	)
-	events.On(pair.User().Events(), aggregators.EventUserTurnStopped,
+	event.On(pair.User().Events(), aggregators.EventUserTurnStopped,
 		func(_ context.Context, stopped aggregators.UserTurnStopped) {
 			mu.Lock()
 			closed = append(closed, closedTurn{strategy: stopped.Strategy, text: stopped.Content})
@@ -95,7 +95,7 @@ func closingTurns(t *testing.T, steps func(t *testing.T) []step) []closedTurn {
 	worker := pipeline.NewWorker(pipeline.New(pair.User(), sink), pipeline.WorkerConfig{EnableRTVI: &noRTVI})
 	started := make(chan struct{})
 	var once sync.Once
-	events.On(worker.Events(), pipeline.EventPipelineStarted,
+	event.On(worker.Events(), pipeline.EventPipelineStarted,
 		func(context.Context, *frames.StartFrame) { once.Do(func() { close(started) }) })
 	done := make(chan error, 1)
 	go func() { done <- worker.Run(context.WithoutCancel(t.Context())) }()

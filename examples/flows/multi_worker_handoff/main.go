@@ -47,6 +47,7 @@ import (
 
 	"github.com/gojargo/jargo/audio/vad"
 	"github.com/gojargo/jargo/bus"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/examples/flows/utils"
 	"github.com/gojargo/jargo/flows"
 	"github.com/gojargo/jargo/frames"
@@ -59,7 +60,6 @@ import (
 	"github.com/gojargo/jargo/transport"
 	"github.com/gojargo/jargo/transport/wsserver"
 	"github.com/gojargo/jargo/transport/wsserver/evalws"
-	"github.com/gojargo/jargo/utils/events"
 	"github.com/gojargo/jargo/workers"
 	"github.com/gojargo/jargo/workers/llmworker"
 )
@@ -201,7 +201,7 @@ func buildReservationWorker(
 
 	var initialized atomic.Bool
 
-	events.OnSignal(worker.Events(), workers.EventActivated, func(ctx context.Context) {
+	event.OnSignal(worker.Events(), workers.EventActivated, func(ctx context.Context) {
 		if !initialized.Swap(true) {
 			if err := flowManager.Initialize(ctx, rf.partySizeNode()); err != nil {
 				slog.Error("initialize flow", "err", err)
@@ -607,7 +607,7 @@ func runBot(ctx context.Context, t transport.Transport, args runner.Arguments) e
 
 	r.AddWorkers(ctx, router, reservation, worker)
 
-	events.On(t.Events(), transport.EventClientConnected, func(ctx context.Context, _ any) {
+	event.On(t.Events(), transport.EventClientConnected, func(ctx context.Context, _ any) {
 		slog.Info("Client connected")
 		// Start the conversation with the router.
 		worker.ActivateWorker(ctx, routerName, workers.ActivateOptions{
@@ -625,7 +625,7 @@ func runBot(ctx context.Context, t transport.Transport, args runner.Arguments) e
 		})
 	})
 
-	events.On(t.Events(), transport.EventClientDisconnected, func(ctx context.Context, _ any) {
+	event.On(t.Events(), transport.EventClientDisconnected, func(ctx context.Context, _ any) {
 		slog.Info("Client disconnected")
 		r.Cancel(ctx, "client disconnected")
 	})

@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/gojargo/jargo/audio/vad"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor/aggregators"
@@ -29,7 +30,6 @@ import (
 	"github.com/gojargo/jargo/runner"
 	"github.com/gojargo/jargo/transport"
 	"github.com/gojargo/jargo/transport/livekit"
-	"github.com/gojargo/jargo/utils/events"
 	"github.com/gojargo/jargo/workers"
 	"github.com/joho/godotenv"
 )
@@ -88,7 +88,7 @@ func run(ctx context.Context) error {
 
 	// Register an event handler so we can play the audio when the participant
 	// joins.
-	events.On(t.Events(), livekit.EventFirstParticipantJoined, func(context.Context, string) {
+	event.On(t.Events(), livekit.EventFirstParticipantJoined, func(context.Context, string) {
 		time.Sleep(time.Second)
 		worker.QueueFrame(frames.NewTTSSpeakFrame(
 			"Hello there! How are you doing today? Would you like to talk about the weather?"))

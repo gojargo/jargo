@@ -12,10 +12,10 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/service/stt"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // Tests for the turn detection modes: Flux deciding where turns end, and the
@@ -151,7 +151,7 @@ func TestFluxVADForceTurnEndpointForceEndsTheTurnOnVADStop(t *testing.T) {
 	interim := make(chan struct{}, 1)
 	transcripts := make(chan *frames.TranscriptionFrame, 1)
 	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{ReachedDownstreamFilter: pipeline.AnyFrame})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		switch fr := f.(type) {
 		case *frames.ProposedUserStartedSpeakingFrame, *frames.ProposedUserStoppedSpeakingFrame:
 			mu.Lock()

@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/gojargo/jargo/bus"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
-	"github.com/gojargo/jargo/utils/events"
 	"github.com/gojargo/jargo/workers"
 )
 
@@ -35,7 +35,7 @@ func TestTheWorkerAnsweringAProbeLetsGoOfItOnceSettled(t *testing.T) {
 	for _, w := range []*Worker{origin, holder} {
 		wg.Add(1)
 		var once sync.Once
-		events.On(&w.Registry, EventPipelineStarted, func(context.Context, *frames.StartFrame) {
+		event.On(&w.Registry, EventPipelineStarted, func(context.Context, *frames.StartFrame) {
 			once.Do(wg.Done)
 		})
 	}

@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // StagedStream serves a streamed body in two stages: first, then rest after
@@ -50,7 +50,7 @@ func TTFATReported(t *testing.T, svc processor.Processor) (frames.TTFATMetricsDa
 			SendInitialEmptyMetrics: &noInitial,
 		},
 	})
-	events.On(&worker.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&worker.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		mf, ok := f.(*frames.MetricsFrame)
 		if !ok {
 			return

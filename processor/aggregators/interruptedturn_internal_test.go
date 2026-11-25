@@ -6,8 +6,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // Every way an interrupted turn can close, one handler call at a time. The
@@ -28,7 +28,7 @@ func newDeferredClose(t *testing.T) *deferredClose {
 	t.Helper()
 	d := &deferredClose{convo: frames.NewLLMContext("")}
 	d.a = New(d.convo).Assistant()
-	events.On(d.a.Events(), EventAssistantTurnStopped, func(_ context.Context, s AssistantTurnStopped) {
+	event.On(d.a.Events(), EventAssistantTurnStopped, func(_ context.Context, s AssistantTurnStopped) {
 		d.mu.Lock()
 		d.stops = append(d.stops, s)
 		d.mu.Unlock()

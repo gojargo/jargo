@@ -9,27 +9,27 @@ import (
 	"github.com/gojargo/jargo/frames"
 )
 
-// event is a manual-reset event. Waiters block until it is set; clearing it
+// resetEvent is a manual-reset event. Waiters block until it is set; clearing it
 // makes later waiters block again. It is the primitive behind pausing a
 // processor, where a loop has to be held before its next frame and released
 // again later, possibly several times over a session.
-type event struct {
+type resetEvent struct {
 	mu  sync.Mutex
 	ch  chan struct{}
 	set bool
 }
 
-func newEvent() *event { return &event{ch: make(chan struct{})} }
+func newEvent() *resetEvent { return &resetEvent{ch: make(chan struct{})} }
 
 // IsSet reports whether the event is set.
-func (e *event) IsSet() bool {
+func (e *resetEvent) IsSet() bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.set
 }
 
 // Set releases every waiter, and lets a later wait pass straight through.
-func (e *event) Set() {
+func (e *resetEvent) Set() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if !e.set {
@@ -39,7 +39,7 @@ func (e *event) Set() {
 }
 
 // Clear makes a later wait block again.
-func (e *event) Clear() {
+func (e *resetEvent) Clear() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.set {
@@ -50,7 +50,7 @@ func (e *event) Clear() {
 
 // Wait blocks until the event is set, or ctx is done. It reports whether the
 // event was set; false means ctx ended the wait.
-func (e *event) Wait(ctx context.Context) bool {
+func (e *resetEvent) Wait(ctx context.Context) bool {
 	e.mu.Lock()
 	ch, set := e.ch, e.set
 	e.mu.Unlock()

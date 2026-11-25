@@ -13,12 +13,12 @@ import (
 	"time"
 
 	"github.com/gojargo/jargo/classifier"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/expressive"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/processor/perception"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // sampleRate is the sample rate of the pipeline's input audio in these tests.
@@ -342,7 +342,7 @@ func run(t *testing.T, p processor.Processor, params pipeline.Params, send ...an
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 		ReachedUpstreamFilter:   pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		switch f.(type) {
 		case *frames.StartFrame, *frames.EndFrame:
 			return
@@ -351,7 +351,7 @@ func run(t *testing.T, p processor.Processor, params pipeline.Params, send ...an
 		down = append(down, f)
 		mu.Unlock()
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		up = append(up, f)
 		mu.Unlock()

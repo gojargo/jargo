@@ -23,6 +23,7 @@ import (
 
 	"github.com/gojargo/jargo/audio/vad"
 	"github.com/gojargo/jargo/bus"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor/aggregators"
@@ -34,7 +35,6 @@ import (
 	"github.com/gojargo/jargo/transport"
 	"github.com/gojargo/jargo/transport/wsserver"
 	"github.com/gojargo/jargo/transport/wsserver/evalws"
-	"github.com/gojargo/jargo/utils/events"
 	"github.com/gojargo/jargo/workers"
 	"github.com/gojargo/jargo/workers/llmworker"
 )
@@ -237,7 +237,7 @@ func runBot(ctx context.Context, t transport.Transport, args runner.Arguments) e
 
 	r.AddWorkers(ctx, buildGreeter(), buildSupport(), worker)
 
-	events.On(t.Events(), transport.EventClientConnected, func(ctx context.Context, _ any) {
+	event.On(t.Events(), transport.EventClientConnected, func(ctx context.Context, _ any) {
 		slog.Info("Client connected")
 		worker.ActivateWorker(ctx, "greeter", workers.ActivateOptions{
 			Args: llmworker.ActivationArgs{
@@ -250,7 +250,7 @@ func runBot(ctx context.Context, t transport.Transport, args runner.Arguments) e
 		})
 	})
 
-	events.On(t.Events(), transport.EventClientDisconnected, func(ctx context.Context, _ any) {
+	event.On(t.Events(), transport.EventClientDisconnected, func(ctx context.Context, _ any) {
 		slog.Info("Client disconnected")
 		r.Cancel(ctx, "client disconnected")
 	})

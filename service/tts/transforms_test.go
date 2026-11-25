@@ -9,12 +9,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/errclass"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/service/tts"
-	errs "github.com/gojargo/jargo/utils/errors"
-	"github.com/gojargo/jargo/utils/events"
-	ttstext "github.com/gojargo/jargo/utils/text"
+	ttstext "github.com/gojargo/jargo/text"
 )
 
 // errTransform is what a failing transform reports.
@@ -46,14 +46,14 @@ func newTransformHarness(t *testing.T, agg ttstext.Aggregator) *transformHarness
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 		ReachedUpstreamFilter:   pipeline.AnyFrame,
 	})
-	events.On(&h.task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
+	event.On(&h.task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
 		if ef, ok := f.(*frames.ErrorFrame); ok {
 			h.mu.Lock()
 			h.errs = append(h.errs, ef)
 			h.mu.Unlock()
 		}
 	})
-	events.On(&h.task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&h.task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if tf, ok := f.(*frames.TTSTextFrame); ok {
 			h.mu.Lock()
 			h.spokenT = append(h.spokenT, tf.Text)
@@ -237,8 +237,8 @@ func TestFailingTextTransformLeavesTheServiceUsable(t *testing.T) {
 	if len(errFrames) == 0 {
 		t.Fatal("a failing transform reported nothing")
 	}
-	if errFrames[0].Category != errs.Application {
-		t.Errorf("category = %q, want %q", errFrames[0].Category, errs.Application)
+	if errFrames[0].Category != errclass.Application {
+		t.Errorf("category = %q, want %q", errFrames[0].Category, errclass.Application)
 	}
 	if !h.base.Usable() {
 		t.Error("application code failing cost the service its usability")

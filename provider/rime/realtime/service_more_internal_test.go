@@ -11,10 +11,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/service/llm"
 	"github.com/gojargo/jargo/service/settings"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 func TestInterruptedLocalTextDoesNotReplaceProviderHistory(t *testing.T) {
@@ -778,7 +778,7 @@ func TestInterruptionCancelsReplyAndSendsEstimatedPosition(t *testing.T) {
 func observe[T EventPayload](s *Service) func() []T {
 	var mu sync.Mutex
 	var seen []T
-	events.On(s.Events(), EventRimeEvent, func(_ context.Context, event *Event) {
+	event.On(s.Events(), EventRimeEvent, func(_ context.Context, event *Event) {
 		if payload, ok := event.Payload.(T); ok {
 			mu.Lock()
 			seen = append(seen, payload)

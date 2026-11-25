@@ -6,11 +6,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor/turns"
 	"github.com/gojargo/jargo/service/settings"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // turnsQuery opens a session on a connector built from cfg and returns the
@@ -111,7 +111,7 @@ func TestTurnsReportsAnEagerEndOfTurnOnlyWhenEnabled(t *testing.T) {
 		var mu sync.Mutex
 		var eager, interim int
 		task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{ReachedDownstreamFilter: pipeline.AnyFrame})
-		events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+		event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 			mu.Lock()
 			defer mu.Unlock()
 			switch fr := f.(type) {

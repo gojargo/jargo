@@ -6,11 +6,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor/aggregators"
 	"github.com/gojargo/jargo/processor/rtvi"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 func TestBotReadyJSON(t *testing.T) {
@@ -64,7 +64,7 @@ func TestProcessorHandshakeAndTranscript(t *testing.T) {
 		Observers:               []pipeline.Observer{rtvi.NewObserver(proc)},
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if m, ok := f.(*frames.OutputTransportMessageUrgentFrame); ok {
 			if msg, ok := m.Message.(rtvi.Message); ok {
 				out <- msg
@@ -124,7 +124,7 @@ func TestProcessorLifecycleAndFunctionCalls(t *testing.T) {
 		Observers:               []pipeline.Observer{rtvi.NewObserverWithParams(proc, params)},
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if m, ok := f.(*frames.OutputTransportMessageUrgentFrame); ok {
 			if msg, ok := m.Message.(rtvi.Message); ok {
 				out <- msg
@@ -213,7 +213,7 @@ func TestProcessorSendTextInjectsUserTurn(t *testing.T) {
 	task := pipeline.NewWorker(pipeline.New(rtvi.NewProcessor(), pair.User()), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if cf, ok := f.(*frames.LLMContextFrame); ok {
 			select {
 			case got <- cf:
@@ -276,7 +276,7 @@ func TestTranscriptIsReportedThoughTheAggregatorConsumesIt(t *testing.T) {
 		Observers:               []pipeline.Observer{rtvi.NewObserver(proc)},
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if fr, ok := f.(*frames.OutputTransportMessageUrgentFrame); ok {
 			if msg, ok := fr.Message.(rtvi.Message); ok {
 				select {

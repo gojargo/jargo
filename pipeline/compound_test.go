@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // metered is a stand-in for a service: a processor that reports metrics.
@@ -150,7 +150,7 @@ func TestTaskSendsInitialEmptyMetrics(t *testing.T) {
 			EnableMetrics: true,
 		},
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if mf, ok := f.(*frames.MetricsFrame); ok {
 			mu.Lock()
 			got = append(got, mf)
@@ -217,7 +217,7 @@ func TestTaskSkipsInitialEmptyMetrics(t *testing.T) {
 			var mu sync.Mutex
 			var n int
 			worker := pipeline.NewWorker(pipeline.New(newMetered("Svc")), params)
-			events.On(&worker.Registry, pipeline.EventFrameReachedDownstream,
+			event.On(&worker.Registry, pipeline.EventFrameReachedDownstream,
 				func(_ context.Context, f frames.Frame) {
 					if _, ok := f.(*frames.MetricsFrame); ok {
 						mu.Lock()

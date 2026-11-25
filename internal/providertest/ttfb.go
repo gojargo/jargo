@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // TTFBReported drives one generation through svc and reports whether the
@@ -40,7 +40,7 @@ func TTFBReported(t *testing.T, svc processor.Processor) bool {
 			SendInitialEmptyMetrics: &noInitial,
 		},
 	})
-	events.On(&worker.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&worker.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		mf, ok := f.(*frames.MetricsFrame)
 		if !ok {
 			return

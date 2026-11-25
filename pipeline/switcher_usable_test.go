@@ -7,11 +7,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/errclass"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
-	errs "github.com/gojargo/jargo/utils/errors"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // plainSvc forwards everything, standing for a service that never fails.
@@ -178,7 +178,7 @@ func TestSwitcherAnnouncesItsOwnUsability(t *testing.T) {
 	ctx := context.Background()
 
 	announced := make(chan bool, 8)
-	events.On(sw.Events(), processor.EventUsableChanged, func(_ context.Context, usable bool) {
+	event.On(sw.Events(), processor.EventUsableChanged, func(_ context.Context, usable bool) {
 		announced <- usable
 	})
 
@@ -227,7 +227,7 @@ func TestSettingTheSwitcherUsableIsIgnored(t *testing.T) {
 	ctx := context.Background()
 
 	announced := make(chan bool, 4)
-	events.On(sw.Events(), processor.EventUsableChanged, func(_ context.Context, usable bool) {
+	event.On(sw.Events(), processor.EventUsableChanged, func(_ context.Context, usable bool) {
 		announced <- usable
 	})
 
@@ -259,7 +259,7 @@ func runSwitcher(
 	worker := pipeline.NewWorker(pipeline.New(sw), pipeline.WorkerConfig{})
 	var mu sync.Mutex
 	var got []*frames.ErrorFrame
-	events.On(&worker.Registry, pipeline.EventPipelineError, func(_ context.Context, ef *frames.ErrorFrame) {
+	event.On(&worker.Registry, pipeline.EventPipelineError, func(_ context.Context, ef *frames.ErrorFrame) {
 		mu.Lock()
 		got = append(got, ef)
 		mu.Unlock()
@@ -319,7 +319,7 @@ func TestAnErrorFromAServiceInReserveGoesNoFurther(t *testing.T) {
 	worker := pipeline.NewWorker(pipeline.New(sw), pipeline.WorkerConfig{})
 	var mu sync.Mutex
 	var got []*frames.ErrorFrame
-	events.On(&worker.Registry, pipeline.EventPipelineError, func(_ context.Context, ef *frames.ErrorFrame) {
+	event.On(&worker.Registry, pipeline.EventPipelineError, func(_ context.Context, ef *frames.ErrorFrame) {
 		mu.Lock()
 		got = append(got, ef)
 		mu.Unlock()
@@ -403,7 +403,7 @@ func TestARejectedServiceDoesNotMisconfigureTheSwitcher(t *testing.T) {
 	// Inheriting the category would write the switcher off for good, taking its
 	// remaining services with it.
 	failing := newTagSvc("A:", "FAIL")
-	failing.category = errs.Authentication
+	failing.category = errclass.Authentication
 	backup := newTagSvc("B:", "")
 	sw, err := pipeline.NewServiceSwitcher(
 		[]processor.Processor{failing, backup}, pipeline.NewManualStrategy)
@@ -416,8 +416,8 @@ func TestARejectedServiceDoesNotMisconfigureTheSwitcher(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("reported %d errors, want 1", len(got))
 	}
-	if got[0].Category != errs.Unknown {
-		t.Errorf("category: got %q, want %q", got[0].Category, errs.Unknown)
+	if got[0].Category != errclass.Unknown {
+		t.Errorf("category: got %q, want %q", got[0].Category, errclass.Unknown)
 	}
 	if !sw.Usable() {
 		t.Error("a switcher should not inherit a service's rejected configuration")

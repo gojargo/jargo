@@ -6,7 +6,7 @@ import (
 
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/service/tts"
-	ttstext "github.com/gojargo/jargo/utils/text"
+	ttstext "github.com/gojargo/jargo/text"
 )
 
 // TestVoiceFormatterRegistersAsATransform checks the end the divergence was at:

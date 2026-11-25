@@ -19,11 +19,11 @@ import (
 	"time"
 
 	"github.com/gojargo/jargo/classifier"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/expressive"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/pytext"
 	"github.com/gojargo/jargo/processor"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // speechEndWait is the longest a transcription waits for the user to stop
@@ -160,7 +160,7 @@ func New(cfg Config) (*Reader, error) {
 		} else {
 			r.textSources = append(r.textSources, i)
 		}
-		events.On(source.Classifier().Events(), classifier.EventMetrics, r.onClassifierMetrics)
+		event.On(source.Classifier().Events(), classifier.EventMetrics, r.onClassifierMetrics)
 	}
 	r.audio = newRecentSpeech(hearing)
 	return r, nil

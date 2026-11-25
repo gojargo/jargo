@@ -15,13 +15,13 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/processor/aggregators"
 	"github.com/gojargo/jargo/processor/turns"
 	"github.com/gojargo/jargo/transport"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // waitTimeout bounds every wait of the tests.
@@ -736,7 +736,7 @@ func converse(t *testing.T, o harnessOptions) *harness {
 		h.up, pair.User(), h.svc, h.upAfter, h.output, h.down, pair.Assistant(),
 	), pipeline.WorkerConfig{Params: o.params})
 	started := make(chan struct{})
-	events.On(&h.worker.Registry, pipeline.EventPipelineStarted, func(context.Context, *frames.StartFrame) {
+	event.On(&h.worker.Registry, pipeline.EventPipelineStarted, func(context.Context, *frames.StartFrame) {
 		close(started)
 	})
 	go func() { h.done <- h.worker.Run(context.Background()) }()

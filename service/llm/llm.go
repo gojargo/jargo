@@ -29,13 +29,13 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/gojargo/jargo/errclass"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/service"
 	"github.com/gojargo/jargo/service/settings"
 	"github.com/gojargo/jargo/telemetry/metrics"
 	"github.com/gojargo/jargo/telemetry/tracing"
-	errs "github.com/gojargo/jargo/utils/errors"
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
@@ -1876,7 +1876,7 @@ func (b *Base) runFunctionCall(call *functionCall) {
 		// The failure came from the application's own handler, so it says nothing
 		// about whether this service can go on doing its job.
 		b.PushError(ctx, fmt.Sprintf("error executing function call [%s]: %v", call.name, err), err, false,
-			processor.WithErrorCategory(errs.Application))
+			processor.WithErrorCategory(errclass.Application))
 		// A handler that failed will never report, so the call is settled on its
 		// behalf: the conversation is left waiting on a result that can never
 		// arrive otherwise. What it is told names the function and nothing else.

@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor/dtmf"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 func TestAggregatorFlushesOnTerminator(t *testing.T) {
@@ -19,7 +19,7 @@ func TestAggregatorFlushesOnTerminator(t *testing.T) {
 	task := pipeline.NewWorker(pipeline.New(agg), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if tf, ok := f.(*frames.TranscriptionFrame); ok {
 			select {
 			case got <- tf.Text:
@@ -62,7 +62,7 @@ func runKeys(t *testing.T, cfg dtmf.AggregatorConfig, end bool, steps ...any) *d
 	task := pipeline.NewWorker(pipeline.New(dtmf.NewAggregator(cfg)), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		r.mu.Lock()
 		defer r.mu.Unlock()
 		switch fr := f.(type) {

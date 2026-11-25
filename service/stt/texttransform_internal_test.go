@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 const cardNumber = "4111 1111 1111 1111"
@@ -251,7 +251,7 @@ func TestObserversSeeOnlyTheTransformedTranscript(t *testing.T) {
 	})
 	started := make(chan struct{})
 	var once sync.Once
-	events.On(&worker.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&worker.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if _, ok := f.(*frames.StartFrame); ok {
 			once.Do(func() { close(started) })
 		}

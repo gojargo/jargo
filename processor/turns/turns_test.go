@@ -8,11 +8,11 @@ import (
 	"time"
 
 	"github.com/gojargo/jargo/audio/turn"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor/aggregators"
 	"github.com/gojargo/jargo/processor/turns"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // recorder captures the turn-decision frames the processor broadcasts.
@@ -59,7 +59,7 @@ func runTurns(t *testing.T, cfg turns.Config) (*recorder, *pipeline.Worker, chan
 	task := pipeline.NewWorker(pipeline.New(agg.User()), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream,
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream,
 		func(_ context.Context, f frames.Frame) { rec.onDown(f) })
 	done := make(chan error, 1)
 	go func() { done <- task.Run(context.Background()) }()
@@ -310,7 +310,7 @@ func TestTurnAnalyzerReportsItsPrediction(t *testing.T) {
 	task := pipeline.NewWorker(pipeline.New(agg.User()), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		mf, ok := f.(*frames.MetricsFrame)
 		if !ok {
 			return

@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/gojargo/jargo/utils/events"
+	"github.com/gojargo/jargo/event"
 )
 
 // fluxTurnServer serves a Flux session that, once it has audio, reports one turn
@@ -129,13 +129,13 @@ func TestFluxTurnEventsReachTheService(t *testing.T) {
 		got = append(got, s)
 	}
 	for _, name := range []string{EventFluxStartOfTurn, EventFluxEndOfTurn, EventFluxEagerEndOfTurn, EventFluxUpdate} {
-		if id := events.On(svc.Events(), name, func(_ context.Context, transcript string) {
+		if id := event.On(svc.Events(), name, func(_ context.Context, transcript string) {
 			record(name + ":" + transcript)
 		}); id == 0 {
 			t.Fatalf("%s is not declared", name)
 		}
 	}
-	if id := events.OnSignal(svc.Events(), EventFluxTurnResumed, func(context.Context) {
+	if id := event.OnSignal(svc.Events(), EventFluxTurnResumed, func(context.Context) {
 		record(EventFluxTurnResumed)
 	}); id == 0 {
 		t.Fatalf("%s is not declared", EventFluxTurnResumed)

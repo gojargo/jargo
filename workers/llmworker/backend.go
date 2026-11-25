@@ -11,6 +11,8 @@ import (
 	"sync"
 
 	"github.com/gojargo/jargo/bus"
+	"github.com/gojargo/jargo/errclass"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/pipeline/jobcontext"
@@ -18,8 +20,6 @@ import (
 	"github.com/gojargo/jargo/processor/aggregators"
 	"github.com/gojargo/jargo/processor/turns"
 	"github.com/gojargo/jargo/service/llm"
-	errs "github.com/gojargo/jargo/utils/errors"
-	"github.com/gojargo/jargo/utils/events"
 	"github.com/gojargo/jargo/workers"
 )
 
@@ -393,7 +393,7 @@ func transcriptLine(m frames.Message) (string, bool) {
 type BackendLLM interface {
 	ToolRegistrar
 	// Events is the registry the service's frame events are raised on.
-	Events() *events.Registry
+	Events() *event.Registry
 	// HasQueuedFrame reports whether a frame matching is waiting to be handled.
 	HasQueuedFrame(match func(frames.Frame) bool) bool
 	// AppendSystemInstruction adds text to the model's system instruction.
@@ -566,22 +566,22 @@ func NewBackend(cfg BackendConfig) (*BackendWorker, error) {
 // watchPipeline attaches the handlers that follow the backend's work as it
 // passes through the pipeline.
 func (b *BackendWorker) watchPipeline() {
-	events.On(b.llm.Events(), processor.EventBeforeProcessFrame, b.onBeforeLLMFrame)
-	events.On(b.UserAggregator().Events(), processor.EventBeforeProcessFrame, b.onBeforeUserAggregatorFrame)
+	event.On(b.llm.Events(), processor.EventBeforeProcessFrame, b.onBeforeLLMFrame)
+	event.On(b.UserAggregator().Events(), processor.EventBeforeProcessFrame, b.onBeforeUserAggregatorFrame)
 	// The backend's function calls are relayed as they pass the assistant
 	// aggregator, which every phase of a call reaches.
-	events.On(b.AssistantAggregator().Events(), processor.EventBeforeProcessFrame, b.onFunctionCallFrame)
-	events.On(b.AssistantAggregator().Events(), processor.EventAfterProcessFrame, b.onAfterAssistantAggregatorFrame)
+	event.On(b.AssistantAggregator().Events(), processor.EventBeforeProcessFrame, b.onFunctionCallFrame)
+	event.On(b.AssistantAggregator().Events(), processor.EventAfterProcessFrame, b.onAfterAssistantAggregatorFrame)
 	// These three are handled one at a time, in order, with the idle checks.
-	events.On(b.AssistantAggregator().Events(), aggregators.EventAssistantTurnStopped,
+	event.On(b.AssistantAggregator().Events(), aggregators.EventAssistantTurnStopped,
 		func(ctx context.Context, m aggregators.AssistantTurnStopped) {
 			b.runSerially(func() { b.onAssistantTurnStopped(ctx, m) })
 		})
-	events.On(b.AssistantAggregator().Events(), aggregators.EventAssistantThought,
+	event.On(b.AssistantAggregator().Events(), aggregators.EventAssistantThought,
 		func(ctx context.Context, m aggregators.AssistantThought) {
 			b.runSerially(func() { b.onAssistantThought(ctx, m) })
 		})
-	events.On(&b.Registry, pipeline.EventPipelineError, func(ctx context.Context, ef *frames.ErrorFrame) {
+	event.On(&b.Registry, pipeline.EventPipelineError, func(ctx context.Context, ef *frames.ErrorFrame) {
 		b.runSerially(func() { b.onPipelineError(ctx, ef) })
 	})
 }
@@ -1007,7 +1007,7 @@ func (b *BackendWorker) OnJobCancelled(ctx context.Context, m *bus.JobCancelMess
 // an application error, settles the call with an error result and carries on,
 // so the model still has something coming.
 func (b *BackendWorker) onPipelineError(ctx context.Context, ef *frames.ErrorFrame) {
-	if ef.Category == errs.Application {
+	if ef.Category == errclass.Application {
 		return
 	}
 	b.sendUpdate(ctx, map[string]any{payloadType: ErrorUpdateType, payloadError: ef.Error})

@@ -8,13 +8,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor/aggregators"
 	"github.com/gojargo/jargo/service/tts"
-	uctx "github.com/gojargo/jargo/utils/context"
-	"github.com/gojargo/jargo/utils/events"
-	"github.com/gojargo/jargo/utils/text"
+	"github.com/gojargo/jargo/text"
+	"github.com/gojargo/jargo/text/align"
 )
 
 // timedWord is one spoken token the fake provider reports, with its start offset
@@ -56,11 +56,11 @@ func (s *fakeTimedSynth) RunTTSTimed(
 	ctx context.Context,
 	_, _ string,
 	yield func(f frames.Frame) error,
-	word func(words []uctx.WordTiming, opts tts.WordTimingOptions) error,
+	word func(words []align.WordTiming, opts tts.WordTimingOptions) error,
 ) error {
 	emit := tts.PCMYielder(yield, s.SampleRate())
 	for i, w := range s.words {
-		if err := word([]uctx.WordTiming{{Word: w.text, Offset: w.offset}}, tts.WordTimingOptions{}); err != nil {
+		if err := word([]align.WordTiming{{Word: w.text, Offset: w.offset}}, tts.WordTimingOptions{}); err != nil {
 			return err
 		}
 		if err := emit(w.pcm); err != nil {
@@ -246,7 +246,7 @@ func TestWordTimestampsCarryPresentationTimestamps(t *testing.T) {
 	task := pipeline.NewWorker(pipeline.New(base), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		defer mu.Unlock()
 		switch fr := f.(type) {
@@ -480,7 +480,7 @@ func TestSpeakFrameClosesTheAssistantTurnItOpened(t *testing.T) {
 			task := pipeline.NewWorker(pipeline.New(base), pipeline.WorkerConfig{
 				ReachedDownstreamFilter: pipeline.AnyFrame,
 			})
-			events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+			event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 				if _, ok := f.(*frames.LLMAssistantPushAggregationFrame); ok {
 					mu.Lock()
 					pushes++
@@ -540,7 +540,7 @@ func TestResponseEndFollowsTheWordsItEnds(t *testing.T) {
 	task := pipeline.NewWorker(pipeline.New(base), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		defer mu.Unlock()
 		switch fr := f.(type) {
@@ -599,7 +599,7 @@ func runResponseEnds(t *testing.T, send []frames.Frame) []*frames.LLMFullRespons
 	task := pipeline.NewWorker(pipeline.New(base), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if end, ok := f.(*frames.LLMFullResponseEndFrame); ok {
 			mu.Lock()
 			ends = append(ends, end)
@@ -678,7 +678,7 @@ func TestPushAggregationTimedAfterTheLastWord(t *testing.T) {
 	task := pipeline.NewWorker(pipeline.New(base), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		defer mu.Unlock()
 		switch fr := f.(type) {
@@ -732,7 +732,7 @@ func TestPushAggregationUntimedWithoutWordTimestamps(t *testing.T) {
 	task := pipeline.NewWorker(pipeline.New(base), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if fr, ok := f.(*frames.LLMAssistantPushAggregationFrame); ok {
 			_, has := fr.PTS()
 			mu.Lock()
@@ -776,7 +776,7 @@ func TestStartedFrameCarriesAppendToContext(t *testing.T) {
 			task := pipeline.NewWorker(pipeline.New(base), pipeline.WorkerConfig{
 				ReachedDownstreamFilter: pipeline.AnyFrame,
 			})
-			events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+			event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 				if fr, ok := f.(*frames.TTSStartedFrame); ok {
 					mu.Lock()
 					got = append(got, fr.AppendToContext)
@@ -830,7 +830,7 @@ func TestWordsCarryingTheirOwnSpacingAssembleWithNone(t *testing.T) {
 	task := pipeline.NewWorker(pipeline.New(base), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if fr, ok := f.(*frames.TTSTextFrame); ok {
 			mu.Lock()
 			parts = append(parts, text.Part{
@@ -885,11 +885,11 @@ func (s *spacingSynth) RunTTSTimed(
 	_ context.Context,
 	_, _ string,
 	yield func(f frames.Frame) error,
-	word func(words []uctx.WordTiming, opts tts.WordTimingOptions) error,
+	word func(words []align.WordTiming, opts tts.WordTimingOptions) error,
 ) error {
 	emit := tts.PCMYielder(yield, s.SampleRate())
 	for _, w := range s.words {
-		err := word([]uctx.WordTiming{{Word: w.text, Offset: w.offset}},
+		err := word([]align.WordTiming{{Word: w.text, Offset: w.offset}},
 			tts.WordTimingOptions{IncludesInterFrameSpaces: true})
 		if err != nil {
 			return err
@@ -924,7 +924,7 @@ func testSpeakFrameAfterAResponse(t *testing.T, synth tts.Synthesizer) {
 	task := pipeline.NewWorker(pipeline.New(base), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		defer mu.Unlock()
 		switch f.(type) {

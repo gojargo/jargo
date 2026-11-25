@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gojargo/jargo/utils/yamlutil"
+	"github.com/gojargo/jargo/internal/yamlutil"
 	"gopkg.in/yaml.v3"
 )
 

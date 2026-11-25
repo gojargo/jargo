@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	uctx "github.com/gojargo/jargo/utils/context"
+	"github.com/gojargo/jargo/text/align"
 )
 
 func TestARequestInASpeedDeliveryStatesItsSpeed(t *testing.T) {
@@ -33,7 +33,7 @@ func TestTheLaughterTokenIsKept(t *testing.T) {
 		Start: []float64{0, 0.5, 1},
 	}, false)
 
-	want := []uctx.WordTiming{{Word: "ancient.", Offset: 0}, {Word: "[laughter]", Offset: 0.5}, {Word: "Let", Offset: 1}}
+	want := []align.WordTiming{{Word: "ancient.", Offset: 0}, {Word: "[laughter]", Offset: 0.5}, {Word: "Let", Offset: 1}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("words = %+v, want %+v", got, want)
 	}

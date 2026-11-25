@@ -29,9 +29,9 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/gojargo/jargo-web/prebuilt"
+	"github.com/gojargo/jargo/internal/security"
 	"github.com/gojargo/jargo/transport/rtc"
 	"github.com/gojargo/jargo/transport/whatsapp"
-	"github.com/gojargo/jargo/utils/security"
 	"github.com/google/uuid"
 	"github.com/joho/godotenv"
 	"github.com/pion/webrtc/v4"

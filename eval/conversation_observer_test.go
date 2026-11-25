@@ -9,13 +9,13 @@ import (
 	"time"
 
 	"github.com/gojargo/jargo/eval"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/processor/aggregators"
 	"github.com/gojargo/jargo/processor/rtvi"
 	"github.com/gojargo/jargo/processor/turns"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // reportedConversations collects what an observer reports when its pipeline is
@@ -26,7 +26,7 @@ type reportedConversations struct {
 }
 
 func (r *reportedConversations) watch(o *eval.ConversationObserver) {
-	events.On(&o.Registry, eval.EventConversationEnded, func(_ context.Context, m eval.ConversationEndedMessage) {
+	event.On(&o.Registry, eval.EventConversationEnded, func(_ context.Context, m eval.ConversationEndedMessage) {
 		r.mu.Lock()
 		defer r.mu.Unlock()
 		r.seen = append(r.seen, m.Conversation)
@@ -99,19 +99,19 @@ func TestConversationObserverTheAggregatorsTurnsReachTheConversationThroughAPipe
 	var reported reportedConversations
 	reported.watch(observer)
 	turnStarted := make(chan struct{}, 1)
-	events.On(pair.User().Events(), aggregators.EventUserTurnStarted,
+	event.On(pair.User().Events(), aggregators.EventUserTurnStarted,
 		func(context.Context, turns.StartStrategy) { signal(turnStarted) })
 	userAdded := make(chan struct{}, 1)
-	events.On(pair.User().Events(), aggregators.EventUserTurnMessageAdded,
+	event.On(pair.User().Events(), aggregators.EventUserTurnMessageAdded,
 		func(context.Context, aggregators.UserTurnMessageAdded) { signal(userAdded) })
 	assistantDone := make(chan struct{}, 1)
-	events.On(pair.Assistant().Events(), aggregators.EventAssistantTurnStopped,
+	event.On(pair.Assistant().Events(), aggregators.EventAssistantTurnStopped,
 		func(context.Context, aggregators.AssistantTurnStopped) { signal(assistantDone) })
 	worker := pipeline.NewWorker(pipeline.New(pair.User(), pair.Assistant()), pipeline.WorkerConfig{
 		Observers: []pipeline.Observer{observer},
 	})
 	started := make(chan struct{}, 1)
-	events.On(worker.Events(), pipeline.EventPipelineStarted,
+	event.On(worker.Events(), pipeline.EventPipelineStarted,
 		func(context.Context, *frames.StartFrame) { signal(started) })
 	runDone := make(chan error, 1)
 	go func() { runDone <- worker.Run(context.Background()) }()

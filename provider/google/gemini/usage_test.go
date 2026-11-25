@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // responseFrames runs one turn through a service streaming reply, with usage
@@ -26,7 +26,7 @@ func responseFrames(t *testing.T, reply string) []frames.Frame {
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 		Params:                  pipeline.Params{EnableUsageMetrics: true},
 	})
-	events.On(&worker.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&worker.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		defer mu.Unlock()
 		got = append(got, f)

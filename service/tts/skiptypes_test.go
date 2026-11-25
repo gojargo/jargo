@@ -7,12 +7,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor/aggregators"
 	"github.com/gojargo/jargo/service/tts"
-	"github.com/gojargo/jargo/utils/events"
-	ttstext "github.com/gojargo/jargo/utils/text"
+	ttstext "github.com/gojargo/jargo/text"
 )
 
 // codeType is the aggregation type the pattern below cuts its units under.
@@ -49,7 +49,7 @@ func runSkipping(t *testing.T, configure func(*tts.Base), text string) (spoken [
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
 	var mu sync.Mutex
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		switch f.(type) {
 		case *frames.AggregatedTextFrame, *frames.TTSTextFrame:
 			mu.Lock()
@@ -168,7 +168,7 @@ func TestSkippedAggregationTypeLandsInOrder(t *testing.T) {
 	})
 	var mu sync.Mutex
 	var down []frames.Frame
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		switch f.(type) {
 		case *frames.AggregatedTextFrame, *frames.TTSTextFrame:
 			mu.Lock()

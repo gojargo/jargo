@@ -6,7 +6,7 @@ import (
 
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/embeds"
-	"github.com/gojargo/jargo/utils/notify"
+	"github.com/gojargo/jargo/processor/notify"
 )
 
 // FrameFilter forwards only the frame types it was built for, and drops the

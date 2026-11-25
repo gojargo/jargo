@@ -7,11 +7,11 @@ import (
 	"time"
 
 	"github.com/gojargo/jargo/bus"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/registry"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // A bridged worker puts its pipeline on the bus: what comes out of either end
@@ -100,7 +100,7 @@ func runBridged(t *testing.T, w *pipeline.Worker) chan struct{} {
 	t.Helper()
 	started := make(chan struct{})
 	var once sync.Once
-	events.On(w.Events(), pipeline.EventPipelineStarted,
+	event.On(w.Events(), pipeline.EventPipelineStarted,
 		func(_ context.Context, _ *frames.StartFrame) { once.Do(func() { close(started) }) })
 	done := runWorker(t, w)
 	awaitClosed(t, started, "the pipeline starting")
@@ -123,7 +123,7 @@ func sendFromOther(t *testing.T, msgBus *bus.AsyncQueueBus, text, bridge string)
 func collectReached(w *pipeline.Worker) (*sync.Mutex, *[]string) {
 	var mu sync.Mutex
 	var got []string
-	events.On(w.Events(), pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(w.Events(), pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if tf, ok := f.(*frames.TextFrame); ok {
 			mu.Lock()
 			got = append(got, tf.Text)

@@ -232,7 +232,7 @@ aggregators.WithTurns(turns.Config{
     WaitingTimeout: 10 * time.Second,
 })
 
-events.OnSignal(agg.User().Events(), aggregators.EventUserWaiting, func(ctx context.Context) {
+event.OnSignal(agg.User().Events(), aggregators.EventUserWaiting, func(ctx context.Context) {
     f := frames.NewLLMMessagesAppendFrame([]frames.Message{{
         Role: frames.RoleDeveloper,
         Text: "The user has been waiting quietly. Briefly let them know you're still working on it.",

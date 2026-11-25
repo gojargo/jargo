@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/errclass"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/language"
@@ -20,8 +21,7 @@ import (
 	"github.com/gojargo/jargo/service/tts"
 	"github.com/gojargo/jargo/service/wsservice"
 	"github.com/gojargo/jargo/service/wsutil"
-	errs "github.com/gojargo/jargo/utils/errors"
-	ttstext "github.com/gojargo/jargo/utils/text"
+	ttstext "github.com/gojargo/jargo/text"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 )
@@ -67,16 +67,16 @@ var v1Subprotocols = map[string]string{
 // v1ErrorCategories classifies the error kinds Rime reports.
 //
 //nolint:gochecknoglobals // read-only lookup table
-var v1ErrorCategories = map[string]errs.Category{
-	"invalid_input":      errs.InvalidRequest,
-	"unauthenticated":    errs.Authentication,
-	"permission_denied":  errs.Authorization,
-	"not_found":          errs.InvalidRequest,
-	"resource_exhausted": errs.RateLimit,
-	"timeout":            errs.Connectivity,
-	"unavailable":        errs.Connectivity,
-	"unimplemented":      errs.Server,
-	"internal":           errs.Server,
+var v1ErrorCategories = map[string]errclass.Category{
+	"invalid_input":      errclass.InvalidRequest,
+	"unauthenticated":    errclass.Authentication,
+	"permission_denied":  errclass.Authorization,
+	"not_found":          errclass.InvalidRequest,
+	"resource_exhausted": errclass.RateLimit,
+	"timeout":            errclass.Connectivity,
+	"unavailable":        errclass.Connectivity,
+	"unimplemented":      errclass.Server,
+	"internal":           errclass.Server,
 }
 
 // Configuration errors the V1 service is built with.
@@ -693,7 +693,7 @@ func (s *v1Synthesizer) handleResponse(ctx context.Context, resp *rimepb.WebSock
 		// One failed context leaves the service usable for the next turn.
 		category, ok := v1ErrorCategories[payload.Error.GetKind()]
 		if !ok || category.IsPermanent() {
-			category = errs.Unknown
+			category = errclass.Unknown
 		}
 		s.host.PushError(ctx, v1ErrorMessage(payload.Error), nil, false, processor.WithErrorCategory(category))
 		// While the turn is still sending text, its later sentences reuse this

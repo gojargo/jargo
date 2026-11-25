@@ -16,10 +16,10 @@ import (
 	"context"
 	"log/slog"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
-	"github.com/gojargo/jargo/utils/events"
 	"github.com/gojargo/jargo/workers"
 )
 
@@ -61,7 +61,7 @@ func main() {
 	r := workers.NewRunner(workers.RunnerConfig{})
 	r.AddWorkers(ctx, worker)
 
-	events.OnSignal(&worker.Registry, pipeline.EventHeartbeatTimeout, func(context.Context) {
+	event.OnSignal(&worker.Registry, pipeline.EventHeartbeatTimeout, func(context.Context) {
 		slog.Warn("Heartbeat timeout detected: the pipeline may be stalled")
 	})
 

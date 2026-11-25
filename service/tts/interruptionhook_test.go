@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/service/tts"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // hookSynth answers on its own receive loop, one chunk at a time and slowly, so
@@ -91,7 +91,7 @@ func TestInterruptionReportsOpenContextsToProvider(t *testing.T) {
 	})
 	var mu sync.Mutex
 	audioFor := map[string]int{}
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if a, ok := f.(*frames.TTSAudioRawFrame); ok {
 			mu.Lock()
 			audioFor[a.ContextID]++

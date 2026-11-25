@@ -7,10 +7,10 @@ import (
 	"time"
 
 	"github.com/gojargo/jargo/audio/vad"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor/vadproc"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // fakeVAD returns scripted states, one per AnalyzeAudio call.
@@ -47,7 +47,7 @@ func runVAD(t *testing.T, states []vad.State, nframes int, period *time.Duration
 	task := pipeline.NewWorker(pipeline.New(p), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		defer mu.Unlock()
 		switch f.(type) {
@@ -126,7 +126,7 @@ func TestVADAudioIdleForcesSpeechStop(t *testing.T) {
 	task := pipeline.NewWorker(pipeline.New(p), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if _, ok := f.(*frames.VADUserStoppedSpeakingFrame); ok {
 			stopped <- struct{}{}
 		}
@@ -160,7 +160,7 @@ func TestVADAudioIdleStaysQuiet(t *testing.T) {
 	task := pipeline.NewWorker(pipeline.New(p), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if _, ok := f.(*frames.VADUserStoppedSpeakingFrame); ok {
 			stopped <- struct{}{}
 		}
@@ -190,7 +190,7 @@ func TestVADReportsParamsOnStart(t *testing.T) {
 	task := pipeline.NewWorker(pipeline.New(p), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if sc, ok := f.(*frames.SpeechControlParamsFrame); ok {
 			got <- sc
 		}
@@ -225,7 +225,7 @@ func TestVADParamsUpdateTakesEffect(t *testing.T) {
 	task := pipeline.NewWorker(pipeline.New(p), pipeline.WorkerConfig{
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if sc, ok := f.(*frames.SpeechControlParamsFrame); ok {
 			got <- sc
 		}

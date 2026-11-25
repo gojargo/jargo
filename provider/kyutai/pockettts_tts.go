@@ -15,10 +15,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gojargo/jargo/errclass"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/service/settings"
 	"github.com/gojargo/jargo/service/tts"
-	errs "github.com/gojargo/jargo/utils/errors"
 )
 
 // NewPocketTTS builds a Pocket TTS service against a local pocket-tts server.
@@ -91,7 +91,7 @@ func (s *pocketSynthesizer) RunTTS(ctx context.Context, text, _ string, yield fu
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return errs.NewHTTPStatusError(resp.StatusCode, fmt.Errorf("%w %d: %s", errStatus, resp.StatusCode, msg))
+		return errclass.NewHTTPStatusError(resp.StatusCode, fmt.Errorf("%w %d: %s", errStatus, resp.StatusCode, msg))
 	}
 
 	rate, pcm, err := pcmStream(resp.Body)

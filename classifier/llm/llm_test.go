@@ -13,9 +13,9 @@ import (
 
 	"github.com/gojargo/jargo/classifier"
 	"github.com/gojargo/jargo/classifier/llm"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	llmservice "github.com/gojargo/jargo/service/llm"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // A scripted LLM stands in for the model: RunInference returns the next
@@ -431,7 +431,7 @@ func TestAServiceIsRequired(t *testing.T) {
 func metricsOf(t *testing.T, c *llm.Classifier) []frames.MetricsData {
 	t.Helper()
 	got := make(chan []frames.MetricsData, 1)
-	events.On(c.Events(), classifier.EventMetrics, func(_ context.Context, data []frames.MetricsData) {
+	event.On(c.Events(), classifier.EventMetrics, func(_ context.Context, data []frames.MetricsData) {
 		got <- data
 	})
 	if _, err := c.YesNo(t.Context(), "hello", yesNo("answer", "a greeting?")); err != nil {

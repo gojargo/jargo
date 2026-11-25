@@ -13,11 +13,11 @@ import (
 	"time"
 
 	"github.com/gojargo/jargo/audio/vad"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/processor/ivr"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // step is a frame to queue, or a pause when f is nil.
@@ -98,10 +98,10 @@ func run(t *testing.T, p *ivr.Processor, steps []step) *recorded {
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 		ReachedUpstreamFilter:   pipeline.AnyFrame,
 	})
-	events.On(&w.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&w.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		r.add(&r.down, f)
 	})
-	events.On(&w.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
+	event.On(&w.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
 		r.add(&r.up, f)
 	})
 	done := make(chan error, 1)
@@ -278,7 +278,7 @@ func TestNavigatorHandsTheConversationOver(t *testing.T) {
 	llm.Base = processor.New("ScriptedLLM", llm)
 	nav := ivr.NewNavigator(ivr.NavigatorConfig{LLM: llm, Goal: "reach billing"})
 	got := make(chan []frames.Message, 1)
-	events.On(nav.Processor().Events(), ivr.EventConversationDetected, func(_ context.Context, h []frames.Message) {
+	event.On(nav.Processor().Events(), ivr.EventConversationDetected, func(_ context.Context, h []frames.Message) {
 		got <- h
 	})
 	w := pipeline.NewWorker(nav.Pipeline, pipeline.WorkerConfig{})

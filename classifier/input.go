@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/gojargo/jargo/frames"
-	"github.com/gojargo/jargo/utils/images"
+	"github.com/gojargo/jargo/internal/imageenc"
 )
 
 // ErrInvalidInput reports an input that cannot be built as given: an image
@@ -59,7 +59,7 @@ func NewImage(data []byte, contentType string) (Image, error) {
 // from the user's camera. Raw pixels are encoded as a JPEG. A payload whose
 // format is already a MIME type keeps its bytes.
 func ImageFromFrame(frame frames.ImageRawData) (Image, error) {
-	data, contentType, err := images.Encode(frame.Image, frame.Width, frame.Height, frame.Format)
+	data, contentType, err := imageenc.Encode(frame.Image, frame.Width, frame.Height, frame.Format)
 	if err != nil {
 		return Image{}, fmt.Errorf("%w: %w", ErrInvalidInput, err)
 	}

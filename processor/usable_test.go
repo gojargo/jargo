@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/errclass"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
-	errs "github.com/gojargo/jargo/utils/errors"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // errUnclassifiable is a failure nothing can attribute.
@@ -29,12 +29,12 @@ func (e *rejection) HTTPStatusCode() int { return e.status }
 type reporting struct {
 	*processor.Base
 	err      error
-	category errs.Category
+	category errclass.Category
 	// permanent asks for the error to be reported as one that will keep
 	// recurring, whatever its category says.
 	permanent bool
 	// classify, when set, is what this processor's own classification returns.
-	classify func(error) errs.Category
+	classify func(error) errclass.Category
 }
 
 func newReporting(err error) *reporting {
@@ -51,7 +51,7 @@ func (r *reporting) ProcessFrame(ctx context.Context, f frames.Frame, dir proces
 		return r.PushFrame(ctx, f, dir)
 	}
 	var opts []processor.ErrorOption
-	if r.category != errs.Unset {
+	if r.category != errclass.Unset {
 		opts = append(opts, processor.WithErrorCategory(r.category))
 	}
 	if r.permanent {
@@ -62,9 +62,9 @@ func (r *reporting) ProcessFrame(ctx context.Context, f frames.Frame, dir proces
 }
 
 // ClassifyError implements processor.ErrorClassifier when the test asked for it.
-func (r *reporting) ClassifyError(err error) errs.Category {
+func (r *reporting) ClassifyError(err error) errclass.Category {
 	if r.classify == nil {
-		return errs.Unset
+		return errclass.Unset
 	}
 	return r.classify(err)
 }
@@ -109,8 +109,8 @@ func TestRejectedCredentialsMakeTheServiceUnusable(t *testing.T) {
 
 	got := reportOnce(t, p)
 
-	if got[0].Category != errs.Authentication {
-		t.Errorf("category: got %q, want %q", got[0].Category, errs.Authentication)
+	if got[0].Category != errclass.Authentication {
+		t.Errorf("category: got %q, want %q", got[0].Category, errclass.Authentication)
 	}
 	if p.Usable() {
 		t.Error("rejected credentials should cost the service its usability")
@@ -122,8 +122,8 @@ func TestServerErrorsLeaveTheServiceUsable(t *testing.T) {
 
 	got := reportOnce(t, p)
 
-	if got[0].Category != errs.Server {
-		t.Errorf("category: got %q, want %q", got[0].Category, errs.Server)
+	if got[0].Category != errclass.Server {
+		t.Errorf("category: got %q, want %q", got[0].Category, errclass.Server)
 	}
 	if !p.Usable() {
 		t.Error("a provider having a bad moment should not write the service off")
@@ -135,8 +135,8 @@ func TestUnclassifiableErrorsLeaveTheServiceUsable(t *testing.T) {
 
 	got := reportOnce(t, p)
 
-	if got[0].Category != errs.Unknown {
-		t.Errorf("category: got %q, want %q", got[0].Category, errs.Unknown)
+	if got[0].Category != errclass.Unknown {
+		t.Errorf("category: got %q, want %q", got[0].Category, errclass.Unknown)
 	}
 	if !p.Usable() {
 		t.Error("an unclassifiable failure should not write the service off")
@@ -148,8 +148,8 @@ func TestErrorsWithoutAnErrorAreNotClassified(t *testing.T) {
 
 	got := reportOnce(t, p)
 
-	if got[0].Category != errs.Unknown {
-		t.Errorf("category: got %q, want %q", got[0].Category, errs.Unknown)
+	if got[0].Category != errclass.Unknown {
+		t.Errorf("category: got %q, want %q", got[0].Category, errclass.Unknown)
 	}
 	if !p.Usable() {
 		t.Error("a message with no error behind it should not write the service off")
@@ -160,12 +160,12 @@ func TestServiceSpecificClassificationCanKeepAServiceUsable(t *testing.T) {
 	p := newReporting(&rejection{status: 401})
 	// A provider whose credentials can be rejected for a reason a reconnection
 	// would clear.
-	p.classify = func(error) errs.Category { return errs.Connectivity }
+	p.classify = func(error) errclass.Category { return errclass.Connectivity }
 
 	got := reportOnce(t, p)
 
-	if got[0].Category != errs.Connectivity {
-		t.Errorf("category: got %q, want %q", got[0].Category, errs.Connectivity)
+	if got[0].Category != errclass.Connectivity {
+		t.Errorf("category: got %q, want %q", got[0].Category, errclass.Connectivity)
 	}
 	if !p.Usable() {
 		t.Error("the service's own classification should have kept it usable")
@@ -174,12 +174,12 @@ func TestServiceSpecificClassificationCanKeepAServiceUsable(t *testing.T) {
 
 func TestServiceSpecificClassificationTakesPrecedence(t *testing.T) {
 	p := newReporting(&rejection{status: 503})
-	p.classify = func(error) errs.Category { return errs.Authorization }
+	p.classify = func(error) errclass.Category { return errclass.Authorization }
 
 	got := reportOnce(t, p)
 
-	if got[0].Category != errs.Authorization {
-		t.Errorf("category: got %q, want %q", got[0].Category, errs.Authorization)
+	if got[0].Category != errclass.Authorization {
+		t.Errorf("category: got %q, want %q", got[0].Category, errclass.Authorization)
 	}
 	if p.Usable() {
 		t.Error("a permanent category from the service should cost it its usability")
@@ -188,12 +188,12 @@ func TestServiceSpecificClassificationTakesPrecedence(t *testing.T) {
 
 func TestExplicitCategoryNeedsNoOptIn(t *testing.T) {
 	p := newReporting(nil)
-	p.category = errs.Authentication
+	p.category = errclass.Authentication
 
 	got := reportOnce(t, p)
 
-	if got[0].Category != errs.Authentication {
-		t.Errorf("category: got %q, want %q", got[0].Category, errs.Authentication)
+	if got[0].Category != errclass.Authentication {
+		t.Errorf("category: got %q, want %q", got[0].Category, errclass.Authentication)
 	}
 	if p.Usable() {
 		t.Error("an explicit permanent category should cost the service its usability")
@@ -207,8 +207,8 @@ func TestAnErrorReportedAsTerminalNeedsNoCategory(t *testing.T) {
 	got := reportOnce(t, p)
 
 	// Nothing is misconfigured; the service just ran out of attempts.
-	if got[0].Category != errs.Unknown {
-		t.Errorf("category: got %q, want %q", got[0].Category, errs.Unknown)
+	if got[0].Category != errclass.Unknown {
+		t.Errorf("category: got %q, want %q", got[0].Category, errclass.Unknown)
 	}
 	if p.Usable() {
 		t.Error("a service that gave up retrying should not be given more work")
@@ -219,7 +219,7 @@ func TestTheVerdictIsInBeforeTheErrorTravels(t *testing.T) {
 	p := newReporting(&rejection{status: 401})
 	var mu sync.Mutex
 	var seen []bool
-	events.On(p.Events(), processor.EventError, func(_ context.Context, ef *frames.ErrorFrame) {
+	event.On(p.Events(), processor.EventError, func(_ context.Context, ef *frames.ErrorFrame) {
 		src, ok := ef.Source.(processor.Processor)
 		if !ok {
 			t.Errorf("the error names %T, want the processor that reported it", ef.Source)
@@ -242,7 +242,7 @@ func TestTheVerdictIsInBeforeTheErrorTravels(t *testing.T) {
 func TestBecomingUnusableNotifiesListeners(t *testing.T) {
 	p := newReporting(&rejection{status: 401})
 	changed := make(chan bool, 4)
-	events.On(p.Events(), processor.EventUsableChanged, func(_ context.Context, usable bool) {
+	event.On(p.Events(), processor.EventUsableChanged, func(_ context.Context, usable bool) {
 		changed <- usable
 	})
 
@@ -261,7 +261,7 @@ func TestBecomingUnusableNotifiesListeners(t *testing.T) {
 func TestRepeatedErrorsNotifyOnce(t *testing.T) {
 	p := newReporting(&rejection{status: 401})
 	changed := make(chan bool, 8)
-	events.On(p.Events(), processor.EventUsableChanged, func(_ context.Context, usable bool) {
+	event.On(p.Events(), processor.EventUsableChanged, func(_ context.Context, usable bool) {
 		changed <- usable
 	})
 
@@ -297,15 +297,15 @@ func TestAnErrorFrameKeepsTheCategoryItWasGiven(t *testing.T) {
 	p := newReporting(nil)
 	ctx := context.Background()
 	ef := frames.NewErrorFrame("boom")
-	ef.Category = errs.Application
+	ef.Category = errclass.Application
 	ef.Err = &rejection{status: 401}
 
 	p.PushErrorFrame(ctx, ef, false)
 
 	// The category the caller set stands: the exception is not consulted, so
 	// application code that failed cannot cost the service its usability.
-	if ef.Category != errs.Application {
-		t.Errorf("category: got %q, want %q", ef.Category, errs.Application)
+	if ef.Category != errclass.Application {
+		t.Errorf("category: got %q, want %q", ef.Category, errclass.Application)
 	}
 	if !p.Usable() {
 		t.Error("an application failure should leave the service usable")
@@ -320,7 +320,7 @@ func TestErrorFrameStringOmitsAnUnsetCategory(t *testing.T) {
 
 func TestErrorFrameStringOmitsAnUnknownCategory(t *testing.T) {
 	ef := frames.NewErrorFrame("boom")
-	ef.Category = errs.Unknown
+	ef.Category = errclass.Unknown
 	if got := ef.String(); strings.Contains(got, "category") {
 		t.Errorf("got %q, want no category", got)
 	}
@@ -328,7 +328,7 @@ func TestErrorFrameStringOmitsAnUnknownCategory(t *testing.T) {
 
 func TestErrorFrameStringIncludesAKnownCategory(t *testing.T) {
 	ef := frames.NewErrorFrame("boom")
-	ef.Category = errs.Authentication
+	ef.Category = errclass.Authentication
 	if got := ef.String(); !strings.Contains(got, "category: authentication") {
 		t.Errorf("got %q, want the category named", got)
 	}

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/pipeline"
@@ -19,7 +20,6 @@ import (
 	"github.com/gojargo/jargo/processor/turns"
 	"github.com/gojargo/jargo/service/settings"
 	"github.com/gojargo/jargo/service/stt"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // Ported from upstream (test_resolve_model_*). The model and the deprecated
@@ -401,7 +401,7 @@ func runTranscripts(t *testing.T, cfg Config, reply []map[string]any, before ...
 		IdleTimeout:             -1,
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		switch f.(type) {
 		case *frames.TranscriptionFrame, *frames.InterimTranscriptionFrame,
 			*frames.ProposedUserStartedSpeakingFrame, *frames.ProposedUserStoppedSpeakingFrame:
@@ -499,7 +499,7 @@ func TestSpeakersResultIsReported(t *testing.T) {
 	})
 	svc := NewSTT(Config{APIKey: "k", URL: endpoint, SampleRate: 16000, EnableDiarization: new(true)})
 	got := make(chan map[string]any, 1)
-	events.On(svc.Events(), EventSpeakersResult, func(_ context.Context, msg map[string]any) { got <- msg })
+	event.On(svc.Events(), EventSpeakersResult, func(_ context.Context, msg map[string]any) { got <- msg })
 	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{IdleTimeout: -1})
 	done := make(chan error, 1)
 	go func() { done <- task.Run(context.Background()) }()

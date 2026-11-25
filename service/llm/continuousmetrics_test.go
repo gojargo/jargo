@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/service/llm"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // A continuously generating service reports its time to first byte when the
@@ -26,8 +26,8 @@ func TestContinuousServicesReportTheirTiming(t *testing.T) {
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 		Params:                  pipeline.Params{EnableMetrics: true},
 	})
-	events.On(&task.Registry, pipeline.EventPipelineStarted, func(context.Context, *frames.StartFrame) { close(started) })
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventPipelineStarted, func(context.Context, *frames.StartFrame) { close(started) })
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		m, ok := f.(*frames.MetricsFrame)
 		if !ok {
 			return

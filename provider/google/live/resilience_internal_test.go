@@ -12,10 +12,10 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/gojargo/jargo/clock"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // droppingSession is a Live server that acknowledges each session's setup,
@@ -226,7 +226,7 @@ func runReply(t *testing.T, srv *replyDroppingSession) *replyRun {
 	r := &replyRun{done: make(chan struct{}), counts: map[string]int{}}
 	r.s = New(Config{APIKey: "k", BaseURL: wsURL(&recordingSession{Server: srv.Server})})
 	r.w = pipeline.NewWorker(pipeline.New(r.s), pipeline.WorkerConfig{ReachedDownstreamFilter: pipeline.AnyFrame})
-	events.On(&r.w.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&r.w.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		// Names carry a per-instance suffix ("#7"); the type is what matters.
 		name, _, _ := strings.Cut(f.Name(), "#")
 		r.mu.Lock()

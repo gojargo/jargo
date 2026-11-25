@@ -8,10 +8,10 @@ import (
 	"slices"
 	"sync"
 
+	"github.com/gojargo/jargo/errclass"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
-	errs "github.com/gojargo/jargo/utils/errors"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // errNoServices is returned when a switcher is built without a service.
@@ -51,7 +51,7 @@ type SwitcherStrategy interface {
 	HandleError(ef *frames.ErrorFrame) processor.Processor
 	// Events is where the strategy reports what it does: it raises
 	// EventServiceSwitched whenever the active service changes.
-	Events() *events.Registry
+	Events() *event.Registry
 }
 
 // EventServiceSwitched is raised by a switcher strategy whenever the active
@@ -156,7 +156,7 @@ func newServiceSwitcherAs(
 	// each of them changing and announces its own reading when that moves.
 	s.announcedUsable = s.Usable()
 	for _, svc := range services {
-		events.On(svc.Events(), processor.EventUsableChanged,
+		event.On(svc.Events(), processor.EventUsableChanged,
 			func(ctx context.Context, _ bool) { s.announceUsable(ctx) })
 	}
 	return s, nil
@@ -231,7 +231,7 @@ func (s *ServiceSwitcher) SwitchTo(svc processor.Processor) bool {
 // whenever the active service changes. Every function attached is called, in
 // the order they were attached, asynchronously.
 func (s *ServiceSwitcher) OnSwitch(fn func(processor.Processor)) {
-	events.On(s.strategy.Events(), EventServiceSwitched, func(_ context.Context, svc processor.Processor) { fn(svc) })
+	event.On(s.strategy.Events(), EventServiceSwitched, func(_ context.Context, svc processor.Processor) { fn(svc) })
 }
 
 // switchTo asks the strategy to activate svc and, when it does, asks the new
@@ -400,7 +400,7 @@ func (s *ServiceSwitcher) reportServiceFailure(
 		ef.Err, false,
 		// A permanent category would cost the switcher its own usability,
 		// writing it off along with the one service that failed.
-		processor.WithErrorCategory(errs.Unknown))
+		processor.WithErrorCategory(errclass.Unknown))
 }
 
 // updateInactiveServices hands a settings update to the member services the
@@ -491,7 +491,7 @@ type manualStrategy struct {
 	mu       sync.Mutex
 	services []processor.Processor
 	active   processor.Processor
-	events   events.Registry
+	events   event.Registry
 }
 
 // NewManualStrategy builds a strategy that changes the active service only on an
@@ -525,7 +525,7 @@ func (m *manualStrategy) ActiveService() processor.Processor {
 	return m.active
 }
 
-func (m *manualStrategy) Events() *events.Registry { return &m.events }
+func (m *manualStrategy) Events() *event.Registry { return &m.events }
 
 // HandleFrame activates the service a manual switch request names.
 func (m *manualStrategy) HandleFrame(f frames.Frame, _ processor.Direction) processor.Processor {

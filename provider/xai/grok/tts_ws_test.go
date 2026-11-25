@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
@@ -24,8 +25,7 @@ import (
 	"github.com/gojargo/jargo/service/tts"
 	"github.com/gojargo/jargo/service/wsservice"
 	"github.com/gojargo/jargo/service/wsutil"
-	uctx "github.com/gojargo/jargo/utils/context"
-	"github.com/gojargo/jargo/utils/events"
+	"github.com/gojargo/jargo/text/align"
 )
 
 // Tests for the streaming connection held open for the call. The audio
@@ -207,7 +207,7 @@ func (f *fakeSvc) stops() int {
 type fakeHost struct {
 	mu       sync.Mutex
 	appended map[string][]frames.Frame
-	words    []uctx.WordTiming
+	words    []align.WordTiming
 	removed  []string
 	errors   []string
 }
@@ -222,7 +222,7 @@ func (h *fakeHost) AppendToAudioContext(id string, f frames.Frame) {
 
 func (h *fakeHost) AppendWordToAudioContext(string, string, float64) {}
 
-func (h *fakeHost) AddWordTimestamps(_ string, words []uctx.WordTiming, _ tts.WordTimingOptions) {
+func (h *fakeHost) AddWordTimestamps(_ string, words []align.WordTiming, _ tts.WordTimingOptions) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.words = append(h.words, words...)
@@ -307,7 +307,7 @@ func handle(t *testing.T, s *ttsSynthesizer, ev map[string]any) error {
 }
 
 // assertWords checks the timings reported, allowing for float rounding.
-func assertWords(t *testing.T, got []uctx.WordTiming, want ...uctx.WordTiming) {
+func assertWords(t *testing.T, got []align.WordTiming, want ...align.WordTiming) {
 	t.Helper()
 	if len(got) != len(want) {
 		t.Fatalf("words = %v, want %v", got, want)
@@ -330,22 +330,22 @@ func TestWordTimesSplitAndCarryPartials(t *testing.T) {
 	if err := handle(t, s, audioDelta(nil, chars, charTimes(chars))); err != nil {
 		t.Fatal(err)
 	}
-	assertWords(t, host.words, uctx.WordTiming{Word: "Hi", Offset: 0})
+	assertWords(t, host.words, align.WordTiming{Word: "Hi", Offset: 0})
 
 	chars2 := []string{"!", " ", "o", "k"}
 	times2 := [][]float64{{2.0, 2.05}, {2.05, 2.1}, {2.1, 2.15}, {2.15, 2.2}}
 	if err := handle(t, s, audioDelta(nil, chars2, times2)); err != nil {
 		t.Fatal(err)
 	}
-	assertWords(t, host.words, uctx.WordTiming{Word: "Hi", Offset: 0}, uctx.WordTiming{Word: "there!", Offset: 0.3})
+	assertWords(t, host.words, align.WordTiming{Word: "Hi", Offset: 0}, align.WordTiming{Word: "there!", Offset: 0.3})
 
 	if err := handle(t, s, audioDone()); err != nil {
 		t.Fatal(err)
 	}
 	assertWords(t, host.words,
-		uctx.WordTiming{Word: "Hi", Offset: 0},
-		uctx.WordTiming{Word: "there!", Offset: 0.3},
-		uctx.WordTiming{Word: "ok", Offset: 2.1})
+		align.WordTiming{Word: "Hi", Offset: 0},
+		align.WordTiming{Word: "there!", Offset: 0.3},
+		align.WordTiming{Word: "ok", Offset: 2.1})
 }
 
 // A payload whose characters and times do not pair up yields no words, does
@@ -365,7 +365,7 @@ func TestWordTimesLengthMismatchIsSafe(t *testing.T) {
 	if err := handle(t, s, audioDone()); err != nil {
 		t.Fatal(err)
 	}
-	assertWords(t, host.words, uctx.WordTiming{Word: "x", Offset: 1.0})
+	assertWords(t, host.words, align.WordTiming{Word: "x", Offset: 1.0})
 }
 
 // A word carried over from another context's utterance is dropped.
@@ -379,7 +379,7 @@ func TestWordTimesResetOnANewContext(t *testing.T) {
 	if err := handle(t, s, audioDelta(nil, []string{"y", " "}, [][]float64{{0.0, 0.1}, {0.1, 0.2}})); err != nil {
 		t.Fatal(err)
 	}
-	assertWords(t, host.words, uctx.WordTiming{Word: "y", Offset: 0})
+	assertWords(t, host.words, align.WordTiming{Word: "y", Offset: 0})
 }
 
 // Audio is appended to the context playing, the done event stops it and ends
@@ -680,12 +680,12 @@ func runPipeline(t *testing.T, b *tts.Base) *run {
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 		ReachedUpstreamFilter:   pipeline.AnyFrame,
 	})
-	events.On(&r.task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&r.task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		r.mu.Lock()
 		r.down = append(r.down, f)
 		r.mu.Unlock()
 	})
-	events.On(&r.task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
+	event.On(&r.task.Registry, pipeline.EventFrameReachedUpstream, func(_ context.Context, f frames.Frame) {
 		r.mu.Lock()
 		r.up = append(r.up, f)
 		r.mu.Unlock()
@@ -885,7 +885,7 @@ func TestReportsAFailedConnection(t *testing.T) {
 	b := NewTTS(TTSConfig{APIKey: "k", URL: server.url})
 	var mu sync.Mutex
 	var reported []string
-	events.On(b.Events(), service.EventConnectionError, func(_ context.Context, msg string) {
+	event.On(b.Events(), service.EventConnectionError, func(_ context.Context, msg string) {
 		mu.Lock()
 		reported = append(reported, msg)
 		mu.Unlock()

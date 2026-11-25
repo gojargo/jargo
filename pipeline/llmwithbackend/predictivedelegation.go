@@ -10,12 +10,12 @@ import (
 	"sync"
 
 	"github.com/gojargo/jargo/classifier"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/goid"
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/service/llm"
-	"github.com/gojargo/jargo/utils/events"
 	"github.com/google/uuid"
 )
 
@@ -407,7 +407,7 @@ func (p *PredictiveDelegation) Setup(ctx context.Context, s processor.Setup) err
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if !p.reporting {
-		events.On(p.classifier.Events(), classifier.EventMetrics,
+		event.On(p.classifier.Events(), classifier.EventMetrics,
 			func(ctx context.Context, data []frames.MetricsData) {
 				_ = p.PushFrame(ctx, frames.NewMetricsFrame(data...), processor.Downstream)
 			})

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/providertest"
 	"github.com/gojargo/jargo/language"
@@ -22,8 +23,7 @@ import (
 	"github.com/gojargo/jargo/service"
 	"github.com/gojargo/jargo/service/tts"
 	"github.com/gojargo/jargo/service/wsservice"
-	uctx "github.com/gojargo/jargo/utils/context"
-	"github.com/gojargo/jargo/utils/events"
+	"github.com/gojargo/jargo/text/align"
 )
 
 // session is what the fake synthesis endpoint saw: the headers it was dialed
@@ -156,7 +156,7 @@ func chunk(pcm []byte) map[string]any {
 type ttsHost struct {
 	mu        sync.Mutex
 	audio     []byte
-	words     []uctx.WordTiming
+	words     []align.WordTiming
 	opts      tts.WordTimingOptions
 	frames    []string
 	closed    bool
@@ -181,11 +181,11 @@ func (h *ttsHost) AppendToAudioContext(_ string, f frames.Frame) {
 func (h *ttsHost) AppendWordToAudioContext(_, word string, offset float64) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.words = append(h.words, uctx.WordTiming{Word: word, Offset: offset})
+	h.words = append(h.words, align.WordTiming{Word: word, Offset: offset})
 }
 
 func (h *ttsHost) AddWordTimestamps(
-	contextID string, words []uctx.WordTiming, opts tts.WordTimingOptions,
+	contextID string, words []align.WordTiming, opts tts.WordTimingOptions,
 ) {
 	h.mu.Lock()
 	h.opts = opts
@@ -240,17 +240,17 @@ func (h *ttsHost) pushedErrors() []*frames.ErrorFrame {
 }
 
 // spokenWords is the timings reported so far.
-func (h *ttsHost) spokenWords() []uctx.WordTiming {
+func (h *ttsHost) spokenWords() []align.WordTiming {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return append([]uctx.WordTiming(nil), h.words...)
+	return append([]align.WordTiming(nil), h.words...)
 }
 
 // snapshot is what the host has been given so far.
-func (h *ttsHost) snapshot() (pcm []byte, words []uctx.WordTiming, seen []string, closed bool) {
+func (h *ttsHost) snapshot() (pcm []byte, words []align.WordTiming, seen []string, closed bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return append([]byte(nil), h.audio...), append([]uctx.WordTiming(nil), h.words...),
+	return append([]byte(nil), h.audio...), append([]align.WordTiming(nil), h.words...),
 		append([]string(nil), h.frames...), h.closed
 }
 
@@ -725,7 +725,7 @@ func TestRunTTSTimedRequestsTimestamps(t *testing.T) {
 	}
 
 	words := host.spokenWords()
-	want := []uctx.WordTiming{{Word: "Hello", Offset: 0}, {Word: "world", Offset: 0.5}}
+	want := []align.WordTiming{{Word: "Hello", Offset: 0}, {Word: "world", Offset: 0.5}}
 	if len(words) != len(want) {
 		t.Fatalf("words = %v, want %v", words, want)
 	}
@@ -913,7 +913,7 @@ type connectionErrors struct {
 // recordConnectionErrors starts recording the connection errors b raises.
 func recordConnectionErrors(b *tts.Base) *connectionErrors {
 	r := &connectionErrors{}
-	events.On(b.Events(), service.EventConnectionError, func(_ context.Context, msg string) {
+	event.On(b.Events(), service.EventConnectionError, func(_ context.Context, msg string) {
 		r.mu.Lock()
 		defer r.mu.Unlock()
 		r.msgs = append(r.msgs, msg)

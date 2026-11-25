@@ -14,9 +14,9 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/gojargo/jargo/errclass"
 	"github.com/gojargo/jargo/service/settings"
 	"github.com/gojargo/jargo/service/wsservice"
-	errs "github.com/gojargo/jargo/utils/errors"
 )
 
 // Flux takes a settings change three different ways, and which way depends on
@@ -434,8 +434,8 @@ func TestFluxErrorCodesAreClassified(t *testing.T) {
 	c := newFluxConnector(FluxConfig{APIKey: "k", Model: defaultFluxModel})
 
 	got := c.ClassifyError(&fluxFatalError{code: "UNPARSABLE_CLIENT_MESSAGE", text: "bad message"})
-	if got != errs.InvalidRequest {
-		t.Errorf("category = %v, want %v", got, errs.InvalidRequest)
+	if got != errclass.InvalidRequest {
+		t.Errorf("category = %v, want %v", got, errclass.InvalidRequest)
 	}
 	// A permanent category is what costs the service its usability.
 	if !got.IsPermanent() {
@@ -448,7 +448,7 @@ func TestFluxErrorCodesAreClassified(t *testing.T) {
 func TestFluxUnrecognizedErrorCodeFallsBack(t *testing.T) {
 	c := newFluxConnector(FluxConfig{APIKey: "k", Model: defaultFluxModel})
 
-	if got := c.ClassifyError(&fluxFatalError{code: "SOMETHING_NEW", text: "boom"}); got != errs.Unset {
+	if got := c.ClassifyError(&fluxFatalError{code: "SOMETHING_NEW", text: "boom"}); got != errclass.Unset {
 		t.Errorf("category = %v, want the shared classification to decide", got)
 	}
 }
@@ -477,7 +477,7 @@ func TestFluxConnectionWaitTimesOutInsteadOfHanging(t *testing.T) {
 func TestFluxUnconfirmedConnectionIsNotARejectedRequest(t *testing.T) {
 	c := newFluxConnector(FluxConfig{APIKey: "k", Model: defaultFluxModel})
 
-	if got := c.ClassifyError(wsservice.ErrNotConfirmed); got != errs.Unset {
+	if got := c.ClassifyError(wsservice.ErrNotConfirmed); got != errclass.Unset {
 		t.Errorf("category = %v, want the shared classification to decide", got)
 	}
 }

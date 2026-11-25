@@ -18,7 +18,7 @@ import (
 	"github.com/gojargo/jargo/service/tts"
 	"github.com/gojargo/jargo/service/wsservice"
 	"github.com/gojargo/jargo/service/wsutil"
-	uctx "github.com/gojargo/jargo/utils/context"
+	"github.com/gojargo/jargo/text/align"
 )
 
 // errTTSNotConnected is returned by a send that found no connection to send
@@ -366,7 +366,7 @@ func (s *ttsSynthesizer) handleMessage(ctx context.Context, data []byte) error {
 	case msgText:
 		if available {
 			s.host.AddWordTimestamps(contextID,
-				[]uctx.WordTiming{{Word: m.Text, Offset: m.StartS}}, tts.WordTimingOptions{})
+				[]align.WordTiming{{Word: m.Text, Offset: m.StartS}}, tts.WordTimingOptions{})
 		}
 	case msgReady:
 	case msgEndStream:
@@ -452,7 +452,7 @@ func (s *ttsSynthesizer) RunTTSTimed(
 	ctx context.Context,
 	text, contextID string,
 	yield func(f frames.Frame) error,
-	_ func(words []uctx.WordTiming, opts tts.WordTimingOptions) error,
+	_ func(words []align.WordTiming, opts tts.WordTimingOptions) error,
 ) error {
 	return s.RunTTS(ctx, text, contextID, yield)
 }

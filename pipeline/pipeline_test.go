@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
-	"github.com/gojargo/jargo/utils/events"
 )
 
 // echo forwards every frame it receives downstream.
@@ -39,7 +39,7 @@ func TestTaskEchoEndToEnd(t *testing.T) {
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	}
 	task := pipeline.NewWorker(pipe, params)
-	events.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
+	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
 		if tf, ok := f.(*frames.TextFrame); ok {
 			mu.Lock()
 			texts = append(texts, tf.Text)
