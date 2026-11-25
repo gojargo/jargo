@@ -1,0 +1,49 @@
+name: Bug report
+description: Something in jargo does not work as documented.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug. For a security vulnerability,
+        do not open an issue: follow SECURITY.md instead.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you saw, and what you expected to see instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      description: |
+        The smallest pipeline or example that shows the problem. A runnable
+        snippet, or the name of the example in `examples/` and the steps, is ideal.
+      render: go
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Relevant log output, with API keys and personal data removed.
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: jargo version
+      description: The version or commit from your `go.mod`, such as `v0.7.0`.
+    validations:
+      required: true
+  - type: input
+    id: providers
+    attributes:
+      label: Providers and transport
+      description: Which STT, LLM, TTS or speech-to-speech providers, and which transport (WebRTC, WebSocket, LiveKit, Twilio, local audio).
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Go version, OS and architecture, and whether you run in Docker.

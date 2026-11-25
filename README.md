@@ -20,6 +20,12 @@
 a streaming transcription → reasoning → speech pipeline with turn-taking and
 barge-in, and audio back out.
 
+<p align="center">
+  <a href="https://gojargo.dev/#demo"><img src="assets/demo.jpg" alt="A jargo voice agent being interrupted mid-sentence: VAD cancels the speech and Smart Turn detects the end of the user's turn. Click to watch the demo." width="720" /></a>
+  <br />
+  <sub><a href="https://gojargo.dev/#demo">Watch the demo</a>: turn-taking and barge-in, live.</sub>
+</p>
+
 ## Why?
 
 [Pipecat](https://github.com/pipecat-ai/pipecat) is great, and jargo is a port of
@@ -37,6 +43,22 @@ predictable memory, fast startup, and real concurrency for many simultaneous
 sessions without a GIL. The heavy numerics stay where they belong (the ONNX
 Runtime, the remote services), so giving up Python costs little here. See the
 [benchmarks](#benchmarks) for the honest performance picture.
+
+## Benchmarks
+
+1,000 concurrent sessions served on 3 CPUs: one jargo process, against one
+Pipecat 1.15 process per CPU (the GIL holds each to one core).
+
+| | jargo | Pipecat |
+|---|---|---|
+| Memory, idle | 8.6 MiB | 162 MiB |
+| Memory, 1,000 sessions | 124 MiB | 357 MiB |
+| Throughput | 96k frames/s | 10.8k frames/s |
+| Startup per session | 0.12 ms | 1.08 ms |
+
+Medians of 6 runs on a GitHub-hosted runner (AMD EPYC 7763), every difference
+significant. This is framework overhead only: provider round trips dominate what
+a caller hears, and cost the same on both. [Method](docs/benchmarks.md).
 
 ## Features
 
@@ -156,21 +178,14 @@ time. Point jargo at them with `JARGO_ONNXRUNTIME_LIB` and `JARGO_RNNOISE_LIB`, 
 leave them on the loader's default search path. The
 [base images](docs/deploy/docker.md) bundle all of them.
 
-## Benchmarks
+## Contributing
 
-1,000 concurrent sessions served on 3 CPUs: one jargo process, against one
-Pipecat 1.15 process per CPU (the GIL holds each to one core).
-
-| | jargo | Pipecat |
-|---|---|---|
-| Memory, idle | 8.6 MiB | 162 MiB |
-| Memory, 1,000 sessions | 124 MiB | 357 MiB |
-| Throughput | 96k frames/s | 10.8k frames/s |
-| Startup per session | 0.12 ms | 1.08 ms |
-
-Medians of 6 runs on a GitHub-hosted runner (AMD EPYC 7763), every difference
-significant. This is framework overhead only: provider round trips dominate what
-a caller hears, and cost the same on both. [Method](docs/benchmarks.md).
+Contributions are welcome: bug reports, fixes, new providers, examples and docs.
+Read [`CONTRIBUTING.md`](CONTRIBUTING.md) to get started, and look for issues
+labelled
+[`good first issue`](https://github.com/gojargo/jargo/labels/good%20first%20issue).
+Questions and show-and-tell go in
+[Discussions](https://github.com/gojargo/jargo/discussions).
 
 ## License & attribution
 
