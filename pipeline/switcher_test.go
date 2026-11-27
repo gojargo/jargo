@@ -142,8 +142,21 @@ func TestServiceSwitcherRouting(t *testing.T) {
 	task.QueueFrame(frames.NewTextFrame("one"))
 	task.QueueFrame(frames.NewManuallySwitchServiceFrame(b))
 	task.QueueFrame(frames.NewTextFrame("two"))
-	wantText(t, out, "A:one") // first service is active
-	wantText(t, out, "B:two") // routed to the new active service
+	// Each service runs on a branch of its own, so their outputs leave in
+	// either order: what matters is which service handled which text.
+	var got []string
+	for range 2 {
+		select {
+		case text := <-out:
+			got = append(got, text)
+		case <-time.After(2 * time.Second):
+			t.Fatalf("got %v, want a text from each service", got)
+		}
+	}
+	slices.Sort(got)
+	if want := []string{"A:one", "B:two"}; !slices.Equal(got, want) {
+		t.Errorf("downstream texts = %v, want %v", got, want)
+	}
 	select {
 	case extra := <-out:
 		t.Errorf("unexpected downstream text %q", extra)

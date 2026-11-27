@@ -270,6 +270,12 @@ func runSwitcher(
 	for _, f := range feed {
 		worker.QueueFrame(f)
 	}
+	// Let what the feed set off settle before ending the run: an error a
+	// service pushes upstream travels apart from the EndFrame going down, and
+	// the run ending first would leave it unreported.
+	if err := worker.Flush(t.Context()); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
 	worker.StopWhenDone()
 	select {
 	case <-done:
