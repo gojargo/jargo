@@ -5,4 +5,4 @@
 #
 # which runs pip-compile --generate-hashes in the same image the benchmark runs
 # in, so requirements.txt resolves for Python 3.12 on Linux.
-pipecat-ai==1.16.0
+pipecat-ai==1.17.0
