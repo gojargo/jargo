@@ -738,6 +738,7 @@ func (s *EventStream) BotTurnStopped(text string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.botTurnOpen = false
+	s.signalLocked()
 	s.updateBotTranscribedLocked()
 	if text == "" {
 		return
@@ -747,6 +748,17 @@ func (s *EventStream) BotTurnStopped(text string) {
 		return
 	}
 	s.appendLocked(map[string]any{keyType: EventResponse, keyText: text})
+}
+
+// WaitBotTurnClosed waits up to timeout for no turn of the bot's to be open, and
+// reports whether none was.
+//
+// The bot-turn aggregator reports a turn's start and stop on a goroutine of its
+// own, after it has handed the turn on, so whatever answers the turn can be
+// ready before the stop is in the stream. A caller about to record an answer
+// waits here first, so the bot's turn always comes before the answer to it.
+func (s *EventStream) WaitBotTurnClosed(ctx context.Context, timeout time.Duration) bool {
+	return s.waitFor(ctx, timeout, func() bool { return !s.botTurnOpen })
 }
 
 // InputSent marks the user's input as sent: the bot's reply is what it says

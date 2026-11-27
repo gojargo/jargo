@@ -597,6 +597,13 @@ replacement.
 
 ### Fixed
 
+- **A simulation with bot audio records the bot's turn before the persona's
+  answer to it.** The persona's answer is what ends the bot's turn, and the
+  bot-turn aggregator reports the ended turn on a goroutine of its own, so the
+  persona's answer could reach the event stream first. The conversation then
+  read the user's turn before the bot's, and the run judged it in that order.
+  The relay now holds an answer back until the bot's turn is closed.
+
 - The user idle timeout no longer fires while an asynchronous function call or
   an LLMWithBackend backend works on the user's behalf; the user waiting
   timeout covers that silence.

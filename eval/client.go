@@ -406,6 +406,12 @@ type personaTurnRelay struct {
 	endCall  map[string]any
 }
 
+// botTurnReportTimeout bounds the wait for the bot-turn aggregator to report a
+// turn it has ended. The report is queued as the turn ends, so it lands within
+// moments; the bound only keeps a report that never comes from holding up the
+// run.
+const botTurnReportTimeout = 5 * time.Second
+
 // newPersonaTurnRelay builds the relay: textTurnMessage builds the RTVI
 // send-text message for a turn, and stream is where the persona's turns are
 // counted.
@@ -435,8 +441,30 @@ func (r *personaTurnRelay) ProcessFrame(ctx context.Context, f frames.Frame, dir
 		return err
 	}
 	r.stream.Touch()
-	var send string
+	if _, ok := f.(*frames.LLMFullResponseEndFrame); ok && r.answering() {
+		r.awaitBotTurnClosed(ctx)
+	}
+	send := r.take(f)
+	if send != "" {
+		message := frames.NewOutputTransportMessageUrgentFrame(r.textTurnMessage(send))
+		if err := r.PushFrame(ctx, message, processor.Downstream); err != nil {
+			return err
+		}
+	}
+	if _, ok := f.(*frames.LLMFullResponseEndFrame); ok {
+		r.mu.Lock()
+		r.endReplyLocked()
+		r.mu.Unlock()
+	}
+	return r.PushFrame(ctx, f, dir)
+}
+
+// take records what f says of the reply in progress, and returns the text to
+// send the bot, if f completes a text reply.
+func (r *personaTurnRelay) take(f frames.Frame) string {
 	r.mu.Lock()
+	defer r.mu.Unlock()
+	var send string
 	switch fr := f.(type) {
 	case *frames.LLMFullResponseStartFrame:
 		r.text, r.spoken = nil, nil
@@ -462,19 +490,31 @@ func (r *personaTurnRelay) ProcessFrame(ctx context.Context, f frames.Frame, dir
 		r.trace.Log(fmt.Sprintf("send: %q (persona, audio)", fr.Text))
 		r.spoken = append(r.spoken, fr.Text)
 	}
-	r.mu.Unlock()
-	if send != "" {
-		message := frames.NewOutputTransportMessageUrgentFrame(r.textTurnMessage(send))
-		if err := r.PushFrame(ctx, message, processor.Downstream); err != nil {
-			return err
-		}
+	return send
+}
+
+// answering reports whether the reply in progress says anything. A reply that
+// only marks the bot's turn incomplete leaves the turn open, and has nothing to
+// record.
+func (r *personaTurnRelay) answering() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.spoken) > 0 || pytext.Strip(strings.Join(r.text, "")) != ""
+}
+
+// awaitBotTurnClosed holds the persona's reply back until the bot's turn it
+// answers is in the stream.
+//
+// The persona's answer is what ends the bot's turn: its LLM reports the turn
+// complete to the bot-turn aggregator, which closes the turn and reports it on
+// a goroutine of its own while the answer goes on to here. Nothing orders the
+// two, so without the wait the persona's turn could be recorded before the bot's
+// turn it answers, or the bot's turn taken for stale.
+func (r *personaTurnRelay) awaitBotTurnClosed(ctx context.Context) {
+	if r.stream.WaitBotTurnClosed(ctx, botTurnReportTimeout) || ctx.Err() != nil {
+		return
 	}
-	if _, ok := f.(*frames.LLMFullResponseEndFrame); ok {
-		r.mu.Lock()
-		r.endReplyLocked()
-		r.mu.Unlock()
-	}
-	return r.PushFrame(ctx, f, dir)
+	r.trace.Log("warning: the bot's turn was still open when the persona's answer went out")
 }
 
 // endReplyLocked appends what went out of the reply as a turn, then the
