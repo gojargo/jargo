@@ -51,9 +51,11 @@ func runTask(t *testing.T, task *pipeline.Worker) chan error {
 	return done
 }
 
-// started blocks until the StartFrame has traveled the whole pipeline, so a test
-// injecting a frame directly does not race the pipeline coming up. Pair it with
-// a TaskParams whose OnReachedDownstream closes ch on the StartFrame.
+// started blocks until ch is closed: by the StartFrame reaching the sink, for a
+// test injecting frames, or by EventPipelineStarted, for a test canceling. The
+// StartFrame reaching the sink is reported a step before the pipeline counts as
+// started, so a cancel must wait for the event: one landing in between stops a
+// pipeline that never started.
 func started(t *testing.T, ch chan struct{}) {
 	t.Helper()
 	select {
@@ -595,6 +597,7 @@ func (c *cancelSwallower) ProcessFrame(ctx context.Context, f frames.Frame, dir 
 	return c.PushFrame(ctx, f, dir)
 }
 
+// Ported from upstream (test_task_cancel_timeout).
 // TestCancelTimesOutOnASwallowedFrame checks a CancelFrame that never reaches
 // the sink still ends the run, and still reports the pipeline as finished.
 // Canceling is what a caller reaches for when something has already gone
@@ -606,18 +609,19 @@ func TestCancelTimesOutOnASwallowedFrame(t *testing.T) {
 		finished frames.Frame
 	)
 	task := pipeline.NewWorker(pipeline.New(newCancelSwallower()), pipeline.WorkerConfig{
-		CancelTimeout:           100 * time.Millisecond,
-		ReachedDownstreamFilter: pipeline.AnyFrame,
+		CancelTimeout: 100 * time.Millisecond,
 	})
 	event.On(&task.Registry, pipeline.EventPipelineFinished, func(_ context.Context, f frames.Frame) {
 		mu.Lock()
 		finished = f
 		mu.Unlock()
 	})
-	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
-		if _, ok := f.(*frames.StartFrame); ok {
-			close(startedCh)
-		}
+	// Canceled once the pipeline has started, as upstream's test does from
+	// on_pipeline_started. The StartFrame reaching the sink is reported a step
+	// before the pipeline counts as started, and a cancel landing in between
+	// stops a pipeline that never started, which reports no finish.
+	event.On(&task.Registry, pipeline.EventPipelineStarted, func(context.Context, *frames.StartFrame) {
+		close(startedCh)
 	})
 
 	done := runTask(t, task)
@@ -782,11 +786,13 @@ func TestCancelingTheContextShutsThePipelineDown(t *testing.T) {
 	startedCh := make(chan struct{})
 	var once sync.Once
 	task := pipeline.NewWorker(pipeline.New(rec), pipeline.WorkerConfig{
-		CancelTimeout:           time.Second,
-		ReachedDownstreamFilter: pipeline.FrameTypes(&frames.StartFrame{}),
+		CancelTimeout: time.Second,
 	})
-	event.On(&task.Registry, pipeline.EventFrameReachedDownstream,
-		func(_ context.Context, _ frames.Frame) { once.Do(func() { close(startedCh) }) })
+	// Canceled once the pipeline has started: the StartFrame reaching the sink
+	// is reported a step before the pipeline counts as started, and a cancel
+	// landing in between stops a pipeline that never started.
+	event.On(&task.Registry, pipeline.EventPipelineStarted,
+		func(context.Context, *frames.StartFrame) { once.Do(func() { close(startedCh) }) })
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
