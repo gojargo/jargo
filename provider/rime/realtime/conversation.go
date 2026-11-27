@@ -5,6 +5,7 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -191,9 +192,24 @@ func (c *conversation) close() {
 type ledger struct {
 	session *session
 	lock    lock
+
+	// mu guards writeErr, which the event loop reads without the lock.
+	mu sync.Mutex
+	// writeErr is the error the last write failed with, recorded before the
+	// lock is let go (see failedWith).
+	writeErr error
 }
 
 func newLedger(sess *session) *ledger { return &ledger{session: sess, lock: newLock()} }
+
+// failedWith reports whether err is the error a write to the history failed
+// with: the session ended because a history write got no answer, so what the
+// history now holds is uncertain.
+func (l *ledger) failedWith(err error) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.writeErr != nil && errors.Is(err, l.writeErr)
+}
 
 // append writes items to the end of the history, in order.
 func (l *ledger) append(ctx context.Context, items func() ([]historyItem, error)) error {
@@ -214,6 +230,12 @@ func (l *ledger) append(ctx context.Context, items func() ([]historyItem, error)
 	if err == nil {
 		return nil
 	}
+	// Recorded while the lock is still held, so the event loop, seeing the
+	// session end, finds either the lock held or this error: there is no moment
+	// at which the write has failed and neither says so.
+	l.mu.Lock()
+	l.writeErr = err
+	l.mu.Unlock()
 	status := historyUncertain
 	if knownOutcome(err) {
 		status = historyRejected

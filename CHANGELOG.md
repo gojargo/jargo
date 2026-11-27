@@ -617,6 +617,14 @@ replacement.
 
 ### Fixed
 
+- **A Rime Prism session lost mid-history-write reports the history as
+  uncertain.** When a history write got no acknowledgment, the write and the
+  session's event loop both reported the failure, and the first one won. The
+  event loop called it uncertain only while the write still held its lock, so
+  when the write had just let go, the run saw a bare timeout instead of the
+  `HistoryUpdateError` saying the history may be out of step. The event loop
+  now recognizes the write's own failure too.
+
 - **A WebSocket session always sends its close frame.** When the close timeout
   ran out before the close had been written, which a loaded machine can take
   longer than the default half second to get to, the server cut the socket and

@@ -1378,7 +1378,12 @@ func (s *LLMService) eventLoop(sess *session) {
 	s.mu.Lock()
 	history := s.history
 	s.mu.Unlock()
-	if history != nil && history.lock.locked() {
+	// A session that ended during a history write leaves the history
+	// uncertain. The write may already have given its lock back by now: it
+	// reports the failure itself, and nothing orders that report against this
+	// one, so the write's own error is recognized too, and the history is
+	// reported uncertain whichever of the two comes first.
+	if history != nil && (history.lock.locked() || history.failedWith(err)) {
 		err = &HistoryUpdateError{Status: historyUncertain, Err: err}
 	}
 	s.fail(err)
