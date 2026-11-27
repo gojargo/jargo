@@ -970,9 +970,9 @@ pillow==13.0.0 \
     --hash=sha256:ff3fe9eb621fbb9db4c4be33ab946f6bac5f98ab50ca8d3260503653656c961b \
     --hash=sha256:ffea6b2986a797c84b6d1d27d4f43e0b83c73fc16281a930891cd237cf0d08fe
     # via pipecat-ai
-pipecat-ai==1.16.0 \
-    --hash=sha256:1598e0a3557ff38bdde93ba1e42a668708b911a5f1efa9960141b033963f51c5 \
-    --hash=sha256:613604ec4c6bb4301a26004e80011765c1a18d92394994097a65df07fbf1916d
+pipecat-ai==1.17.0 \
+    --hash=sha256:28dacb0729ceee4650d3d503ee1eb68bd15e01f861e3deae6f14a13d665a4200 \
+    --hash=sha256:33b4b2153cd46d88b8672069fe1605b295ccd9b50ad7f6586683f3b44f160125
     # via -r requirements.in
 pipecat-resampler==0.2.0 \
     --hash=sha256:0d1011551732b8ea4da0e8d9552b4ed6acfd0c2eee795146fc07942237db8731 \
