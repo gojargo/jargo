@@ -46,17 +46,17 @@ func (a *Adapter) LLMInvocationParams(
 	if err != nil {
 		return chat.Params{}, err
 	}
-	p.Messages = AddReasoningContent(p.Messages)
+	p.Messages = addReasoningContent(p.Messages)
 	return p, nil
 }
 
-// AddReasoningContent returns the messages with reasoning_content on every
+// addReasoningContent returns the messages with reasoning_content on every
 // assistant message.
 //
 // Assistant messages that already carry the field are left as they are. A
 // message written in the provider's own format shares its Extra map with the
 // conversation, so a stamped message gets a copy of it rather than a write.
-func AddReasoningContent(msgs []chat.Message) []chat.Message {
+func addReasoningContent(msgs []chat.Message) []chat.Message {
 	out := make([]chat.Message, 0, len(msgs))
 	for _, m := range msgs {
 		if m.Role == chat.RoleAssistant {

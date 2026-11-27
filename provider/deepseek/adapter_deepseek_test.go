@@ -144,7 +144,7 @@ func TestContextMessagesNotMutated(t *testing.T) {
 
 // The field reaches the wire, which is what DeepSeek reads it from.
 func TestReasoningContentIsEncoded(t *testing.T) {
-	raw, err := json.Marshal(AddReasoningContent([]chat.Message{
+	raw, err := json.Marshal(addReasoningContent([]chat.Message{
 		{Role: chat.RoleAssistant, Content: "Hi!"},
 	})[0])
 	if err != nil {

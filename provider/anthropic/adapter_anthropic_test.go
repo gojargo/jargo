@@ -238,17 +238,17 @@ func TestEnsureLastMessageIsUser(t *testing.T) {
 	user := sdk.NewUserMessage(sdk.NewTextBlock("hi"))
 	assistant := sdk.NewAssistantMessage(sdk.NewTextBlock("hello"))
 
-	got := EnsureLastMessageIsUser([]sdk.MessageParam{user, assistant})
+	got := ensureLastMessageIsUser([]sdk.MessageParam{user, assistant})
 	if len(got) != 3 || got[2].Role != sdk.MessageParamRoleUser {
 		t.Fatalf("ending on assistant should append a user message; got %d messages", len(got))
 	}
 
-	got = EnsureLastMessageIsUser([]sdk.MessageParam{assistant, user})
+	got = ensureLastMessageIsUser([]sdk.MessageParam{assistant, user})
 	if len(got) != 2 {
 		t.Fatalf("ending on user should be unchanged; got %d messages", len(got))
 	}
 
-	if got := EnsureLastMessageIsUser(nil); len(got) != 0 {
+	if got := ensureLastMessageIsUser(nil); len(got) != 0 {
 		t.Fatalf("empty list should stay empty; got %d messages", len(got))
 	}
 }
@@ -295,7 +295,7 @@ func TestToMessagesBuildsToolTurns(t *testing.T) {
 		}},
 		{Role: frames.RoleAssistant, Text: "It is sunny."},
 	}
-	out, err := ToMessages(msgs)
+	out, err := toMessages(msgs)
 	if err != nil {
 		t.Fatalf("ToMessages: %v", err)
 	}
@@ -392,11 +392,11 @@ func TestCacheControlIsOffByRequest(t *testing.T) {
 // TestCacheControlDoesNotMutateTheSource checks the marking leaves the caller's
 // messages alone: the blocks are shared with whoever converted the conversation.
 func TestCacheControlDoesNotMutateTheSource(t *testing.T) {
-	msgs, err := ToMessages([]frames.Message{{Role: frames.RoleUser, Text: "hello"}})
+	msgs, err := toMessages([]frames.Message{{Role: frames.RoleUser, Text: "hello"}})
 	if err != nil {
 		t.Fatalf("ToMessages: %v", err)
 	}
-	WithCacheControlMarkers(msgs)
+	withCacheControlMarkers(msgs)
 	if msgs[0].Content[0].OfText.CacheControl.Type != "" {
 		t.Error("the source message was marked, want it left as it was")
 	}

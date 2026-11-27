@@ -38,11 +38,11 @@ func (a *Adapter) LLMInvocationParams(
 	if err != nil {
 		return chat.Params{}, err
 	}
-	p.Messages = TransformMessages(p.Messages)
+	p.Messages = transformMessages(p.Messages)
 	return p, nil
 }
 
-// TransformMessages rewrites the conversation to satisfy the three constraints
+// transformMessages rewrites the conversation to satisfy the three constraints
 // Mistral puts on a message history that the OpenAI schema does not:
 //
 //  1. A tool result must be followed by an assistant message. One that is not
@@ -52,7 +52,7 @@ func (a *Adapter) LLMInvocationParams(
 //  3. A conversation ending on an assistant message is a partial reply Mistral
 //     is being asked to continue, which it only does when the message is marked
 //     as a prefix.
-func TransformMessages(msgs []chat.Message) []chat.Message {
+func transformMessages(msgs []chat.Message) []chat.Message {
 	if len(msgs) == 0 {
 		return msgs
 	}

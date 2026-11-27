@@ -10,7 +10,7 @@ import (
 // Mistral's constraints: a tool result that ends the conversation, which is
 // exactly what the completion answering a tool call sees.
 func TestTransformMessagesFollowsATooResultWithAnAssistantMessage(t *testing.T) {
-	out := TransformMessages([]chat.Message{
+	out := transformMessages([]chat.Message{
 		{Role: chat.RoleUser, Content: "weather?"},
 		{Role: chat.RoleAssistant, ToolCalls: []chat.ToolCall{{ID: "call_a"}}},
 		{Role: chat.RoleTool, ToolCallID: "call_a", Content: "sunny"},
@@ -28,7 +28,7 @@ func TestTransformMessagesFollowsATooResultWithAnAssistantMessage(t *testing.T) 
 	}
 
 	// A tool result already followed by an assistant message needs no insertion.
-	out = TransformMessages([]chat.Message{
+	out = transformMessages([]chat.Message{
 		{Role: chat.RoleTool, ToolCallID: "call_a", Content: "sunny"},
 		{Role: chat.RoleAssistant, Content: "it is sunny"},
 		{Role: chat.RoleUser, Content: "thanks"},
@@ -41,7 +41,7 @@ func TestTransformMessagesFollowsATooResultWithAnAssistantMessage(t *testing.T) 
 // TestTransformMessagesDemotesLateSystemMessages checks the second constraint: only
 // the leading run of system messages is accepted.
 func TestTransformMessagesDemotesLateSystemMessages(t *testing.T) {
-	out := TransformMessages([]chat.Message{
+	out := transformMessages([]chat.Message{
 		{Role: chat.RoleSystem, Content: "be brief"},
 		{Role: chat.RoleSystem, Content: "and polite"},
 		{Role: chat.RoleUser, Content: "hello"},
@@ -62,7 +62,7 @@ func TestTransformMessagesDemotesLateSystemMessages(t *testing.T) {
 // TestTransformMessagesMarksATrailingAssistantMessage checks the third constraint,
 // and that a conversation ending any other way is left as it is.
 func TestTransformMessagesMarksATrailingAssistantMessage(t *testing.T) {
-	out := TransformMessages([]chat.Message{
+	out := transformMessages([]chat.Message{
 		{Role: chat.RoleUser, Content: "hello"},
 		{Role: chat.RoleAssistant, Content: "hi, I was saying"},
 	})
@@ -70,7 +70,7 @@ func TestTransformMessagesMarksATrailingAssistantMessage(t *testing.T) {
 		t.Errorf("trailing assistant message = %+v, want it marked as a prefix", out[1])
 	}
 
-	out = TransformMessages([]chat.Message{
+	out = transformMessages([]chat.Message{
 		{Role: chat.RoleAssistant, Content: "hi"},
 		{Role: chat.RoleUser, Content: "hello"},
 	})
@@ -81,7 +81,7 @@ func TestTransformMessagesMarksATrailingAssistantMessage(t *testing.T) {
 		t.Errorf("assistant message mid-conversation = %+v, want nothing added to it", out[0])
 	}
 
-	if got := TransformMessages(nil); got != nil {
+	if got := transformMessages(nil); got != nil {
 		t.Errorf("TransformMessages(nil) = %+v, want nil", got)
 	}
 }

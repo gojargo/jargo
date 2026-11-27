@@ -222,6 +222,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **BREAKING: the adapters' conversion helpers are no longer exported.** They
+  are the private steps of each adapter's `LLMInvocationParams`, and the
+  Anthropic ones put `anthropic-sdk-go` types in jargo's API, so an SDK upgrade
+  could have broken code that only imported jargo. The adapters themselves, their
+  `Params` and `ToProviderToolsFormat` stay. Removed: `anthropic.ToMessages`,
+  `anthropic.EnsureLastMessageIsUser`, `anthropic.WithCacheControlMarkers`,
+  `gemini.ToContents`, `gemini.EnsureLastMessageIsUser`,
+  `gemini.TextBookmarkMatches`, `gemini.FunctionResponseDict`,
+  `deepseek.AddReasoningContent`, `mistral.TransformMessages` and
+  `responses.ToInput`.
+
 - **BREAKING: the analyzer, aggregator, classifier and switcher-strategy
   interfaces are sealed, each behind a base to embed.** A method added to one
   of them later comes with its default in the base, so it no longer breaks an

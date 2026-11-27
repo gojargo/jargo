@@ -25,6 +25,7 @@ import (
 
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/provider/google/gemini"
+	"github.com/gojargo/jargo/provider/google/internal/wire"
 	"github.com/gojargo/jargo/service/llm/adapter"
 )
 
@@ -590,7 +591,7 @@ func bookmarkMatches(bookmark, step map[string]any) bool {
 			t, _ := item[keyText].(string)
 			stepText.WriteString(t)
 		}
-		return gemini.TextBookmarkMatches(text, stepText.String())
+		return wire.TextBookmarkMatches(text, stepText.String())
 	}
 	if inlineData, ok := bookmark[gemini.BookmarkInlineData]; ok && inlineData != nil {
 		blob, _ := inlineData.(map[string]any)

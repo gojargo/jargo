@@ -208,7 +208,7 @@ func (a *Adapter) LLMInvocationParams(
 	a.ResolveSystemInstruction(system, opts.SystemInstruction, false)
 
 	msgs := convo.MessagesFor(a.IDForLLMSpecificMessages())
-	converted, err := ToInput(msgs)
+	converted, err := toInput(msgs)
 	if err != nil {
 		return Params{}, err
 	}
@@ -233,10 +233,10 @@ func (a *Adapter) LLMInvocationParams(
 	return params, nil
 }
 
-// ToInput converts the conversation's messages into the Responses input list. A
+// toInput converts the conversation's messages into the Responses input list. A
 // tool turn becomes a function_call item and a function_call_output item
 // answering it, paired by the call id.
-func ToInput(msgs []frames.Message) ([]InputItem, error) {
+func toInput(msgs []frames.Message) ([]InputItem, error) {
 	items := make([]InputItem, 0, len(msgs))
 	for _, m := range msgs {
 		switch {

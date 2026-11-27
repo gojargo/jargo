@@ -62,15 +62,15 @@ func (a *Adapter) LLMInvocationParams(
 		convo.MessagesFor(a.IDForLLMSpecificMessages()),
 	)
 
-	converted, err := ToMessages(msgs)
+	converted, err := toMessages(msgs)
 	if err != nil {
 		return Params{}, err
 	}
 	if opts.EnsureLastMessageIsUser {
-		converted = EnsureLastMessageIsUser(converted)
+		converted = ensureLastMessageIsUser(converted)
 	}
 	if opts.EnablePromptCaching {
-		converted = WithCacheControlMarkers(converted)
+		converted = withCacheControlMarkers(converted)
 	}
 
 	params := Params{
@@ -139,12 +139,12 @@ func systemCacheControl(ttl string) sdk.CacheControlEphemeralParam {
 	return cc
 }
 
-// ToMessages converts the conversation's messages into Anthropic messages.
+// toMessages converts the conversation's messages into Anthropic messages.
 //
 // A system or developer message enters as the user, which is the only input
 // role Anthropic offers besides the assistant. Consecutive messages of one role
 // are merged, because Anthropic requires the roles to alternate.
-func ToMessages(msgs []frames.Message) ([]sdk.MessageParam, error) {
+func toMessages(msgs []frames.Message) ([]sdk.MessageParam, error) {
 	out := make([]sdk.MessageParam, 0, len(msgs))
 	for _, m := range msgs {
 		converted, send, err := toMessage(m)
@@ -396,17 +396,17 @@ func mergeSameRole(msgs []sdk.MessageParam) []sdk.MessageParam {
 	return out
 }
 
-// EnsureLastMessageIsUser appends a minimal user message when the conversation
+// ensureLastMessageIsUser appends a minimal user message when the conversation
 // ends on an assistant message, which a model without assistant-prefill support
 // rejects.
-func EnsureLastMessageIsUser(msgs []sdk.MessageParam) []sdk.MessageParam {
+func ensureLastMessageIsUser(msgs []sdk.MessageParam) []sdk.MessageParam {
 	if n := len(msgs); n > 0 && msgs[n-1].Role == sdk.MessageParamRoleAssistant {
 		return append(msgs, sdk.NewUserMessage(sdk.NewTextBlock(noOpUserTurn)))
 	}
 	return msgs
 }
 
-// WithCacheControlMarkers marks the two most recent user messages so the prompt
+// withCacheControlMarkers marks the two most recent user messages so the prompt
 // up to each is cached.
 //
 // The marker on the most recent user message tells Anthropic to cache the
@@ -417,7 +417,7 @@ func EnsureLastMessageIsUser(msgs []sdk.MessageParam) []sdk.MessageParam {
 // User messages are the ones marked because a turn is generated as soon as the
 // user finishes speaking, and Anthropic's roles strictly alternate, so the last
 // user message is where the reusable prefix ends.
-func WithCacheControlMarkers(msgs []sdk.MessageParam) []sdk.MessageParam {
+func withCacheControlMarkers(msgs []sdk.MessageParam) []sdk.MessageParam {
 	out := make([]sdk.MessageParam, len(msgs))
 	copy(out, msgs)
 	marked := 0

@@ -15,6 +15,7 @@ import (
 	"sync"
 
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/provider/google/internal/wire"
 	"github.com/gojargo/jargo/service/llm/adapter"
 )
 
@@ -147,7 +148,7 @@ func (a *Adapter) ParamsFromMessages(
 	fromContext, msgs := a.ExtractInitialSystem(contextSystem, opts.SystemInstruction, messages)
 	system := a.ResolveSystemInstruction(fromContext, opts.SystemInstruction, true)
 
-	contents, err := ToContents(msgs)
+	contents, err := toContents(msgs)
 	if err != nil {
 		return Params{}, err
 	}
@@ -159,13 +160,13 @@ func (a *Adapter) ParamsFromMessages(
 	}
 	contents = dropEmpty(contents)
 	if opts.EnsureLastMessageIsUser {
-		contents = EnsureLastMessageIsUser(contents)
+		contents = ensureLastMessageIsUser(contents)
 	}
 
 	return Params{SystemInstruction: system, Contents: contents}, nil
 }
 
-// ToContents converts the conversation's messages into Gemini contents. The
+// toContents converts the conversation's messages into Gemini contents. The
 // assistant role maps to "model", and a system or developer message enters as
 // the user, Gemini having neither input role. Tool turns become functionCall
 // parts (model) and functionResponse parts (user), paired by the call id
@@ -174,7 +175,7 @@ func (a *Adapter) ParamsFromMessages(
 // A message written for Gemini is either a thought signature the service kept
 // for a part of an earlier model turn, which is put back on that part, or a
 // content already in Gemini's format, which is copied in as it stands.
-func ToContents(msgs []frames.Message) ([]map[string]any, error) {
+func toContents(msgs []frames.Message) ([]map[string]any, error) {
 	names := toolCallNames(msgs)
 	out := make([]map[string]any, 0, len(msgs))
 	var signatures []map[string]any
@@ -342,17 +343,7 @@ func bookmarkMatchesPart(bookmark, part map[string]any) bool {
 // recorded.
 func textBookmarkMatches(bookmark string, part map[string]any) bool {
 	text, _ := part[adapterKeyText].(string)
-	return TextBookmarkMatches(bookmark, text)
-}
-
-// TextBookmarkMatches reports whether a thought signature's text bookmark names
-// a reply's text. Whitespace is normalized before comparing, and a prefix either
-// way matches: the reply is cut short when the response was interrupted, and
-// the bookmark holds only the text seen so far when the signature arrived early.
-func TextBookmarkMatches(bookmark, text string) bool {
-	want := strings.Join(strings.Fields(bookmark), " ")
-	got := strings.Join(strings.Fields(text), " ")
-	return got != "" && (strings.HasPrefix(want, got) || strings.HasPrefix(got, want))
+	return wire.TextBookmarkMatches(bookmark, text)
 }
 
 // inlineDataBookmarkMatches reports whether an inline-data part is the one a
@@ -518,9 +509,9 @@ func deepCopy(v any) any {
 	}
 }
 
-// EnsureLastMessageIsUser appends a minimal user content when the conversation
+// ensureLastMessageIsUser appends a minimal user content when the conversation
 // ends on a model turn, which a model that cannot continue one rejects.
-func EnsureLastMessageIsUser(contents []map[string]any) []map[string]any {
+func ensureLastMessageIsUser(contents []map[string]any) []map[string]any {
 	if n := len(contents); n > 0 {
 		if role, _ := contents[n-1][adapterKeyRole].(string); role == roleModel {
 			return append(contents, textContent(roleUser, noOpUserTurn))
@@ -626,7 +617,7 @@ func toolResultParts(results []frames.ToolResult, names map[string]string) []map
 			"functionResponse": map[string]any{
 				adapterKeyID:   r.ID,
 				adapterKeyName: toolResultName(r, names),
-				"response":     FunctionResponseDict(r.Content),
+				"response":     wire.FunctionResponseDict(r.Content),
 			},
 		})
 	}
@@ -643,25 +634,6 @@ func toolResultName(r frames.ToolResult, names map[string]string) string {
 		return r.Name
 	}
 	return unnamedToolResult
-}
-
-// FunctionResponseDict shapes a tool result for Gemini's functionResponse,
-// which requires an object. A result that decodes to a JSON object passes
-// through as it stands. Any other JSON value (null, a scalar, an array) is
-// wrapped decoded, as {"value": <value>}, and text that is not JSON at all, such
-// as the "COMPLETED" a function returning nothing reports, is wrapped as it
-// stands.
-func FunctionResponseDict(content string) any {
-	dec := json.NewDecoder(strings.NewReader(content))
-	dec.UseNumber()
-	var decoded any
-	if dec.Decode(&decoded) != nil || dec.More() {
-		return map[string]any{"value": content}
-	}
-	if _, ok := decoded.(map[string]any); ok {
-		return json.RawMessage(content)
-	}
-	return map[string]any{"value": decoded}
 }
 
 // ToProviderToolsFormat implements adapter.LLMAdapter, rendering the standard

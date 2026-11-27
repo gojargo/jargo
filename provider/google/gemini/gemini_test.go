@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/provider/google/internal/wire"
 	"github.com/gojargo/jargo/service/llm/adapter"
 )
 
@@ -73,7 +74,7 @@ func partsOf(t *testing.T, c map[string]any) []map[string]any {
 // mustContents converts messages and fails the test if the conversion did.
 func mustContents(t *testing.T, msgs []frames.Message) []map[string]any {
 	t.Helper()
-	got, err := ToContents(msgs)
+	got, err := toContents(msgs)
 	if err != nil {
 		t.Fatalf("ToContents: %v", err)
 	}
@@ -262,14 +263,14 @@ func TestToContentsToolTurn(t *testing.T) {
 
 func TestFunctionResponseDict(t *testing.T) {
 	// A JSON object passes through unchanged.
-	raw, ok := FunctionResponseDict(`{"temp":20}`).(json.RawMessage)
+	raw, ok := wire.FunctionResponseDict(`{"temp":20}`).(json.RawMessage)
 	if !ok || string(raw) != `{"temp":20}` {
-		t.Errorf("object should pass through, got %v", FunctionResponseDict(`{"temp":20}`))
+		t.Errorf("object should pass through, got %v", wire.FunctionResponseDict(`{"temp":20}`))
 	}
 	// A plain string is wrapped under "value".
-	m, ok := FunctionResponseDict("sunny").(map[string]any)
+	m, ok := wire.FunctionResponseDict("sunny").(map[string]any)
 	if !ok || m["value"] != "sunny" {
-		t.Errorf("non-object should wrap as {value}, got %v", FunctionResponseDict("sunny"))
+		t.Errorf("non-object should wrap as {value}, got %v", wire.FunctionResponseDict("sunny"))
 	}
 }
 
@@ -288,7 +289,7 @@ func TestFunctionResponseDictWrapsEveryNonObject(t *testing.T) {
 		`{"a":1} extra`:        `{"value":"{\"a\":1} extra"}`,
 	}
 	for in, want := range cases {
-		b, err := json.Marshal(FunctionResponseDict(in))
+		b, err := json.Marshal(wire.FunctionResponseDict(in))
 		if err != nil {
 			t.Fatalf("%s: marshal: %v", in, err)
 		}
