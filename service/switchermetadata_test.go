@@ -82,9 +82,7 @@ func TestASwitchedServiceDescribesItself(t *testing.T) {
 		t.Fatalf("metadata at startup = %v, want just the active service %q", got, a.Name())
 	}
 
-	if !sw.SwitchTo(b) {
-		t.Fatal("SwitchTo(b) = false, want the switch accepted")
-	}
+	task.QueueFrame(frames.NewManuallySwitchServiceFrame(b))
 	time.Sleep(250 * time.Millisecond)
 
 	got := read()

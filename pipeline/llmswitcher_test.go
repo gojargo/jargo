@@ -138,8 +138,8 @@ func TestLLMSwitcherReportsTheActiveLLM(t *testing.T) {
 	if got := sw.ActiveLLM(); got != a {
 		t.Errorf("ActiveLLM() = %v, want the first member", got)
 	}
-	if !sw.SwitchTo(b) {
-		t.Fatal("SwitchTo(b) = false, want the switch accepted")
+	if sw.Strategy().HandleFrame(frames.NewManuallySwitchServiceFrame(b), processor.Downstream) == nil {
+		t.Fatal("the switch to b was refused")
 	}
 	if got := sw.ActiveLLM(); got != b {
 		t.Errorf("ActiveLLM() after the switch = %v, want b", got)
@@ -226,8 +226,8 @@ func TestLLMSwitcherRunInference(t *testing.T) {
 
 	// Switching moves the inference to the model now answering, which here
 	// cannot answer off-pipeline at all.
-	if !sw.SwitchTo(plain) {
-		t.Fatal("SwitchTo(plain) = false, want the switch accepted")
+	if sw.Strategy().HandleFrame(frames.NewManuallySwitchServiceFrame(plain), processor.Downstream) == nil {
+		t.Fatal("the switch to plain was refused")
 	}
 	out, ok, err = sw.RunInference(context.Background(), convo, opts)
 	if err != nil {

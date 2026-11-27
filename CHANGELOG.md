@@ -526,6 +526,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Removed
 
+- **BREAKING: `ServiceSwitcher.SwitchTo` and `ServiceSwitcher.OnSwitch`.** A
+  switch from outside the pipeline took effect while frames were still on their
+  way to the services' gates, so a frame queued before it could reach the new
+  service as well. Switch in-band, with the frames it falls between, by queuing
+  a `frames.ManuallySwitchServiceFrame`; hear about a switch through the
+  strategy's `pipeline.EventServiceSwitched`.
+
+  | Before | After |
+  |---|---|
+  | `sw.SwitchTo(svc)` | `worker.QueueFrame(frames.NewManuallySwitchServiceFrame(svc))` |
+  | `sw.OnSwitch(fn)` | `event.On(sw.Strategy().Events(), pipeline.EventServiceSwitched, fn)` |
+
 Every API deprecated in a 0.x release is gone, ahead of 1.0, along with the
 ones upstream schedules for removal in its 2.0. Each entry names the
 replacement.

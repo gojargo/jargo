@@ -226,30 +226,6 @@ func (s *ServiceSwitcher) Services() []processor.Processor { return s.strategy.S
 // ActiveService is the service currently in use.
 func (s *ServiceSwitcher) ActiveService() processor.Processor { return s.strategy.ActiveService() }
 
-// SwitchTo makes svc the active service, reporting false if svc is not one of
-// the switcher's services.
-func (s *ServiceSwitcher) SwitchTo(svc processor.Processor) bool {
-	return s.switchTo(svc) != nil
-}
-
-// OnSwitch attaches fn to the strategy's EventServiceSwitched, to be called
-// whenever the active service changes. Every function attached is called, in
-// the order they were attached, asynchronously.
-func (s *ServiceSwitcher) OnSwitch(fn func(processor.Processor)) {
-	event.On(s.strategy.Events(), EventServiceSwitched, func(_ context.Context, svc processor.Processor) { fn(svc) })
-}
-
-// switchTo asks the strategy to activate svc and, when it does, asks the new
-// service to broadcast its metadata, so what the rest of the pipeline knows
-// describes the service now in use.
-func (s *ServiceSwitcher) switchTo(svc processor.Processor) processor.Processor {
-	switched := s.strategy.HandleFrame(frames.NewManuallySwitchServiceFrame(svc), processor.Downstream)
-	if switched != nil {
-		s.requestMetadata(switched)
-	}
-	return switched
-}
-
 // requestMetadata asks svc to broadcast its metadata again. It is queued
 // straight onto the service, past the filters, since the switch has only just
 // happened.

@@ -178,7 +178,7 @@ func TestServiceSwitcherFailover(t *testing.T) {
 	}
 
 	switched := make(chan processor.Processor, 1)
-	sw.OnSwitch(func(p processor.Processor) {
+	event.On(sw.Strategy().Events(), pipeline.EventServiceSwitched, func(_ context.Context, p processor.Processor) {
 		select {
 		case switched <- p:
 		default:
@@ -469,13 +469,11 @@ func TestSwitchingAsksTheNewServiceToDescribeItself(t *testing.T) {
 		t.Fatalf("NewServiceSwitcher: %v", err)
 	}
 
-	_, metadata, stop := collectMetadata(t, sw)
+	task, metadata, stop := collectMetadata(t, sw)
 	defer stop()
 
 	time.Sleep(200 * time.Millisecond)
-	if !sw.SwitchTo(b) {
-		t.Fatal("SwitchTo(b) = false, want the switch accepted")
-	}
+	task.QueueFrame(frames.NewManuallySwitchServiceFrame(b))
 	time.Sleep(300 * time.Millisecond)
 
 	got := metadata()
@@ -660,14 +658,19 @@ func TestServiceSwitchedEventReachesEveryHandler(t *testing.T) {
 		t.Fatalf("NewServiceSwitcher: %v", err)
 	}
 	got := make(chan string, 4)
-	sw.OnSwitch(func(p processor.Processor) { got <- "first:" + p.Name() })
-	sw.OnSwitch(func(p processor.Processor) { got <- "second:" + p.Name() })
+	events := sw.Strategy().Events()
+	event.On(events, pipeline.EventServiceSwitched, func(_ context.Context, p processor.Processor) {
+		got <- "first:" + p.Name()
+	})
+	event.On(events, pipeline.EventServiceSwitched, func(_ context.Context, p processor.Processor) {
+		got <- "second:" + p.Name()
+	})
 	sources := make(chan any, 1)
-	sw.Strategy().Events().Add(pipeline.EventServiceSwitched, func(_ context.Context, source any, _ ...any) {
+	events.Add(pipeline.EventServiceSwitched, func(_ context.Context, source any, _ ...any) {
 		sources <- source
 	})
 
-	if !sw.SwitchTo(b) {
+	if sw.Strategy().HandleFrame(frames.NewManuallySwitchServiceFrame(b), processor.Downstream) == nil {
 		t.Fatal("the switch was refused")
 	}
 	var seen []string
