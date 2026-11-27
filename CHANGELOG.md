@@ -12,6 +12,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-11-27
+
 ### Fixed
 
 - **A TTS settings update no longer races the tracing of the audio playing.**
@@ -8776,7 +8778,8 @@ framework for Go, ported from [Pipecat](https://github.com/pipecat-ai/pipecat).
   tracing) and `twiliobot` bots, plus `examples/voice/<provider>` — one small
   bot per provider, each wiring its STT/LLM/TTS explicitly in Go.
 
-[Unreleased]: https://github.com/gojargo/jargo/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/gojargo/jargo/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/gojargo/jargo/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/gojargo/jargo/compare/v0.7.0...v1.0.0
 [0.7.0]: https://github.com/gojargo/jargo/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/gojargo/jargo/compare/v0.6.0...v0.6.1
