@@ -42,9 +42,15 @@ jobs:
           go-version-file: go.mod
       # The VAD and turn analyzers load the ONNX Runtime at run time, and their
       # tests skip without it. The models themselves are in the tree, so this
-      # download is all that stands between the analyzers and being tested.
+      # download is all that stands between the analyzers and being tested. It
+      # is not required, though: every other test runs either way, so a failed
+      # download (#152) must not keep the rest of the suite from running.
       - run: make deps-onnx
-      - run: echo "JARGO_ONNXRUNTIME_LIB=$PWD/.native/lib/libonnxruntime.so" >> "$GITHUB_ENV"
+        continue-on-error: true
+      - run: |
+          if [ -f "$PWD/.native/lib/libonnxruntime.so" ]; then
+            echo "JARGO_ONNXRUNTIME_LIB=$PWD/.native/lib/libonnxruntime.so" >> "$GITHUB_ENV"
+          fi
       # `make cover` so the profile CI uploads is produced by the same recipe a
       # developer runs locally.
       - run: make cover
