@@ -7,6 +7,7 @@ import (
 
 	"github.com/gojargo/jargo/eval"
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/internal/ttsstream"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/processor/aggregators"
@@ -25,7 +26,7 @@ type fakeSynth struct{}
 func (fakeSynth) SampleRate() int { return audioRate }
 
 func (f fakeSynth) RunTTS(_ context.Context, _, _ string, yield func(fr frames.Frame) error) error {
-	emit := tts.PCMYielder(yield, f.SampleRate())
+	emit := ttsstream.PCMYielder(yield, f.SampleRate())
 	pcm := make([]byte, audioRate/5*2) // 200ms of 16-bit mono
 	for i := range pcm {
 		pcm[i] = 0x20 // non-zero → "speech"

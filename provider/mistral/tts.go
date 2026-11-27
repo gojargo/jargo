@@ -22,6 +22,7 @@ import (
 	"github.com/gojargo/jargo/errclass"
 	"github.com/gojargo/jargo/expressive"
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/internal/ttsstream"
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/service/tts"
 )
@@ -84,7 +85,7 @@ func (s *ttsSynthesizer) ExpressionAdapter() expressive.ExpressionAdapter {
 // Synthesize requests streaming speech for text and streams the converted PCM
 // downstream.
 func (s *ttsSynthesizer) RunTTS(ctx context.Context, text, _ string, yield func(f frames.Frame) error) error {
-	emit := tts.PCMYielder(yield, s.SampleRate())
+	emit := ttsstream.PCMYielder(yield, s.SampleRate())
 	payload := map[string]any{
 		"model":           s.cfg.Model,
 		"input":           text,

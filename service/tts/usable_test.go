@@ -8,6 +8,7 @@ import (
 
 	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/internal/ttsstream"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/service/tts"
 )
@@ -21,7 +22,7 @@ func (s *countingSynth) SampleRate() int { return 24000 }
 
 func (s *countingSynth) RunTTS(_ context.Context, _, _ string, yield func(f frames.Frame) error) error {
 	s.calls.Add(1)
-	emit := tts.PCMYielder(yield, s.SampleRate())
+	emit := ttsstream.PCMYielder(yield, s.SampleRate())
 	return emit(make([]byte, 640))
 }
 

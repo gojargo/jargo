@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/internal/ttsstream"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/service/tts"
 )
@@ -66,7 +67,7 @@ func (s *synthesizer) requestBody(text string) ([]byte, error) {
 
 // Synthesize requests speech for text and streams the raw PCM downstream.
 func (s *synthesizer) RunTTS(ctx context.Context, text, _ string, yield func(f frames.Frame) error) error {
-	emit := tts.PCMYielder(yield, s.SampleRate())
+	emit := ttsstream.PCMYielder(yield, s.SampleRate())
 	if len(text) > maxTextLen {
 		text = text[:maxTextLen]
 	}
@@ -82,7 +83,7 @@ func (s *synthesizer) RunTTS(ctx context.Context, text, _ string, yield func(f f
 	req.Header.Set("Content-Type", "application/json")
 	// Reported as the request is made, ahead of any answer.
 	tts.StartUsageMetrics(ctx, text)
-	return tts.StreamResponse(s.http, req, emit)
+	return ttsstream.Response(s.http, req, emit)
 }
 
 // cambRegional maps region-specific Languages to Camb.ai codes that differ from

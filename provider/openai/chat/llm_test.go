@@ -31,9 +31,9 @@ func wantLabel(t *testing.T, label string, svc interface{ Name() string }) {
 	}
 }
 
-// sse renders data lines as the chat-completions stream delivers them: one
+// sseStream renders data lines as the chat-completions stream delivers them: one
 // "data:" line per chunk, terminated by the [DONE] sentinel.
-func sse(chunks ...string) string {
+func sseStream(chunks ...string) string {
 	var b strings.Builder
 	for _, c := range chunks {
 		b.WriteString("data: " + c + "\n\n")
@@ -158,7 +158,7 @@ func TestNewLLMDefaults(t *testing.T) {
 // TestGenerateRequestShape checks a plain generation is addressed, authorized
 // and streamed the way the chat-completions API expects.
 func TestGenerateRequestShape(t *testing.T) {
-	srv := newLLMServer(t, sse(contentChunk("hi")))
+	srv := newLLMServer(t, sseStream(contentChunk("hi")))
 	if got := generate(t, srv, LLMConfig{APIKey: "test-key"}); got != "hi" {
 		t.Errorf("streamed text = %q, want %q", got, "hi")
 	}
@@ -189,7 +189,7 @@ func TestGenerateRequestShape(t *testing.T) {
 // TestGenerateSendsSystemThenMessages checks the system prompt leads the message
 // list rather than traveling as an ordinary turn.
 func TestGenerateSendsSystemThenMessages(t *testing.T) {
-	srv := newLLMServer(t, sse(contentChunk("ok")))
+	srv := newLLMServer(t, sseStream(contentChunk("ok")))
 	generate(t, srv, LLMConfig{APIKey: "k"})
 
 	msgs, ok := srv.body["messages"].([]any)
@@ -210,7 +210,7 @@ func TestGenerateSendsSystemThenMessages(t *testing.T) {
 // left off the request when nil, so the API applies its own defaults rather than
 // receiving a Go zero value that means something else.
 func TestGenerateOmitsUnsetSamplingControls(t *testing.T) {
-	srv := newLLMServer(t, sse(contentChunk("ok")))
+	srv := newLLMServer(t, sseStream(contentChunk("ok")))
 	generate(t, srv, LLMConfig{APIKey: "k"})
 
 	for _, field := range []string{
@@ -226,7 +226,7 @@ func TestGenerateOmitsUnsetSamplingControls(t *testing.T) {
 // TestGenerateSendsSamplingControls checks a deliberate zero still crosses the
 // wire, which is the reason the fields are pointers.
 func TestGenerateSendsSamplingControls(t *testing.T) {
-	srv := newLLMServer(t, sse(contentChunk("ok")))
+	srv := newLLMServer(t, sseStream(contentChunk("ok")))
 	zero, one := 0.0, 1.0
 	seed, completion := 42, 256
 	generate(t, srv, LLMConfig{
@@ -258,7 +258,7 @@ func TestGenerateSendsSamplingControls(t *testing.T) {
 // modeled body, so a provider-specific parameter can be added and a modeled one
 // replaced without a new config field.
 func TestGenerateExtraOverridesModeledFields(t *testing.T) {
-	srv := newLLMServer(t, sse(contentChunk("ok")))
+	srv := newLLMServer(t, sseStream(contentChunk("ok")))
 	generate(t, srv, LLMConfig{
 		APIKey: "k",
 		Extra:  map[string]any{"reasoning_effort": "low", "max_tokens": 99},
@@ -312,7 +312,7 @@ func TestMergeExtraCallerWinsAndIsNotModified(t *testing.T) {
 // TestGenerateJoinsDeltas checks the streamed content deltas arrive at the
 // caller in order and nothing else does.
 func TestGenerateJoinsDeltas(t *testing.T) {
-	srv := newLLMServer(t, sse(
+	srv := newLLMServer(t, sseStream(
 		contentChunk("Hello"),
 		contentChunk(", "),
 		`{"choices":[]}`, // A chunk with no choices contributes nothing.
@@ -378,7 +378,7 @@ func TestGenerateStatusErrorCategory(t *testing.T) {
 // TestGenerateEmitError checks an error from the caller's sink stops the stream
 // and is reported back rather than swallowed.
 func TestGenerateEmitError(t *testing.T) {
-	srv := newLLMServer(t, sse(contentChunk("a"), contentChunk("b")))
+	srv := newLLMServer(t, sseStream(contentChunk("a"), contentChunk("b")))
 	svc := NewLLM(LLMConfig{APIKey: "k", BaseURL: srv.URL})
 
 	calls := 0
@@ -397,7 +397,7 @@ func TestGenerateEmitError(t *testing.T) {
 // TestGenerateWithToolsAdvertisesTools checks the context's tools are sent on
 // the request in OpenAI's function-tool shape.
 func TestGenerateWithToolsAdvertisesTools(t *testing.T) {
-	srv := newLLMServer(t, sse(contentChunk("ok")))
+	srv := newLLMServer(t, sseStream(contentChunk("ok")))
 	svc := NewLLM(LLMConfig{APIKey: "k", BaseURL: srv.URL})
 
 	convo := frames.NewLLMContext("")
@@ -431,7 +431,7 @@ func TestGenerateWithToolsAdvertisesTools(t *testing.T) {
 // generation over a context with no tools sends no tools field at all, rather
 // than an empty list the API would have to interpret.
 func TestGenerateWithToolsOmitsToolsWhenNoneDeclared(t *testing.T) {
-	srv := newLLMServer(t, sse(contentChunk("ok")))
+	srv := newLLMServer(t, sseStream(contentChunk("ok")))
 	svc := NewLLM(LLMConfig{APIKey: "k", BaseURL: srv.URL})
 
 	sink := &fakeSink{}
@@ -450,7 +450,7 @@ func TestGenerateWithToolsOmitsToolsWhenNoneDeclared(t *testing.T) {
 // text arrives live, and the tool-call fragments OpenAI spreads across deltas
 // are assembled into whole calls reported once the stream ends.
 func TestGenerateWithToolsCoalescesStreamedCalls(t *testing.T) {
-	srv := newLLMServer(t, sse(
+	srv := newLLMServer(t, sseStream(
 		contentChunk("Let me check. "),
 		`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_a",`+
 			`"function":{"name":"get_weather","arguments":"{\"loc"}}]}}]}`,
@@ -507,7 +507,7 @@ func (s *shaper) Authorize(req *http.Request, apiKey string) {
 // the default headers reach the request, the default headers applied last so
 // they override what the service sets, and that none is sent unset.
 func TestGenerateSendsTheClientHeaders(t *testing.T) {
-	srv := newLLMServer(t, sse(contentChunk("hi")))
+	srv := newLLMServer(t, sseStream(contentChunk("hi")))
 	generate(t, srv, LLMConfig{
 		APIKey: "k", Organization: "org-1", Project: "proj-1",
 		DefaultHeaders: map[string]string{"X-Custom": "yes", "Content-Type": "application/x-test"},
@@ -521,7 +521,7 @@ func TestGenerateSendsTheClientHeaders(t *testing.T) {
 		}
 	}
 
-	srv = newLLMServer(t, sse(contentChunk("hi")))
+	srv = newLLMServer(t, sseStream(contentChunk("hi")))
 	generate(t, srv, LLMConfig{APIKey: "k"})
 	for _, k := range []string{"OpenAI-Organization", "OpenAI-Project"} {
 		if _, ok := srv.header[k]; ok {
@@ -534,7 +534,7 @@ func TestGenerateSendsTheClientHeaders(t *testing.T) {
 // and the authorization, so a non-OpenAI URL layout reuses this implementation
 // whole.
 func TestCompatShaperUsedForURLAndAuth(t *testing.T) {
-	srv := newLLMServer(t, sse(contentChunk("ok")))
+	srv := newLLMServer(t, sseStream(contentChunk("ok")))
 	sh := &shaper{}
 	svc := NewCompatLLM(Compat{
 		Name: "AzureLLM", BaseURL: srv.URL, DefaultModel: "gpt-4o", Shaper: sh,

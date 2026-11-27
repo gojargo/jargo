@@ -12,6 +12,7 @@ import (
 	"strconv"
 
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/internal/ttsstream"
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/service/tts"
 )
@@ -57,7 +58,7 @@ func (s *ttsSynthesizer) SampleRate() int { return ttsSampleRate }
 
 // Synthesize requests speech for text and streams the raw PCM downstream.
 func (s *ttsSynthesizer) RunTTS(ctx context.Context, text, _ string, yield func(f frames.Frame) error) error {
-	emit := tts.PCMYielder(yield, s.SampleRate())
+	emit := ttsstream.PCMYielder(yield, s.SampleRate())
 	body, err := json.Marshal(map[string]any{"text": text})
 	if err != nil {
 		return err
@@ -68,7 +69,7 @@ func (s *ttsSynthesizer) RunTTS(ctx context.Context, text, _ string, yield func(
 	}
 	req.Header.Set("Authorization", "Bearer "+s.cfg.APIKey)
 	req.Header.Set("Content-Type", "application/json")
-	return tts.StreamSpeech(s.http, req, text, emit)
+	return ttsstream.Speech(s.http, req, text, emit)
 }
 
 // endpoint builds the generate URL for the configured voice and output format.

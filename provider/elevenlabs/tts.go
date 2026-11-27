@@ -21,6 +21,7 @@ import (
 	"github.com/gojargo/jargo/errclass"
 	"github.com/gojargo/jargo/expressive"
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/internal/ttsstream"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/service/tts"
 	textalign "github.com/gojargo/jargo/text/align"
@@ -324,7 +325,7 @@ func (s *synthesizer) synthesize(
 		return errclass.NewHTTPStatusError(resp.StatusCode, fmt.Errorf("%w %d: %s", errTTSStatus, resp.StatusCode, msg))
 	}
 	tts.StartUsageMetrics(ctx, text)
-	return s.stream(resp.Body, text, tts.PCMYielder(yield, s.SampleRate()), word)
+	return s.stream(resp.Body, text, ttsstream.PCMYielder(yield, s.SampleRate()), word)
 }
 
 // stream reads the response, one JSON object per line, and folds each one in.

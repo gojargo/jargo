@@ -14,6 +14,7 @@ import (
 
 	"github.com/gojargo/jargo/errclass"
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/internal/sse"
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/provider/openai/internal/apierror"
 	"github.com/gojargo/jargo/provider/openai/internal/sdkretry"
@@ -536,7 +537,7 @@ func (s *LLMService) consume(ctx context.Context, body io.Reader, sink llm.Sink)
 		filter = s.newStreamFilter(s)
 	}
 	var usage *chatUsage
-	scanErr := llm.ScanSSE(body, func(data string) error {
+	scanErr := sse.Scan(body, func(data string) error {
 		var chunk chatChunk
 		if json.Unmarshal([]byte(data), &chunk) != nil {
 			return nil //nolint:nilerr // An empty or malformed chunk is skipped.

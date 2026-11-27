@@ -8,6 +8,7 @@ import (
 
 	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/internal/ttsstream"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor/aggregators"
 	"github.com/gojargo/jargo/service/tts"
@@ -205,7 +206,7 @@ type longSynth struct{}
 func (longSynth) SampleRate() int { return 24000 }
 
 func (s longSynth) RunTTS(_ context.Context, _, _ string, yield func(f frames.Frame) error) error {
-	return tts.PCMYielder(yield, s.SampleRate())(make([]byte, s.SampleRate()))
+	return ttsstream.PCMYielder(yield, s.SampleRate())(make([]byte, s.SampleRate()))
 }
 
 // TestSkippedFrameFollowsTheTextFrameSpokenBeforeIt checks a service without

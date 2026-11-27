@@ -10,6 +10,7 @@ import (
 
 	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/internal/ttsstream"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor/aggregators"
 	"github.com/gojargo/jargo/service/tts"
@@ -43,7 +44,7 @@ func (s *fakeTimedSynth) SampleRate() int { return s.rate }
 
 // Synthesize is the plain fallback; unused because the base takes the timed path.
 func (s *fakeTimedSynth) RunTTS(_ context.Context, _, _ string, yield func(f frames.Frame) error) error {
-	emit := tts.PCMYielder(yield, s.SampleRate())
+	emit := ttsstream.PCMYielder(yield, s.SampleRate())
 	for _, w := range s.words {
 		if err := emit(w.pcm); err != nil {
 			return err
@@ -58,7 +59,7 @@ func (s *fakeTimedSynth) RunTTSTimed(
 	yield func(f frames.Frame) error,
 	word func(words []align.WordTiming, opts tts.WordTimingOptions) error,
 ) error {
-	emit := tts.PCMYielder(yield, s.SampleRate())
+	emit := ttsstream.PCMYielder(yield, s.SampleRate())
 	for i, w := range s.words {
 		if err := word([]align.WordTiming{{Word: w.text, Offset: w.offset}}, tts.WordTimingOptions{}); err != nil {
 			return err
@@ -196,7 +197,7 @@ type plainSynth struct {
 func (s *plainSynth) SampleRate() int { return s.rate }
 
 func (s *plainSynth) RunTTS(_ context.Context, _, _ string, yield func(f frames.Frame) error) error {
-	emit := tts.PCMYielder(yield, s.SampleRate())
+	emit := ttsstream.PCMYielder(yield, s.SampleRate())
 	return emit(s.chunk)
 }
 
@@ -875,7 +876,7 @@ type spacingSynth struct {
 func (s *spacingSynth) SampleRate() int { return s.rate }
 
 func (s *spacingSynth) RunTTS(_ context.Context, _, _ string, yield func(f frames.Frame) error) error {
-	emit := tts.PCMYielder(yield, s.SampleRate())
+	emit := ttsstream.PCMYielder(yield, s.SampleRate())
 	for _, w := range s.words {
 		if err := emit(w.pcm); err != nil {
 			return err
@@ -890,7 +891,7 @@ func (s *spacingSynth) RunTTSTimed(
 	yield func(f frames.Frame) error,
 	word func(words []align.WordTiming, opts tts.WordTimingOptions) error,
 ) error {
-	emit := tts.PCMYielder(yield, s.SampleRate())
+	emit := ttsstream.PCMYielder(yield, s.SampleRate())
 	for _, w := range s.words {
 		err := word([]align.WordTiming{{Word: w.text, Offset: w.offset}},
 			tts.WordTimingOptions{IncludesInterFrameSpaces: true})

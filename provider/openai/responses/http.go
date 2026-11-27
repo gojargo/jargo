@@ -9,6 +9,7 @@ import (
 
 	"github.com/gojargo/jargo/errclass"
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/internal/sse"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/provider/openai/chat"
 	"github.com/gojargo/jargo/provider/openai/internal/apierror"
@@ -213,10 +214,10 @@ func (s *HTTPService) consume(ctx context.Context, r io.Reader, state *streamSta
 		return nil
 	}
 	if s.variant.Events == nil {
-		return llm.ScanSSE(r, func(data string) error { return handle([]byte(data)) })
+		return sse.Scan(r, func(data string) error { return handle([]byte(data)) })
 	}
 	filter := s.variant.Events()
-	return llm.ScanSSE(r, func(data string) error {
+	return sse.Scan(r, func(data string) error {
 		for _, ev := range filter([]byte(data)) {
 			if err := handle(ev); err != nil {
 				return err

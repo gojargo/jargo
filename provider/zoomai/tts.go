@@ -14,6 +14,7 @@ import (
 
 	"github.com/gojargo/jargo/errclass"
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/internal/ttsstream"
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/internal/zoomaiutil"
 	"github.com/gojargo/jargo/service/settings"
@@ -231,7 +232,7 @@ func (s *httpSynthesizer) synthesize(ctx context.Context, text string, yield fun
 	slog.DebugContext(ctx, "zoom tts: synthesizing", headerTrackingID, trackingID)
 	tts.StartUsageMetrics(ctx, text)
 
-	emit := tts.PCMYielder(yield, ttsSampleRate)
+	emit := ttsstream.PCMYielder(yield, ttsSampleRate)
 	buf := make([]byte, tts.ChunkSize(s.cfg.SampleRate))
 	for {
 		n, readErr := resp.Body.Read(buf)

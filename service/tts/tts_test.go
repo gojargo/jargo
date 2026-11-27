@@ -8,6 +8,7 @@ import (
 
 	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/internal/ttsstream"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/service/tts"
 	"go.opentelemetry.io/otel"
@@ -25,7 +26,7 @@ type fakeSynth struct {
 func (s *fakeSynth) SampleRate() int { return s.rate }
 
 func (s *fakeSynth) RunTTS(_ context.Context, text, _ string, yield func(f frames.Frame) error) error {
-	emit := tts.PCMYielder(yield, s.SampleRate())
+	emit := ttsstream.PCMYielder(yield, s.SampleRate())
 	s.spoken <- text
 	return emit(s.chunk)
 }

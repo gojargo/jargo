@@ -10,6 +10,7 @@ import (
 
 	"github.com/gojargo/jargo/expressive"
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/internal/ttsstream"
 	"github.com/gojargo/jargo/service/tts"
 )
 
@@ -41,7 +42,7 @@ func (s *ttsSynthesizer) ExpressionAdapter() expressive.ExpressionAdapter {
 
 // Synthesize requests speech for text and streams the raw PCM downstream.
 func (s *ttsSynthesizer) RunTTS(ctx context.Context, text, _ string, yield func(f frames.Frame) error) error {
-	emit := tts.PCMYielder(yield, s.SampleRate())
+	emit := ttsstream.PCMYielder(yield, s.SampleRate())
 	ssml := s.ssml(text)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.endpoint(), bytes.NewReader(ssml))
 	if err != nil {
@@ -51,7 +52,7 @@ func (s *ttsSynthesizer) RunTTS(ctx context.Context, text, _ string, yield func(
 	req.Header.Set("Content-Type", "application/ssml+xml")
 	req.Header.Set("X-Microsoft-OutputFormat", outputFormat(s.cfg.SampleRate))
 	req.Header.Set("User-Agent", ttsUserAgent)
-	return tts.StreamSpeech(s.http, req, text, emit)
+	return ttsstream.Speech(s.http, req, text, emit)
 }
 
 func (s *ttsSynthesizer) endpoint() string {

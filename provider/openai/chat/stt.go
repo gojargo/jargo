@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/gojargo/jargo/audio"
 	"github.com/gojargo/jargo/errclass"
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/language"
@@ -150,14 +151,14 @@ func writeFields(w *multipart.Writer, cfg *STTConfig) error {
 }
 
 // Transcribe uploads the segment as a WAV file and returns the transcript.
-func (t *transcriber) Transcribe(ctx context.Context, audio []byte, sampleRate int) (string, error) {
+func (t *transcriber) Transcribe(ctx context.Context, pcm []byte, sampleRate int) (string, error) {
 	var body bytes.Buffer
 	w := multipart.NewWriter(&body)
 	part, err := w.CreateFormFile("file", "audio.wav")
 	if err != nil {
 		return "", err
 	}
-	if _, err = part.Write(stt.WAV(audio, sampleRate, 1)); err != nil {
+	if _, err = part.Write(audio.PCMToWAV(pcm, sampleRate, 1)); err != nil {
 		return "", err
 	}
 	if err = writeFields(w, &t.cfg); err != nil {

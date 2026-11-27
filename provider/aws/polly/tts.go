@@ -15,6 +15,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/polly"
 	"github.com/aws/aws-sdk-go-v2/service/polly/types"
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/internal/ttsstream"
 	"github.com/gojargo/jargo/service/tts"
 )
 
@@ -59,7 +60,7 @@ func (s *synthesizer) SampleRate() int { return s.cfg.SampleRate }
 
 // Synthesize requests speech for text and streams the raw PCM downstream.
 func (s *synthesizer) RunTTS(ctx context.Context, text, _ string, yield func(f frames.Frame) error) error {
-	emit := tts.PCMYielder(yield, s.SampleRate())
+	emit := ttsstream.PCMYielder(yield, s.SampleRate())
 	client, err := s.pollyClient(ctx)
 	if err != nil {
 		return err

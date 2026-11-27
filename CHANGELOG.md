@@ -222,6 +222,20 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **BREAKING: the providers' plumbing is no longer part of the public API.**
+  The Server-Sent Events scanner, the HTTP audio streaming loops and the PCM
+  frame yielder only serve the providers in this module, so they move under
+  `internal/`, out of the 1.x promise. `stt.WAV` was another name for
+  `audio.PCMToWAV` and is gone. A provider written outside jargo copies the few
+  lines it needs, or uses `audio.PCMToWAV` and `frames.NewTTSAudioRawFrame`
+  directly.
+
+  | Before | After |
+  |---|---|
+  | `llm.ScanSSE` | removed (internal) |
+  | `tts.StreamResponse`, `tts.StreamSpeech`, `tts.PCMYielder` | removed (internal) |
+  | `stt.WAV` | `audio.PCMToWAV` |
+
 - **BREAKING: the adapters' conversion helpers are no longer exported.** They
   are the private steps of each adapter's `LLMInvocationParams`, and the
   Anthropic ones put `anthropic-sdk-go` types in jargo's API, so an SDK upgrade

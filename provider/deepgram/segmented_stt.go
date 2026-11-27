@@ -21,6 +21,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/gojargo/jargo/audio"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/language"
@@ -591,10 +592,10 @@ type listenWord struct {
 // stt.SegmentRunner. It yields a TranscriptionFrame per transcript (one per
 // speaker run when diarization is on), nothing when nothing was heard, and an
 // ErrorFrame on failure.
-func (t *segmentedTranscriber) RunSTT(ctx context.Context, audio []byte, sampleRate int) iter.Seq[frames.Frame] {
+func (t *segmentedTranscriber) RunSTT(ctx context.Context, pcm []byte, sampleRate int) iter.Seq[frames.Frame] {
 	return func(yield func(frames.Frame) bool) {
 		t.svc.StartProcessingMetrics()
-		raw, result, err := t.transcribeResult(ctx, stt.WAV(audio, sampleRate, 1))
+		raw, result, err := t.transcribeResult(ctx, audio.PCMToWAV(pcm, sampleRate, 1))
 		if err != nil {
 			if ctx.Err() != nil {
 				// Canceled with the service: nothing failed.

@@ -38,7 +38,7 @@ func generateWith(t *testing.T, svc *LLMService) {
 // and a field the service does not model, and that a cleared control is
 // omitted again.
 func TestSettingsUpdateReachesTheNextRequest(t *testing.T) {
-	srv := newLLMServer(t, sse(contentChunk("hi")))
+	srv := newLLMServer(t, sseStream(contentChunk("hi")))
 	temp := 0.2
 	svc := NewLLM(LLMConfig{APIKey: "k", BaseURL: srv.URL, Model: "gpt-4o", Temperature: &temp})
 
@@ -80,7 +80,7 @@ func TestSettingsUpdateReachesTheNextRequest(t *testing.T) {
 // start as the service was built, so an update to one field leaves the rest of
 // the configuration in force.
 func TestSettingsStartFromTheConfig(t *testing.T) {
-	srv := newLLMServer(t, sse(contentChunk("hi")))
+	srv := newLLMServer(t, sseStream(contentChunk("hi")))
 	topP, seed := 0.9, 3
 	svc := NewLLM(LLMConfig{
 		APIKey: "k", BaseURL: srv.URL, MaxTokens: 50, TopP: &topP, Seed: &seed,

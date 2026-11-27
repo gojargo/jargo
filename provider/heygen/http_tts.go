@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/internal/ttsstream"
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/service/settings"
@@ -184,7 +185,7 @@ func (s *httpSynthesizer) runTTS(ctx context.Context, text string, yield func(f 
 	}
 	tts.StartUsageMetrics(ctx, text)
 
-	emit := tts.PCMYielder(yield, s.synthesisRate)
+	emit := ttsstream.PCMYielder(yield, s.synthesisRate)
 	buf := make([]byte, tts.ChunkSize(s.cfg.SampleRate))
 	for {
 		n, readErr := resp.Body.Read(buf)

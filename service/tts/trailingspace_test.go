@@ -8,6 +8,7 @@ import (
 
 	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/internal/ttsstream"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/service/tts"
 	ttstext "github.com/gojargo/jargo/text"
@@ -32,7 +33,7 @@ func (s *spacedSynth) RunTTS(
 	s.mu.Lock()
 	s.said = append(s.said, text)
 	s.mu.Unlock()
-	return tts.PCMYielder(yield, s.SampleRate())([]byte{1, 2, 3, 4})
+	return ttsstream.PCMYielder(yield, s.SampleRate())([]byte{1, 2, 3, 4})
 }
 
 func (s *spacedSynth) texts() []string {
@@ -56,7 +57,7 @@ func (s *unspacedSynth) RunTTS(
 	s.mu.Lock()
 	s.said = append(s.said, text)
 	s.mu.Unlock()
-	return tts.PCMYielder(yield, s.SampleRate())([]byte{1, 2, 3, 4})
+	return ttsstream.PCMYielder(yield, s.SampleRate())([]byte{1, 2, 3, 4})
 }
 
 func (s *unspacedSynth) texts() []string {

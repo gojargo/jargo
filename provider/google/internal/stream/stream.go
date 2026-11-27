@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/gojargo/jargo/internal/sse"
 	"github.com/gojargo/jargo/service/llm"
 )
 
@@ -118,7 +119,7 @@ func attempt(
 	// began records that the model has said something, which is the point past
 	// which the request can no longer be re-issued.
 	var began bool
-	err = llm.ScanSSE(resp.Body, func(data string) error {
+	err = sse.Scan(resp.Body, func(data string) error {
 		// Any event at all is the model still producing, so the bound is on the
 		// gap between events rather than on the response as a whole.
 		arm(cfg.IdleTimeout)

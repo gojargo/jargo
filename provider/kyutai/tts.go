@@ -8,6 +8,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/internal/ttsstream"
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/service/tts"
@@ -67,7 +68,7 @@ func (s *synthesizer) SampleRate() int { return s.cfg.SampleRate }
 // Synthesize opens a TTS session, streams the sentence word-by-word, then emits
 // the returned PCM audio chunks until the server closes the stream.
 func (s *synthesizer) RunTTS(ctx context.Context, text, _ string, yield func(f frames.Frame) error) error {
-	emit := tts.PCMYielder(yield, s.SampleRate())
+	emit := ttsstream.PCMYielder(yield, s.SampleRate())
 	q := url.Values{}
 	q.Set("format", "PcmMessagePack")
 	q.Set("voice", s.cfg.Voice)

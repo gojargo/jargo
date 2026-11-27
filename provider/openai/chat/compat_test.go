@@ -11,7 +11,7 @@ import (
 // body the service sent.
 func bodyOf(t *testing.T, c Compat, cfg LLMConfig, convo *frames.LLMContext) map[string]any {
 	t.Helper()
-	srv := newLLMServer(t, sse(contentChunk("ok")))
+	srv := newLLMServer(t, sseStream(contentChunk("ok")))
 	cfg.BaseURL = srv.URL
 	svc := NewCompatLLM(c, cfg)
 	if err := svc.Generate(t.Context(), convo, func(string) error { return nil }); err != nil {

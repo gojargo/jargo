@@ -10,6 +10,7 @@ import (
 
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/query"
+	"github.com/gojargo/jargo/internal/ttsstream"
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/service/tts"
 )
@@ -123,7 +124,7 @@ func (s *synthesizer) speakQuery() url.Values {
 
 // RunTTS requests speech for text and streams the raw PCM downstream.
 func (s *synthesizer) RunTTS(ctx context.Context, text, _ string, yield func(f frames.Frame) error) error {
-	emit := tts.PCMYielder(yield, s.SampleRate())
+	emit := ttsstream.PCMYielder(yield, s.SampleRate())
 	body, err := json.Marshal(map[string]string{"text": text})
 	if err != nil {
 		return err
@@ -135,7 +136,7 @@ func (s *synthesizer) RunTTS(ctx context.Context, text, _ string, yield func(f f
 	}
 	req.Header.Set("Authorization", authToken(s.cfg.APIKey))
 	req.Header.Set("Content-Type", "application/json")
-	return tts.StreamSpeech(s.http, req, text, emit)
+	return ttsstream.Speech(s.http, req, text, emit)
 }
 
 // Compile-time checks that the synthesizer takes settings the way the base

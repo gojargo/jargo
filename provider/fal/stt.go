@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/gojargo/jargo/audio"
 	"github.com/gojargo/jargo/errclass"
 	"github.com/gojargo/jargo/service/stt"
 )
@@ -35,8 +36,8 @@ func (t *transcriber) Metadata() stt.Metadata {
 }
 
 // Transcribe uploads the segment as a WAV data URI and returns the transcript.
-func (t *transcriber) Transcribe(ctx context.Context, audio []byte, sampleRate int) (string, error) {
-	wav := stt.WAV(audio, sampleRate, 1)
+func (t *transcriber) Transcribe(ctx context.Context, pcm []byte, sampleRate int) (string, error) {
+	wav := audio.PCMToWAV(pcm, sampleRate, 1)
 	payload := map[string]any{
 		"audio_url": "data:audio/x-wav;base64," + base64.StdEncoding.EncodeToString(wav),
 	}

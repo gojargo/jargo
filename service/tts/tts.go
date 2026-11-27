@@ -13,11 +13,8 @@ package tts
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"io"
 	"log/slog"
-	"net/http"
 	"reflect"
 	"slices"
 	"strings"
@@ -40,14 +37,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// errStatus is returned when a provider responds with a non-200 status.
-//
-//nolint:gochecknoglobals // sentinel error
-var errStatus = errors.New("tts: unexpected status")
-
-// readChunk is the size of each audio read from an HTTP stream.
-const readChunk = 4096
-
 // ttfaMaxBufferSeconds bounds how much leading audio is buffered while scanning
 // for a speech onset before giving up on the time-to-first-audio measurement.
 const ttfaMaxBufferSeconds = 3
@@ -57,7 +46,7 @@ const ttfaMaxBufferSeconds = 3
 //
 // RunTTS synthesizes one unit of text and hands each frame it produces to yield,
 // which routes them to the synthesis context they belong to. Most providers
-// yield audio and nothing else, and can build those frames with PCMYielder;
+// yield audio and nothing else, wrapped in TTSAudioRawFrames;
 // yielding is the contract so a provider that has more to report, such as an
 // error mid-stream, can say so in the same ordered stream as its audio.
 //
@@ -67,17 +56,6 @@ const ttfaMaxBufferSeconds = 3
 type Synthesizer interface {
 	SampleRate() int
 	RunTTS(ctx context.Context, text, contextID string, yield func(f frames.Frame) error) error
-}
-
-// PCMYielder adapts a frame yield to a callback taking raw 16-bit mono PCM, for
-// a provider whose output is audio and nothing else.
-func PCMYielder(yield func(f frames.Frame) error, rate int) func(pcm []byte) error {
-	return func(pcm []byte) error {
-		if len(pcm) == 0 {
-			return nil
-		}
-		return yield(frames.NewTTSAudioRawFrame(pcm, rate, 1))
-	}
 }
 
 // chunkSeconds is how much audio ChunkSize covers.
@@ -1868,52 +1846,6 @@ func (m *ttfaMeter) processTTFA(pcm []byte, rate, channels int) bool {
 	m.active = false
 	m.buf = nil
 	return true
-}
-
-// StreamResponse issues req and streams the raw-PCM response body to emit in
-// chunks. It is the shared body-reading loop for HTTP TTS providers. Pair it
-// with PCMYielder to turn the chunks into frames.
-func StreamResponse(client *http.Client, req *http.Request, emit func(pcm []byte) error) error {
-	return streamResponse(client, req, nil, emit)
-}
-
-// StreamSpeech is StreamResponse for a request synthesizing text: once the
-// provider accepts the request, text is reported as usage (see
-// StartUsageMetrics), through the context req was built with.
-func StreamSpeech(client *http.Client, req *http.Request, text string, emit func(pcm []byte) error) error {
-	return streamResponse(client, req, &text, emit)
-}
-
-func streamResponse(client *http.Client, req *http.Request, text *string, emit func(pcm []byte) error) error {
-	resp, err := client.Do(req) //nolint:gosec // request target is the service's configured endpoint
-	if err != nil {
-		return err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return errclass.NewHTTPStatusError(resp.StatusCode, fmt.Errorf("%w %d: %s", errStatus, resp.StatusCode, msg))
-	}
-	if text != nil {
-		StartUsageMetrics(req.Context(), *text)
-	}
-	buf := make([]byte, readChunk)
-	for {
-		n, err := resp.Body.Read(buf)
-		if n > 0 {
-			chunk := make([]byte, n)
-			copy(chunk, buf[:n])
-			if perr := emit(chunk); perr != nil {
-				return perr
-			}
-		}
-		if errors.Is(err, io.EOF) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-	}
 }
 
 // CanGenerateMetrics reports that this service times synthesis and reports

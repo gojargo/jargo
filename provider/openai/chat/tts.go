@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/internal/ttsstream"
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/service/tts"
 )
@@ -73,7 +74,7 @@ func (s *synthesizer) SampleRate() int { return ttsSampleRate }
 
 // Synthesize requests speech for text and streams the raw PCM downstream.
 func (s *synthesizer) RunTTS(ctx context.Context, text, _ string, yield func(f frames.Frame) error) error {
-	emit := tts.PCMYielder(yield, s.SampleRate())
+	emit := ttsstream.PCMYielder(yield, s.SampleRate())
 	payload := map[string]any{
 		"model":           s.cfg.Model,
 		"voice":           s.cfg.Voice,
@@ -96,5 +97,5 @@ func (s *synthesizer) RunTTS(ctx context.Context, text, _ string, yield func(f f
 	}
 	req.Header.Set("Authorization", "Bearer "+s.cfg.APIKey)
 	req.Header.Set("Content-Type", "application/json")
-	return tts.StreamSpeech(s.http, req, text, emit)
+	return ttsstream.Speech(s.http, req, text, emit)
 }

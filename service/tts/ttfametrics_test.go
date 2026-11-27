@@ -10,6 +10,7 @@ import (
 
 	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/internal/ttsstream"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/service/tts"
@@ -23,7 +24,7 @@ type toneSynth struct{ lead float64 }
 func (*toneSynth) SampleRate() int { return toneRate }
 
 func (s *toneSynth) RunTTS(_ context.Context, _, _ string, yield func(f frames.Frame) error) error {
-	emit := tts.PCMYielder(yield, toneRate)
+	emit := ttsstream.PCMYielder(yield, toneRate)
 	if s.lead > 0 {
 		if err := emit(make([]byte, 2*int(toneRate*s.lead))); err != nil {
 			return err

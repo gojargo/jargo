@@ -15,6 +15,7 @@ import (
 
 	"github.com/gojargo/jargo/errclass"
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/internal/ttsstream"
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/provider/google/internal/gcloud"
@@ -372,7 +373,7 @@ func (s *ttsSynthesizer) requestBody(text string) ([]byte, error) {
 // RunTTS requests speech for text and passes the decoded raw PCM on in frames
 // of tts.ChunkSize.
 func (s *ttsSynthesizer) RunTTS(ctx context.Context, text, _ string, yield func(f frames.Frame) error) error {
-	emit := tts.PCMYielder(yield, s.SampleRate())
+	emit := ttsstream.PCMYielder(yield, s.SampleRate())
 	body, err := s.requestBody(text)
 	if err != nil {
 		return err

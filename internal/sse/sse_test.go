@@ -1,4 +1,4 @@
-package llm_test
+package sse_test
 
 import (
 	"errors"
@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gojargo/jargo/service/llm"
+	"github.com/gojargo/jargo/internal/sse"
 )
 
 // Tests for the Server-Sent Events scanner every streaming provider reads its
@@ -25,16 +25,16 @@ var (
 func collect(t *testing.T, s string) []string {
 	t.Helper()
 	var got []string
-	if err := llm.ScanSSE(strings.NewReader(s), func(data string) error {
+	if err := sse.Scan(strings.NewReader(s), func(data string) error {
 		got = append(got, data)
 		return nil
 	}); err != nil {
-		t.Fatalf("ScanSSE: %v", err)
+		t.Fatalf("Scan: %v", err)
 	}
 	return got
 }
 
-func TestScanSSE(t *testing.T) {
+func TestScan(t *testing.T) {
 	tests := []struct {
 		name string
 		in   string
@@ -105,12 +105,12 @@ func TestScanSSE(t *testing.T) {
 	}
 }
 
-// TestScanSSEStopsOnHandlerError checks a handler that fails ends the scan and
+// TestScanStopsOnHandlerError checks a handler that fails ends the scan and
 // its error is what the caller sees, so a provider that cannot parse a chunk is
 // not fed the rest of the stream.
-func TestScanSSEStopsOnHandlerError(t *testing.T) {
+func TestScanStopsOnHandlerError(t *testing.T) {
 	var seen []string
-	err := llm.ScanSSE(strings.NewReader("data: one\ndata: two\ndata: three\n"),
+	err := sse.Scan(strings.NewReader("data: one\ndata: two\ndata: three\n"),
 		func(data string) error {
 			seen = append(seen, data)
 			if data == "two" {
@@ -120,7 +120,7 @@ func TestScanSSEStopsOnHandlerError(t *testing.T) {
 		})
 
 	if !errors.Is(err, errParse) {
-		t.Fatalf("ScanSSE = %v, want the handler's error", err)
+		t.Fatalf("Scan = %v, want the handler's error", err)
 	}
 	if len(seen) != 2 {
 		t.Errorf("the handler saw %q, want it to stop at the failing payload", seen)
@@ -143,29 +143,29 @@ func (r *failingReader) Read(p []byte) (int, error) {
 	return copy(p, r.data), nil
 }
 
-// TestScanSSEReportsAReadError checks a stream that breaks mid-completion is
+// TestScanReportsAReadError checks a stream that breaks mid-completion is
 // reported rather than looking like a stream that simply ended.
-func TestScanSSEReportsAReadError(t *testing.T) {
+func TestScanReportsAReadError(t *testing.T) {
 	r := &failingReader{data: "data: one\n", err: errBroken}
 
 	var seen []string
-	err := llm.ScanSSE(r, func(data string) error {
+	err := sse.Scan(r, func(data string) error {
 		seen = append(seen, data)
 		return nil
 	})
 
 	if !errors.Is(err, errBroken) {
-		t.Fatalf("ScanSSE = %v, want the read error", err)
+		t.Fatalf("Scan = %v, want the read error", err)
 	}
 	if len(seen) != 1 || seen[0] != "one" {
 		t.Errorf("the handler saw %q, want the payload read before the break", seen)
 	}
 }
 
-// TestScanSSEHandlesALargePayload checks a chunk far past the scanner's initial
+// TestScanHandlesALargePayload checks a chunk far past the scanner's initial
 // buffer still arrives whole. A streamed completion carrying a long tool-call
 // argument is one line, and bufio's default 64 KiB would cut it short.
-func TestScanSSEHandlesALargePayload(t *testing.T) {
+func TestScanHandlesALargePayload(t *testing.T) {
 	big := strings.Repeat("x", 512*1024)
 
 	got := collect(t, "data: "+big+"\n")
@@ -177,19 +177,19 @@ func TestScanSSEHandlesALargePayload(t *testing.T) {
 	}
 }
 
-// TestScanSSERejectsAnUnboundedLine checks the buffer is bounded: a line that
+// TestScanRejectsAnUnboundedLine checks the buffer is bounded: a line that
 // never ends is reported rather than read until the process runs out of memory.
-func TestScanSSERejectsAnUnboundedLine(t *testing.T) {
+func TestScanRejectsAnUnboundedLine(t *testing.T) {
 	huge := strings.Repeat("y", 2<<20)
 
-	err := llm.ScanSSE(strings.NewReader("data: "+huge+"\n"), func(string) error {
+	err := sse.Scan(strings.NewReader("data: "+huge+"\n"), func(string) error {
 		t.Error("a payload past the bound was handed on")
 		return nil
 	})
 	if err == nil {
-		t.Fatal("ScanSSE accepted a line past its bound")
+		t.Fatal("Scan accepted a line past its bound")
 	}
 	if !errors.Is(err, io.ErrShortBuffer) && !strings.Contains(err.Error(), "too long") {
-		t.Fatalf("ScanSSE = %v, want it to report the line as too long", err)
+		t.Fatalf("Scan = %v, want it to report the line as too long", err)
 	}
 }

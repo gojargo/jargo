@@ -17,6 +17,7 @@ import (
 
 	"github.com/gojargo/jargo/errclass"
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/internal/ttsstream"
 	"github.com/gojargo/jargo/service/settings"
 	"github.com/gojargo/jargo/service/tts"
 )
@@ -102,7 +103,7 @@ func (s *pocketSynthesizer) RunTTS(ctx context.Context, text, _ string, yield fu
 		slog.Warn("pocket-tts server generated at a different rate than configured",
 			"server", rate, "configured", s.cfg.SampleRate)
 	}
-	trim := newPaddingTrimmer(tts.PCMYielder(yield, rate), rate)
+	trim := newPaddingTrimmer(ttsstream.PCMYielder(yield, rate), rate)
 	if err := streamWAV(pcm, trim.write); err != nil {
 		return err
 	}

@@ -119,7 +119,7 @@ func reportedUsage(t *testing.T, replies ...string) []frames.LLMTokenUsage {
 // they send the counts, and a running total repeated on every chunk must not
 // be reported as many times as it arrives.
 func TestSnapshotsAreReportedOnceAsAFinalTotal(t *testing.T) {
-	reported := reportedUsage(t, sse(
+	reported := reportedUsage(t, sseStream(
 		usageChunk(20, 5, 0, 0),
 		usageChunk(20, 12, 0, 0),
 		usageChunk(20, 30, 0, 0),
@@ -153,7 +153,7 @@ func TestUsageIsReportedWhenTheResponseIsInterrupted(t *testing.T) {
 // TestCachedAndReasoningCountsReachTheReport checks the snapshot is reported
 // whole, so every count the provider sent survives.
 func TestCachedAndReasoningCountsReachTheReport(t *testing.T) {
-	reported := reportedUsage(t, sse(usageChunk(20, 30, 15, 8)))
+	reported := reportedUsage(t, sseStream(usageChunk(20, 30, 15, 8)))
 
 	if len(reported) != 1 {
 		t.Fatalf("reports = %+v, want exactly one", reported)
@@ -171,7 +171,7 @@ func TestCachedAndReasoningCountsReachTheReport(t *testing.T) {
 // folded into the prompt count they would be priced wrong; and the provider's
 // own totals stay exactly as sent.
 func TestCacheWriteCountsReachTheReport(t *testing.T) {
-	reported := reportedUsage(t, sse(
+	reported := reportedUsage(t, sseStream(
 		`{"choices":[],"usage":{"prompt_tokens":20,"completion_tokens":30,"total_tokens":50,`+
 			`"prompt_tokens_details":{"cached_tokens":12,"cache_write_tokens":8},`+
 			`"completion_tokens_details":{"reasoning_tokens":0}}}`,
@@ -196,7 +196,7 @@ func TestCacheWriteCountsReachTheReport(t *testing.T) {
 // without prompt caching, which sends no cache-write count, is reported with
 // that count absent rather than as a zero that looks measured.
 func TestAProviderThatSendsNoCacheWriteFieldStillReports(t *testing.T) {
-	reported := reportedUsage(t, sse(usageChunk(20, 30, 0, 0)))
+	reported := reportedUsage(t, sseStream(usageChunk(20, 30, 0, 0)))
 
 	if len(reported) != 1 {
 		t.Fatalf("reports = %+v, want exactly one", reported)
@@ -247,7 +247,7 @@ func TestTheStreamIsClosedWhenTheTurnIsCanceled(t *testing.T) {
 // TestACompletionWithoutUsageReportsNothing checks a stream carrying no counts
 // produces no metrics rather than a report of zeros.
 func TestACompletionWithoutUsageReportsNothing(t *testing.T) {
-	if reported := reportedUsage(t, sse(contentChunk("hi"))); len(reported) != 0 {
+	if reported := reportedUsage(t, sseStream(contentChunk("hi"))); len(reported) != 0 {
 		t.Errorf("reports = %+v, want none", reported)
 	}
 }
@@ -255,7 +255,7 @@ func TestACompletionWithoutUsageReportsNothing(t *testing.T) {
 // TestALaterCompletionDoesNotInheritEarlierUsage checks each completion starts
 // from a clean slate, so the counts of one turn are not billed to the next.
 func TestALaterCompletionDoesNotInheritEarlierUsage(t *testing.T) {
-	reported := reportedUsage(t, sse(usageChunk(20, 30, 0, 0)), sse(contentChunk("hi")))
+	reported := reportedUsage(t, sseStream(usageChunk(20, 30, 0, 0)), sseStream(contentChunk("hi")))
 
 	if len(reported) != 1 {
 		t.Errorf("reports = %+v, want only the first completion's", reported)
@@ -268,7 +268,7 @@ func TestToolChoiceIsSentWithTheTools(t *testing.T) {
 	tools := []frames.Tool{{Name: "get_weather", Description: "weather"}}
 
 	t.Run("defaults to letting the model decide", func(t *testing.T) {
-		srv := newLLMServer(t, sse(contentChunk("ok")))
+		srv := newLLMServer(t, sseStream(contentChunk("ok")))
 		svc := NewLLM(LLMConfig{APIKey: "k", BaseURL: srv.URL})
 		convo := frames.NewLLMContext("")
 		convo.SetTools(tools)
@@ -281,7 +281,7 @@ func TestToolChoiceIsSentWithTheTools(t *testing.T) {
 	})
 
 	t.Run("carries what the conversation asked for", func(t *testing.T) {
-		srv := newLLMServer(t, sse(contentChunk("ok")))
+		srv := newLLMServer(t, sseStream(contentChunk("ok")))
 		svc := NewLLM(LLMConfig{APIKey: "k", BaseURL: srv.URL})
 		convo := frames.NewLLMContext("")
 		convo.SetTools(tools)
@@ -295,7 +295,7 @@ func TestToolChoiceIsSentWithTheTools(t *testing.T) {
 	})
 
 	t.Run("absent when no tool is advertised", func(t *testing.T) {
-		srv := newLLMServer(t, sse(contentChunk("ok")))
+		srv := newLLMServer(t, sseStream(contentChunk("ok")))
 		svc := NewLLM(LLMConfig{APIKey: "k", BaseURL: srv.URL})
 		if err := svc.GenerateWithTools(t.Context(), frames.NewLLMContext(""), &fakeSink{}); err != nil {
 			t.Fatalf("GenerateWithTools: %v", err)
@@ -309,13 +309,13 @@ func TestToolChoiceIsSentWithTheTools(t *testing.T) {
 // TestServiceTierIsSentWhenSet checks the tier reaches an endpoint that offers
 // them and is left off otherwise.
 func TestServiceTierIsSentWhenSet(t *testing.T) {
-	srv := newLLMServer(t, sse(contentChunk("ok")))
+	srv := newLLMServer(t, sseStream(contentChunk("ok")))
 	generate(t, srv, LLMConfig{APIKey: "k", ServiceTier: "flex"})
 	if srv.body["service_tier"] != "flex" {
 		t.Errorf("service_tier = %v, want %q", srv.body["service_tier"], "flex")
 	}
 
-	plain := newLLMServer(t, sse(contentChunk("ok")))
+	plain := newLLMServer(t, sseStream(contentChunk("ok")))
 	generate(t, plain, LLMConfig{APIKey: "k"})
 	if _, ok := plain.body["service_tier"]; ok {
 		t.Errorf("body carries a tier nobody asked for: %v", plain.body)
@@ -365,7 +365,7 @@ func TestRetryOnTimeoutAsksAgainUnbounded(t *testing.T) {
 		// Slower than the bound, and answered in full all the same.
 		time.Sleep(80 * time.Millisecond)
 		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = w.Write([]byte(sse(contentChunk("second time lucky"))))
+		_, _ = w.Write([]byte(sseStream(contentChunk("second time lucky"))))
 	}))
 	t.Cleanup(srv.Close)
 

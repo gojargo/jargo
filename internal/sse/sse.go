@@ -1,4 +1,5 @@
-package llm
+// Package sse reads Server-Sent Events streams.
+package sse
 
 import (
 	"bufio"
@@ -7,19 +8,19 @@ import (
 )
 
 const (
-	// sseInitBuffer is the SSE scanner's initial buffer size.
-	sseInitBuffer = 4096
-	// sseMaxBuffer bounds a single SSE line; streamed completions can be large.
-	sseMaxBuffer = 1 << 20
+	// initBuffer is the scanner's initial buffer size.
+	initBuffer = 4096
+	// maxBuffer bounds a single line; streamed completions can be large.
+	maxBuffer = 1 << 20
 )
 
-// ScanSSE reads a Server-Sent Events stream from r, invoking fn for each
+// Scan reads a Server-Sent Events stream from r, invoking fn for each
 // non-empty "data:" payload until the stream ends or fn returns an error. The
 // OpenAI "[DONE]" sentinel and empty payloads are skipped, so fn only sees JSON
 // chunks.
-func ScanSSE(r io.Reader, fn func(data string) error) error {
+func Scan(r io.Reader, fn func(data string) error) error {
 	scanner := bufio.NewScanner(r)
-	scanner.Buffer(make([]byte, 0, sseInitBuffer), sseMaxBuffer)
+	scanner.Buffer(make([]byte, 0, initBuffer), maxBuffer)
 	for scanner.Scan() {
 		data, ok := strings.CutPrefix(scanner.Text(), "data:")
 		if !ok {

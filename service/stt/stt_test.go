@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/audio"
 	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
@@ -20,7 +21,7 @@ import (
 
 func TestWAVHeader(t *testing.T) {
 	pcm := []byte{1, 2, 3, 4, 5, 6, 7, 8}
-	out := stt.WAV(pcm, 16000, 1)
+	out := audio.PCMToWAV(pcm, 16000, 1)
 
 	if !bytes.Equal(out[0:4], []byte("RIFF")) || !bytes.Equal(out[8:12], []byte("WAVE")) {
 		t.Fatalf("missing RIFF/WAVE markers: % x", out[0:12])

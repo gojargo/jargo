@@ -10,6 +10,7 @@ import (
 	ttsapi "cloud.google.com/go/texttospeech/apiv1"
 	"cloud.google.com/go/texttospeech/apiv1/texttospeechpb"
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/internal/ttsstream"
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/provider/google/internal/gcloud"
@@ -262,7 +263,7 @@ func (s *ttsSynthesizer) streamTTS(
 	}
 	tts.StartUsageMetrics(ctx, text)
 
-	emit := tts.PCMYielder(yield, s.SampleRate())
+	emit := ttsstream.PCMYielder(yield, s.SampleRate())
 	chunkSize := tts.ChunkSize(s.SampleRate())
 	var audioBuffer []byte
 	for {

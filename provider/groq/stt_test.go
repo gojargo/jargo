@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gojargo/jargo/audio"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/service/stt"
 )
@@ -134,7 +135,7 @@ func TestTranscribeSendsTheSegmentAndSettings(t *testing.T) {
 	}
 
 	// The segment is uploaded as a WAV, not as raw PCM.
-	if len(req.file) != len(stt.WAV(pcm, 16000, 1)) {
+	if len(req.file) != len(audio.PCMToWAV(pcm, 16000, 1)) {
 		t.Errorf("uploaded %d bytes, want a WAV of the segment", len(req.file))
 	}
 	if !bytes.HasPrefix(req.file, []byte("RIFF")) {

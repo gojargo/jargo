@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/gojargo/jargo/frames"
+	"github.com/gojargo/jargo/internal/ttsstream"
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/service/settings"
@@ -38,7 +39,7 @@ func (s *languageSynth) RunTTS(_ context.Context, text, _ string, yield func(fra
 	s.mu.Lock()
 	s.sentences = append(s.sentences, strings.TrimSpace(text)+" | "+s.base.TextAggregationLanguage())
 	s.mu.Unlock()
-	return tts.PCMYielder(yield, s.SampleRate())([]byte{1, 2, 3, 4})
+	return ttsstream.PCMYielder(yield, s.SampleRate())([]byte{1, 2, 3, 4})
 }
 
 func (s *languageSynth) spoken() []string {
