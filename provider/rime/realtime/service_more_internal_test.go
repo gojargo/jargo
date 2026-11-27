@@ -982,6 +982,13 @@ func TestMultipleToolResultsStartOneContinuationAfterGenerationEnds(t *testing.T
 			"arguments": fmt.Sprintf(`{"value": "%d"}`, index),
 		})
 		until(t, "the call", func() bool { return calls.count() == index+1 })
+		if index == 0 {
+			// The first result's reply is decided off the test's goroutine. A
+			// second call open by then would rightly turn it into a reply of its
+			// own; the test is about the result that arrives once the
+			// continuation is already asked for, so it waits for that decision.
+			until(t, "the continuation to be decided", func() bool { return h.continuing(ref) })
+		}
 	}
 	until(t, "both results", func() bool { return len(h.peer.sent(kindItemCreate)) == 2 })
 	if n := len(h.peer.sent(kindResponseNew)); n != 1 {

@@ -851,6 +851,14 @@ func (h *harness) responseOf(ref string) (*response, bool) {
 	return value, ok
 }
 
+// continuing reports whether a continuation of the response ref is asked for.
+func (h *harness) continuing(ref string) bool {
+	h.svc.mu.Lock()
+	defer h.svc.mu.Unlock()
+	value, ok := h.svc.conversation.responses[ref]
+	return ok && value.continuing
+}
+
 func (h *harness) callOf(id string) (*tool, bool) {
 	h.svc.mu.Lock()
 	defer h.svc.mu.Unlock()
