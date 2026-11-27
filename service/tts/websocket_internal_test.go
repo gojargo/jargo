@@ -388,6 +388,39 @@ func (r *wsRun) cancel() {
 	}
 }
 
+// wantFlags waits up to a second for w to report the bot speaking and the
+// synthesis started as wanted. A frame leaves the service before the service has
+// noted it, so the flags read the moment a frame has come out can be a step
+// behind.
+func wantFlags(t *testing.T, w *Websocket, speaking, started bool) {
+	t.Helper()
+	gotSpeaking, gotStarted := waitFlags(w, func(s, st bool) bool { return s == speaking && st == started })
+	if gotSpeaking != speaking || gotStarted != started {
+		t.Fatalf("bot speaking %v, tts started %v, want %v, %v", gotSpeaking, gotStarted, speaking, started)
+	}
+}
+
+// wantStarted is wantFlags for the synthesis-started flag alone.
+func wantStarted(t *testing.T, w *Websocket, started bool) {
+	t.Helper()
+	if _, got := waitFlags(w, func(_, st bool) bool { return st == started }); got != started {
+		t.Fatalf("tts started %v, want %v", got, started)
+	}
+}
+
+// waitFlags polls w's flags for up to a second until ok holds, and returns them
+// as they then are.
+func waitFlags(w *Websocket, ok func(speaking, started bool) bool) (speaking, started bool) {
+	deadline := time.Now().Add(time.Second)
+	for {
+		speaking, started = w.flags()
+		if ok(speaking, started) || time.Now().After(deadline) {
+			return speaking, started
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 func (w *Websocket) flags() (botSpeaking, ttsStarted bool) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -413,9 +446,7 @@ func TestReconnectsWhenBotConfirmedSpeaking(t *testing.T) {
 	defer r.cancel()
 
 	r.send(frames.NewBotStartedSpeakingFrame())
-	if speaking, started := syn.ws.flags(); !speaking || started {
-		t.Fatalf("bot speaking %v, tts started %v, want true, false", speaking, started)
-	}
+	wantFlags(t, syn.ws, true, false)
 	r.send(frames.NewInterruptionFrame())
 	if calls := syn.reconnects(); !reconnected(calls) {
 		t.Errorf("calls = %v, want a disconnect and a connect after the first connect", calls)
@@ -430,17 +461,13 @@ func TestReconnectsWhenStartedButNotYetConfirmed(t *testing.T) {
 	defer r.cancel()
 
 	r.startedSpeech()
-	if speaking, started := syn.ws.flags(); speaking || !started {
-		t.Fatalf("bot speaking %v, tts started %v, want false, true", speaking, started)
-	}
+	wantFlags(t, syn.ws, false, true)
 	r.send(frames.NewInterruptionFrame())
 	if calls := syn.reconnects(); !reconnected(calls) {
 		t.Errorf("calls = %v, want a disconnect and a connect after the first connect", calls)
 	}
 	// Consumed by the interruption it was needed for.
-	if _, started := syn.ws.flags(); started {
-		t.Error("tts started is still set after the interruption")
-	}
+	wantStarted(t, syn.ws, false)
 }
 
 func TestNoReconnectWhenBotNeverSpoke(t *testing.T) {
@@ -463,14 +490,10 @@ func TestTTSStartedClearedOnNewTurn(t *testing.T) {
 	defer r.cancel()
 
 	r.startedSpeech()
-	if _, started := syn.ws.flags(); !started {
-		t.Fatal("tts started is not set")
-	}
+	wantStarted(t, syn.ws, true)
 	// A new turn begins without the previous one ever resolving it.
 	r.send(frames.NewLLMFullResponseStartFrame())
-	if _, started := syn.ws.flags(); started {
-		t.Fatal("tts started leaked into the new turn")
-	}
+	wantStarted(t, syn.ws, false)
 	r.send(frames.NewInterruptionFrame())
 	if calls := syn.reconnects(); !slices.Equal(calls, []string{"connect"}) {
 		t.Errorf("calls = %v, want only the first connect", calls)
@@ -525,9 +548,7 @@ func TestReconnectFlagsTrackFullTurn(t *testing.T) {
 	r.startedSpeech()
 	r.send(frames.NewBotStartedSpeakingFrame())
 	r.send(frames.NewBotStoppedSpeakingFrame())
-	if speaking, started := syn.ws.flags(); speaking || started {
-		t.Fatalf("bot speaking %v, tts started %v, want both cleared", speaking, started)
-	}
+	wantFlags(t, syn.ws, false, false)
 	r.send(frames.NewInterruptionFrame())
 	if calls := syn.reconnects(); !slices.Equal(calls, []string{"connect"}) {
 		t.Errorf("calls = %v, want no reconnect after a turn that finished cleanly", calls)
