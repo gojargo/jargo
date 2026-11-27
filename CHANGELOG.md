@@ -12,6 +12,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Fixed
+
+- **A TTS settings update no longer races the tracing of the audio playing.**
+  The span of an audio context was given the service's settings again when the
+  context finished, read on the playback goroutine while a settings update
+  could be writing them. The span now keeps the settings it was opened with,
+  read once on the frame goroutine.
+
 ### Changed
 
 - **The ONNX Runtime can come from NuGet.** `make deps-onnx` and the runtime

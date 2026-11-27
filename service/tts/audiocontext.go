@@ -165,6 +165,10 @@ type ctxItem struct {
 // where both kinds of provider meet: one returns its audio inline, the other
 // delivers it later on its own receive loop, and only the queue sees both.
 type audioContext struct {
+	// traceAttrs is what the context's span was opened with: the service, the
+	// model, the voice and the settings at the time.
+	traceAttrs tracing.TTSAttributes
+
 	mu     sync.Mutex
 	items  []ctxItem
 	notify chan struct{}
@@ -719,17 +723,22 @@ func (b *Base) CreateAudioContext(contextID string) {
 	// that opened it was processed, so the span is parented explicitly to the
 	// turn being spoken rather than through a context that is already gone.
 	spanCtx, span := b.StartSpan(context.Background(), "tts")
-	tracing.SetTTSAttributes(span, tracing.TTSAttributes{
+	// The settings are rendered here, on the frame goroutine, once: the span is
+	// closed on the playback goroutine, where a settings update could be
+	// writing them, so it reuses these rather than reading them again.
+	attrs := tracing.TTSAttributes{
 		Service:  b.TypeName(),
 		Model:    b.meta.Model,
 		VoiceID:  b.meta.VoiceID,
 		Settings: b.traceSettings(),
-	})
+	}
+	tracing.SetTTSAttributes(span, attrs)
 	b.audioCtxMu.Lock()
 	if b.audioContexts == nil {
 		b.audioContexts = map[string]*audioContext{}
 	}
 	c := newAudioContext(b.BeginTTFB(), spanCtx, span)
+	c.traceAttrs = attrs
 	if old, ok := b.audioContexts[contextID]; ok {
 		// A context opened again under the same id keeps its place.
 		c.seq = old.seq
@@ -1409,14 +1418,11 @@ func (b *Base) stampLLMResponseFrame(f frames.Frame) {
 // finishAudioContext records what the context cost and closes its span.
 func (b *Base) finishAudioContext(c *audioContext) {
 	chars, meter := c.measurement()
-	attrs := tracing.TTSAttributes{
-		Service:        b.TypeName(),
-		Model:          b.meta.Model,
-		VoiceID:        b.meta.VoiceID,
-		Text:           c.spoken(),
-		CharacterCount: &chars,
-		Settings:       b.traceSettings(),
-	}
+	// What the span was opened with, as it was then: the settings are not read
+	// again on this goroutine.
+	attrs := c.traceAttrs
+	attrs.Text = c.spoken()
+	attrs.CharacterCount = &chars
 	if meter.hadTTFB {
 		ttfb := meter.ttfb.Seconds()
 		attrs.TTFB = &ttfb
