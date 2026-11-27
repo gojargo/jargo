@@ -34,7 +34,7 @@ body:
     id: version
     attributes:
       label: jargo version
-      description: The version or commit from your `go.mod`, such as `v0.7.0`.
+      description: The version or commit from your `go.mod`, such as `v1.0.0`.
     validations:
       required: true
   - type: input

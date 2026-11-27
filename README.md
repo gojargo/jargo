@@ -221,9 +221,12 @@ the **[Quickstart](docs/getting-started/quickstart.md)** for the full setup.
 
 ## Status
 
-jargo is pre-1.0. The public API may still change in a minor release; every
-breaking change is called out in the [changelog](CHANGELOG.md) and carries a `!`
-in its commit type. Only the latest release receives security fixes (see
+jargo follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Within
+a major version the public API only grows: a change that would break code
+written against it waits for the next major release, and what it replaces is
+deprecated first. A package whose doc comment marks it *Experimental* may still
+change in a minor release, and the [changelog](CHANGELOG.md) says so when it
+does. Only the latest release receives security fixes (see
 [`SECURITY.md`](SECURITY.md)).
 
 ## Contributing

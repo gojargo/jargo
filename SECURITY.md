@@ -2,10 +2,10 @@
 
 ## Supported versions
 
-jargo is pre-1.0. Only the latest release receives security fixes; there are no
-long-term-support branches, and a fix ships as the next release rather than
-being backported to an earlier one. The supported surface will be revisited once
-`1.0.0` ships.
+Only the latest release receives security fixes; there are no long-term-support
+branches, and a fix ships as the next release rather than being backported to an
+earlier one. Within a major version an upgrade to the latest release breaks no
+code written against the public API, so staying current is the supported path.
 
 | Version          | Supported          |
 | ---------------- | ------------------ |

@@ -5,6 +5,6 @@
   },
   "2.4.0": {
     "contract_sha256": "ecd98fb4055320fbe11f57e8afbe87029c3594b125727f326d38be36e5517f91",
-    "jargo": "0.8.0"
+    "jargo": "1.0.0"
   }
 }

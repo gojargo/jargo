@@ -77,9 +77,11 @@ worth knowing:
   frames. Do not port its Python module tree: package layout and naming follow
   Go conventions (next section).
 - **Commits** follow Conventional Commits (`feat:`, `fix:`, `ci:`, `docs:`, …).
-- Record notable changes in [`CHANGELOG.md`](CHANGELOG.md). The project is
-  pre-1.0: the public API may still change in any minor release, and a change
-  that breaks it says so in its entry and carries a `!` in its commit type.
+- Record notable changes in [`CHANGELOG.md`](CHANGELOG.md). The public API is
+  stable within a major version: a change that would break it waits for the
+  next major release, and what it replaces is deprecated first. Only a package
+  marked *Experimental* in its doc comment may change in a minor release, and
+  its changelog entry says so.
 
 ## Package layout and naming
 
