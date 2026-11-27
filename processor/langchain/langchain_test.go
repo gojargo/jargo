@@ -73,6 +73,12 @@ func runChain(t *testing.T, chain langchain.Chain, in ...frames.Frame) *recorder
 	go func() { done <- task.Run(context.Background()) }()
 
 	task.QueueFrames(in)
+	// Let what the frames set off settle before ending the run: an error the
+	// chain reports travels upstream apart from the EndFrame going down, and
+	// the run ending first would leave it unreported.
+	if err := task.Flush(t.Context()); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
 	task.StopWhenDone()
 	select {
 	case <-done:
