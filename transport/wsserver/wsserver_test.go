@@ -1602,3 +1602,34 @@ func TestBargeInDuringABlockedWriteKeepsTheCall(t *testing.T) {
 		t.Error("the client received nothing: the write in flight was abandoned")
 	}
 }
+
+// TestAnExpiredCloseTimeoutStillSendsTheClose checks the close timeout only
+// bounds how long closing a session waits: the close frame still goes out, and
+// a client answering it sees the session end normally, however short the wait.
+func TestAnExpiredCloseTimeoutStillSendsTheClose(t *testing.T) {
+	p := params()
+	p.CloseTimeout = new(time.Duration(0))
+	c := dial(t, &testSerializer{}, p)
+	c.ready(t)
+
+	c.client.SetReadLimit(-1)
+	closed := make(chan error, 1)
+	go func() {
+		for {
+			if _, _, err := c.client.Read(context.Background()); err != nil {
+				closed <- err
+				return
+			}
+		}
+	}()
+	c.shutdown(t)
+
+	select {
+	case err := <-closed:
+		if got := websocket.CloseStatus(err); got != websocket.StatusNormalClosure {
+			t.Errorf("the client saw %v (status %d), want a normal closure", err, got)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the client never saw the session close")
+	}
+}

@@ -426,7 +426,9 @@ func (s *Session) signalDone() {
 // (1000) rather than the connection drop. The wait for the client's answer is
 // bounded by the close timeout: a peer that has gone holds a frame-processing
 // goroutine up for no longer than that, rather than for the library's own five
-// seconds. Whatever is left is then torn down.
+// seconds. The close itself goes on past the timeout, and the read loop and the
+// socket are taken down once it is over: cutting the socket when the timeout
+// expires could cut the close frame before it has gone out.
 func (s *Session) Close() {
 	s.closeOnce.Do(func() {
 		s.signalDone()
@@ -434,17 +436,17 @@ func (s *Session) Close() {
 		go func() {
 			defer close(closed)
 			_ = s.conn.Close(websocket.StatusNormalClosure, "")
+			s.endRead()
+			_ = s.conn.CloseNow()
 		}()
 		timer := time.NewTimer(s.closeTimeout)
+		defer timer.Stop()
 		select {
 		case <-closed:
 		case <-timer.C:
-			slog.Debug("wsserver: the client did not answer the close in time; closing anyway",
+			slog.Debug("wsserver: the client did not answer the close in time; proceeding with shutdown",
 				"timeout", s.closeTimeout)
 		}
-		timer.Stop()
-		s.endRead()
-		_ = s.conn.CloseNow()
 	})
 }
 

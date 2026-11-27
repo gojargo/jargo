@@ -617,6 +617,13 @@ replacement.
 
 ### Fixed
 
+- **A WebSocket session always sends its close frame.** When the close timeout
+  ran out before the close had been written, which a loaded machine can take
+  longer than the default half second to get to, the server cut the socket and
+  the client saw the connection drop instead of a normal closure. The timeout
+  now only bounds how long closing a session waits; the close goes on and the
+  socket is taken down once it is over.
+
 - **An eval run blames the bot's connection only for a connection error.** An
   error from the connection to the bot counted as the bot refusing the
   connection whenever it came before the client had marked itself connected,
