@@ -89,7 +89,7 @@ func TestSileroMatchesReference(t *testing.T) {
 			}
 
 			for i, frame := range c.frames {
-				got := s.voiceConfidence(frame)
+				got := s.VoiceConfidence(frame)
 				if math.Abs(got-c.want[i]) > tol {
 					t.Errorf("frame %d confidence = %v, want %v (tol %v)", i, got, c.want[i], tol)
 				}
@@ -113,7 +113,7 @@ func TestSileroVoiceConfidenceSilence(t *testing.T) {
 		t.Fatalf("SetSampleRate: %v", err)
 	}
 
-	got := s.voiceConfidence(make([]byte, 512*2))
+	got := s.VoiceConfidence(make([]byte, 512*2))
 	if got < 0 || got >= 0.5 {
 		t.Errorf("silence confidence = %v, want in [0, 0.5)", got)
 	}
@@ -164,7 +164,7 @@ func TestSileroSharedModel(t *testing.T) {
 	}
 
 	for i, frame := range frames {
-		got := s1.voiceConfidence(frame)
+		got := s1.VoiceConfidence(frame)
 		if math.Abs(got-toneWant[i]) > tol {
 			t.Errorf("s1 frame %d confidence = %v, want %v", i, got, toneWant[i])
 		}
@@ -186,7 +186,7 @@ func TestSileroSharedModel(t *testing.T) {
 	}
 
 	for i, frame := range frames {
-		got := s2.voiceConfidence(frame)
+		got := s2.VoiceConfidence(frame)
 		if math.Abs(got-toneWant[i]) > tol {
 			t.Errorf("s2 frame %d confidence = %v, want %v", i, got, toneWant[i])
 		}
@@ -231,7 +231,7 @@ func TestSileroSharedModelConcurrency(t *testing.T) {
 
 			frames := toneFrames(numFrames)
 			for i, frame := range frames {
-				got := s.voiceConfidence(frame)
+				got := s.VoiceConfidence(frame)
 				if math.Abs(got-toneWant[i]) > tol {
 					errs <- fmt.Errorf("%w: frame %d confidence = %v, want %v", errConfidenceMismatch, i, got, toneWant[i])
 					return

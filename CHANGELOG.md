@@ -222,6 +222,29 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **BREAKING: the analyzer, aggregator, classifier and switcher-strategy
+  interfaces are sealed, each behind a base to embed.** A method added to one
+  of them later comes with its default in the base, so it no longer breaks an
+  implementation written outside jargo. `vad.Base` is the detection logic every
+  voice activity analyzer shares, exported for the first time: an analyzer
+  embeds it and supplies a `vad.Scorer` (`NumFramesRequired`,
+  `VoiceConfidence`), so a new model needs no state machine of its own.
+  `turn.Base` holds an end-of-turn analyzer's sample rate and the defaults for
+  `UpdateVADStartSecs` and `Cleanup`. `text.BaseAggregator` holds an
+  aggregator's type and language. `pipeline.BaseSwitcherStrategy` keeps the
+  services and the active one, switches on nothing by itself, and gives a
+  strategy `SetActiveIfAvailable` to switch with. `classifier.Base` already
+  existed. The compatibility page lists the sealed interfaces and says every
+  other exported interface is frozen.
+
+  | Interface | Embed |
+  |---|---|
+  | `vad.Analyzer` | `*vad.Base` (from `vad.NewBase`) |
+  | `turn.Analyzer` | `turn.Base` |
+  | `text.Aggregator` | `*text.BaseAggregator` (from `text.NewBaseAggregator`) |
+  | `classifier.Classifier` | `*classifier.Base` |
+  | `pipeline.SwitcherStrategy` | `*pipeline.BaseSwitcherStrategy` (from `pipeline.NewBaseSwitcherStrategy`) |
+
 - **BREAKING: an empty `transport.Params` holds the defaults.**
   `AudioInPassthrough` and `AudioOutEndSilenceSecs` were the two fields whose
   zero value was not their default: a `Params` built field by field rather than

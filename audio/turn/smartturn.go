@@ -37,11 +37,12 @@ type predictor interface {
 // smart-turn analyzers. A concrete analyzer embeds it and supplies itself as
 // the predictor.
 type smartTurnBase struct {
+	Base
+
 	self   predictor
 	params Params
 
-	sampleRate int
-	stopMs     float64
+	stopMs float64
 
 	buffer          []segment
 	speechTriggered bool
@@ -60,9 +61,6 @@ func newSmartTurnBase(self predictor, params Params) *smartTurnBase {
 		stopMs: params.StopSecs * 1000,
 	}
 }
-
-// SetSampleRate sets the input sample rate.
-func (b *smartTurnBase) SetSampleRate(sampleRate int) { b.sampleRate = sampleRate }
 
 // SpeechTriggered reports whether speech has been heard since the turn began.
 func (b *smartTurnBase) SpeechTriggered() bool { return b.speechTriggered }

@@ -29,7 +29,8 @@ const defaultStopFrameTimeout = 3 * time.Second
 // AudioContextHost is the part of the Base a ContextSynthesizer pushes its audio
 // into. A provider whose audio arrives on its own receive loop appends frames to
 // the context they belong to and removes the context when the provider has
-// marked it final.
+// marked it final. Base implements it; it may gain methods in a minor release,
+// so implement it only as a test double.
 type AudioContextHost interface {
 	// AppendToAudioContext adds a frame to an existing context's queue.
 	AppendToAudioContext(contextID string, f frames.Frame)

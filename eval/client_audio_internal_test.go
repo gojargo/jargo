@@ -828,7 +828,11 @@ func TestAnAudioRunRecordsTheConversation(t *testing.T) {
 }
 
 // energyVAD hears speech in any chunk that is not silent, and none otherwise.
-type energyVAD struct{ params vad.Params }
+type energyVAD struct {
+	vad.Base
+
+	params vad.Params
+}
 
 func (*energyVAD) SetSampleRate(int) error { return nil }
 

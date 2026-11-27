@@ -23,6 +23,8 @@ var errRateUnsupported = errors.New("unsupported sample rate")
 // mockAnalyzer is a detector whose verdict the test sets, so a test can walk the
 // controller through a sequence of states without feeding it real speech.
 type mockAnalyzer struct {
+	vad.Base
+
 	mu     sync.Mutex
 	next   vad.State
 	params vad.Params

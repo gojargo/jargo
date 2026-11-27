@@ -21,6 +21,8 @@ import (
 // scriptedVAD returns scripted states, one per AnalyzeAudio call, holding the
 // last one once the script runs out.
 type scriptedVAD struct {
+	vad.Base
+
 	mu     sync.Mutex
 	states []vad.State
 	i      int

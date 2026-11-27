@@ -68,8 +68,15 @@ func DefaultParams() Params {
 	return Params{StopSecs: defaultStopSecs, PreSpeechMs: defaultPreSpeechMs, MaxDurationSecs: defaultMaxDurationSecs}
 }
 
-// Analyzer decides when a user's turn has ended.
+// Analyzer decides when a user's turn has ended. An analyzer is built by
+// embedding Base, which supplies the sample rate and the defaults for
+// UpdateVADStartSecs and Cleanup.
 type Analyzer interface {
+	// turnBase is provided only by Base: an analyzer is built by embedding Base,
+	// which is what lets this interface grow in a minor release without breaking
+	// an analyzer written outside jargo.
+	turnBase()
+
 	// SetSampleRate sets the input sample rate in Hz. It is called once before
 	// analysis begins.
 	SetSampleRate(sampleRate int)
@@ -105,3 +112,27 @@ type Analyzer interface {
 	// needs it.
 	Cleanup() error
 }
+
+// Base is what every end-of-turn analyzer shares: the sample rate it runs at,
+// and the defaults for the methods an analyzer has no use for. Its zero value
+// is ready to use; embed it in an analyzer.
+type Base struct {
+	sampleRate int
+}
+
+// turnBase seals Analyzer: a type is an analyzer by embedding Base.
+func (*Base) turnBase() {}
+
+// SampleRate is the input sample rate in Hz, zero until SetSampleRate is
+// called.
+func (b *Base) SampleRate() int { return b.sampleRate }
+
+// SetSampleRate sets the input sample rate in Hz.
+func (b *Base) SetSampleRate(sampleRate int) { b.sampleRate = sampleRate }
+
+// UpdateVADStartSecs does nothing: an analyzer that sizes its buffering to the
+// VAD start delay overrides it.
+func (*Base) UpdateVADStartSecs(float64) {}
+
+// Cleanup releases nothing: an analyzer holding a model session overrides it.
+func (*Base) Cleanup() error { return nil }

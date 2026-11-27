@@ -30,8 +30,15 @@ func (a Aggregation) Original() string {
 	return a.Text
 }
 
-// Aggregator groups streamed text into the units a synthesizer is given.
+// Aggregator groups streamed text into the units a synthesizer is given. An
+// aggregator is built by embedding *BaseAggregator, which supplies Type,
+// Language and SetLanguage.
 type Aggregator interface {
+	// aggregatorBase is provided only by BaseAggregator: an aggregator is built
+	// by embedding it, which is what lets this interface grow in a minor release
+	// without breaking an aggregator written outside jargo.
+	aggregatorBase()
+
 	// Type is how this aggregator groups text. A caller reads it to know what to
 	// expect before any text has been aggregated: grouping by token, say, means
 	// no unit ever completes a sentence.
@@ -70,10 +77,38 @@ type Aggregator interface {
 // both, and neither does more punctuation: the second dot of "..." is part of
 // the same mark.
 type SimpleAggregator struct {
+	*BaseAggregator
+
+	text      string
+	lookahead lookaheadState
+}
+
+// BaseAggregator is what every text aggregator shares: how it groups text and
+// the language it finds sentence boundaries in.
+type BaseAggregator struct {
 	aggregationType frames.TextType
 	language        string
-	text            string
-	lookahead       lookaheadState
+}
+
+// NewBaseAggregator builds the shared part of an aggregator that groups text by
+// aggregationType, finding sentence boundaries in language; empty uses English.
+func NewBaseAggregator(aggregationType frames.TextType, language string) *BaseAggregator {
+	return &BaseAggregator{aggregationType: aggregationType, language: ResolveSentenceTokenizerLanguage(language)}
+}
+
+// aggregatorBase seals Aggregator: a type is an aggregator by embedding
+// BaseAggregator.
+func (*BaseAggregator) aggregatorBase() {}
+
+// Type implements Aggregator.
+func (a *BaseAggregator) Type() frames.TextType { return a.aggregationType }
+
+// Language implements Aggregator.
+func (a *BaseAggregator) Language() string { return a.language }
+
+// SetLanguage implements Aggregator.
+func (a *BaseAggregator) SetLanguage(language string) {
+	a.language = ResolveSentenceTokenizerLanguage(language)
 }
 
 // lookaheadState tracks the lookahead after a candidate boundary, across
@@ -105,15 +140,7 @@ const (
 // NewSimpleAggregator builds an aggregator that groups text by aggregateBy,
 // finding sentence boundaries in language; empty uses English.
 func NewSimpleAggregator(aggregateBy frames.TextType, language string) *SimpleAggregator {
-	return &SimpleAggregator{aggregationType: aggregateBy, language: ResolveSentenceTokenizerLanguage(language)}
-}
-
-// Language implements Aggregator.
-func (a *SimpleAggregator) Language() string { return a.language }
-
-// SetLanguage implements Aggregator.
-func (a *SimpleAggregator) SetLanguage(language string) {
-	a.language = ResolveSentenceTokenizerLanguage(language)
+	return &SimpleAggregator{BaseAggregator: NewBaseAggregator(aggregateBy, language)}
 }
 
 // NewTokenAggregator builds an aggregator that hands text on as it arrives,
@@ -122,11 +149,8 @@ func (a *SimpleAggregator) SetLanguage(language string) {
 // sentence-sized synthesis gives for the latency of not waiting for one to
 // finish.
 func NewTokenAggregator() *SimpleAggregator {
-	return &SimpleAggregator{aggregationType: frames.TextTypeToken, language: ResolveSentenceTokenizerLanguage("")}
+	return &SimpleAggregator{BaseAggregator: NewBaseAggregator(frames.TextTypeToken, "")}
 }
-
-// Type implements Aggregator.
-func (a *SimpleAggregator) Type() frames.TextType { return a.aggregationType }
 
 // Aggregate implements Aggregator. Aggregating by token returns the text as it
 // arrives; aggregating by sentence walks it a character at a time, so a chunk

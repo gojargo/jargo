@@ -14,9 +14,9 @@ type fakeConfidencer struct {
 	i            int
 }
 
-func (f *fakeConfidencer) numFramesRequired() int { return f.frameSamples }
+func (f *fakeConfidencer) NumFramesRequired() int { return f.frameSamples }
 
-func (f *fakeConfidencer) voiceConfidence([]byte) float64 {
+func (f *fakeConfidencer) VoiceConfidence([]byte) float64 {
 	c := f.confs[f.i%len(f.confs)]
 	f.i++
 	return c
@@ -25,16 +25,16 @@ func (f *fakeConfidencer) voiceConfidence([]byte) float64 {
 // newTestMachine builds a state machine at 16 kHz with frames sized so that one
 // frame is 0.1 s: start needs 2 speaking frames (0.2 s), stop needs 3 silent
 // frames (0.3 s).
-func newTestMachine(confs []float64) *stateMachine {
+func newTestMachine(confs []float64) *Base {
 	fc := &fakeConfidencer{frameSamples: 1600, confs: confs}
-	m := newStateMachine(fc, Params{Confidence: 0.7, StartSecs: 0.2, StopSecs: 0.3})
-	m.setSampleRate(16000)
+	m := NewBase(fc, Params{Confidence: 0.7, StartSecs: 0.2, StopSecs: 0.3})
+	_ = m.SetSampleRate(16000)
 	return m
 }
 
 const frameBytes = 1600 * 2
 
-func feed(m *stateMachine) State { return m.AnalyzeAudio(make([]byte, frameBytes)) }
+func feed(m *Base) State { return m.AnalyzeAudio(make([]byte, frameBytes)) }
 
 func TestStateMachineConfirmsSpeechAfterStartFrames(t *testing.T) {
 	m := newTestMachine([]float64{0.9, 0.9, 0.9})
@@ -109,10 +109,10 @@ func loudFrame(amp float64) []byte {
 // something barely audible must not open a turn, because a confident guess at
 // near-silence is how a room's own noise gets mistaken for speech.
 func TestStateMachineGatesOnVolume(t *testing.T) {
-	confident := func() *stateMachine {
+	confident := func() *Base {
 		fc := &fakeConfidencer{frameSamples: 1600, confs: []float64{1.0}}
-		m := newStateMachine(fc, Params{Confidence: 0.7, StartSecs: 0.2, StopSecs: 0.3, MinVolume: 0.6})
-		m.setSampleRate(16000)
+		m := NewBase(fc, Params{Confidence: 0.7, StartSecs: 0.2, StopSecs: 0.3, MinVolume: 0.6})
+		_ = m.SetSampleRate(16000)
 		return m
 	}
 
@@ -151,8 +151,8 @@ func TestStateMachineGatesOnVolume(t *testing.T) {
 
 	t.Run("the gate can be turned off", func(t *testing.T) {
 		fc := &fakeConfidencer{frameSamples: 1600, confs: []float64{1.0}}
-		m := newStateMachine(fc, Params{Confidence: 0.7, StartSecs: 0.2, StopSecs: 0.3})
-		m.setSampleRate(16000)
+		m := NewBase(fc, Params{Confidence: 0.7, StartSecs: 0.2, StopSecs: 0.3})
+		_ = m.SetSampleRate(16000)
 		for range 3 {
 			m.AnalyzeAudio(make([]byte, frameBytes))
 		}
@@ -168,8 +168,8 @@ func TestStateMachineGatesOnVolume(t *testing.T) {
 // the audio that comes next; dropping it would put a gap in what is analyzed.
 func TestSetParamsKeepsBufferedAudio(t *testing.T) {
 	fc := &fakeConfidencer{frameSamples: 1600, confs: []float64{1.0}}
-	m := newStateMachine(fc, Params{Confidence: 0.7, StartSecs: 0.2, StopSecs: 0.3})
-	m.setSampleRate(16000)
+	m := NewBase(fc, Params{Confidence: 0.7, StartSecs: 0.2, StopSecs: 0.3})
+	_ = m.SetSampleRate(16000)
 
 	// Half an analysis frame, which stays buffered because it cannot be decided.
 	half := make([]byte, frameBytes/2)

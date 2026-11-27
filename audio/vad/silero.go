@@ -15,6 +15,7 @@ var sileroModel []byte
 
 var (
 	errUnsupportedSampleRate = errors.New("vad: Silero supports only 8000 or 16000 Hz")
+	errInvalidSampleRate     = errors.New("vad: the sample rate must be positive")
 	errUnexpectedTensor      = errors.New("vad: unexpected output tensor type")
 	errClosedModel           = errors.New("vad: shared SileroModel is closed or uninitialized")
 )
@@ -52,7 +53,7 @@ const (
 // can end the user's speech early, so a due reset waits until the user is
 // quiet.
 type Silero struct {
-	*stateMachine
+	*Base
 
 	session       *onnxrt.Session
 	sharedSession bool
@@ -157,7 +158,7 @@ func NewSilero(opts ...Option) (*Silero, error) {
 		sharedSession: sharedSession,
 		state:         make([]float32, 2*1*128),
 	}
-	s.stateMachine = newStateMachine(s, cfg.params)
+	s.Base = NewBase(s, cfg.params)
 	return s, nil
 }
 
@@ -173,23 +174,22 @@ func (s *Silero) SetSampleRate(sampleRate int) error {
 		s.contextSize = 32
 	}
 	s.Reset()
-	s.setSampleRate(sampleRate)
-	return nil
+	return s.Base.SetSampleRate(sampleRate)
 }
 
-// numFramesRequired is the number of samples per analysis frame: 512 at 16 kHz,
+// NumFramesRequired is the number of samples per analysis frame: 512 at 16 kHz,
 // 256 at 8 kHz.
-func (s *Silero) numFramesRequired() int {
+func (s *Silero) NumFramesRequired() int {
 	if s.sampleRate == 16000 {
 		return 512
 	}
 	return 256
 }
 
-// voiceConfidence runs the model over one frame and returns its speech
+// VoiceConfidence runs the model over one frame and returns its speech
 // probability in [0,1]. buffer is exactly numFramesRequired samples of mono
 // 16-bit PCM.
-func (s *Silero) voiceConfidence(buffer []byte) float64 {
+func (s *Silero) VoiceConfidence(buffer []byte) float64 {
 	samples := pcmToFloat32(buffer)
 
 	// The model expects the previous trailing context prepended to the frame;
@@ -235,8 +235,8 @@ func (s *Silero) maybeResetModel(confidence float64) {
 		s.lowConfidenceWindows = 0
 	}
 
-	if float64(s.windowsSinceReset*s.numFramesRequired()) >= modelResetIntervalSecs*float64(s.sampleRate) &&
-		s.stateMachine.state == StateQuiet &&
+	if float64(s.windowsSinceReset*s.NumFramesRequired()) >= modelResetIntervalSecs*float64(s.sampleRate) &&
+		s.Base.state == StateQuiet &&
 		s.lowConfidenceWindows >= modelResetLowConfidenceWindows {
 		s.resetModel()
 		s.windowsSinceReset = 0
@@ -268,8 +268,8 @@ func (s *Silero) Reset() {
 	s.resetModel()
 	s.windowsSinceReset = 0
 	s.lowConfidenceWindows = 0
-	if s.stateMachine != nil {
-		s.reset()
+	if s.Base != nil {
+		s.Base.Reset()
 	}
 }
 

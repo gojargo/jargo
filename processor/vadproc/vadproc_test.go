@@ -15,6 +15,8 @@ import (
 
 // fakeVAD returns scripted states, one per AnalyzeAudio call.
 type fakeVAD struct {
+	vad.Base
+
 	states []vad.State
 	i      int
 	params vad.Params

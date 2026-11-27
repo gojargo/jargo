@@ -131,7 +131,7 @@ func TestWatchdogForceStop(t *testing.T) {
 }
 
 // fakeTurn is a turn.Analyzer whose batch analysis always reports Complete.
-type fakeTurn struct{}
+type fakeTurn struct{ *turn.Base }
 
 func (fakeTurn) SetSampleRate(int)                            {}
 func (fakeTurn) AppendAudio([]byte, bool) turn.EndOfTurnState { return turn.Incomplete }

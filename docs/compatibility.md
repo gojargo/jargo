@@ -23,12 +23,22 @@ one, and keeps its meaning:
 - **Config structs only grow.** A new field's zero value means "the default",
   so code that does not set it behaves as before. A field is never made
   required after the fact.
-- **Interfaces you implement only grow in ways that cannot break you.** The
-  interfaces meant to be implemented outside jargo are either sealed, so the
-  base type you embed provides new methods (`processor.Processor` with
-  `processor.Base`, `transport.Transport` with `transport.BaseTransport`), or
-  frozen, with new capabilities added as separate optional interfaces (the
-  STT, LLM and TTS service hooks).
+- **Interfaces you implement only grow in ways that cannot break you.** An
+  interface meant to be implemented outside jargo is one of two kinds:
+  - **Sealed**: you implement it by embedding its base type, and a method
+    added later comes with its default in the base. These are
+    `processor.Processor` (`processor.Base`), `transport.Transport`
+    (`transport.BaseTransport`), `vad.Analyzer` (`vad.Base`), `turn.Analyzer`
+    (`turn.Base`), `text.Aggregator` (`text.BaseAggregator`),
+    `classifier.Classifier` (`classifier.Base`) and `pipeline.SwitcherStrategy`
+    (`pipeline.BaseSwitcherStrategy`).
+  - **Frozen**: every other exported interface. Its method set does not
+    change in 1.x, and a new capability arrives as a separate optional
+    interface, which is how the STT, LLM and TTS service hooks already work.
+- **Interfaces jargo hands to you may grow.** A few interfaces exist for jargo
+  to give your code something to call, not for you to implement:
+  `processor.Running`, `tts.AudioContextHost`. They may gain methods in a minor
+  release; implement them only as test doubles.
 
 ## What it does not cover
 

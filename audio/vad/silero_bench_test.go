@@ -59,7 +59,7 @@ func BenchmarkSilero_Inference_Dedicated(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = s.voiceConfidence(frame)
+		_ = s.VoiceConfidence(frame)
 	}
 }
 
@@ -85,7 +85,7 @@ func BenchmarkSilero_Inference_Shared(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = s.voiceConfidence(frame)
+		_ = s.VoiceConfidence(frame)
 	}
 }
 
@@ -115,7 +115,7 @@ func BenchmarkSilero_Concurrent_Shared(b *testing.B) {
 		_ = s.SetSampleRate(16000)
 
 		for pb.Next() {
-			_ = s.voiceConfidence(frame)
+			_ = s.VoiceConfidence(frame)
 		}
 	})
 }

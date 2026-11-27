@@ -1343,7 +1343,11 @@ func TestUserIdleControllerEmit(t *testing.T) {
 
 // slowAnalyzer takes a fixed time to judge the end of a turn, standing in for a
 // model whose inference is not free.
-type slowAnalyzer struct{ took time.Duration }
+type slowAnalyzer struct {
+	*turn.Base
+
+	took time.Duration
+}
 
 func (slowAnalyzer) SetSampleRate(int)                            {}
 func (slowAnalyzer) AppendAudio([]byte, bool) turn.EndOfTurnState { return turn.Incomplete }

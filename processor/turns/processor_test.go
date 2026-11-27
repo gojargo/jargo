@@ -249,7 +249,7 @@ func TestTurnAnalyzerStopPublishesItsParams(t *testing.T) {
 
 // stubAnalyzer is a turn analyzer that judges nothing, for the parameters it
 // carries rather than the verdicts it reaches.
-type stubAnalyzer struct{}
+type stubAnalyzer struct{ *turn.Base }
 
 func (stubAnalyzer) SetSampleRate(int)                            {}
 func (stubAnalyzer) AppendAudio([]byte, bool) turn.EndOfTurnState { return turn.Incomplete }

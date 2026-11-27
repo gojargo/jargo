@@ -29,8 +29,14 @@ const inactiveUpdateRing = 64
 //
 // Two are supplied: NewManualStrategy switches only when asked, and
 // NewFailoverStrategy additionally moves on when the active service reports an
-// error. Implement the interface for anything else.
+// error. For anything else, embed *BaseSwitcherStrategy and override HandleFrame
+// or HandleError.
 type SwitcherStrategy interface {
+	// switcherStrategyBase is provided only by BaseSwitcherStrategy: a strategy
+	// is built by embedding it, which is what lets this interface grow in a
+	// minor release without breaking a strategy written outside jargo.
+	switcherStrategyBase()
+
 	// Services are the services the strategy chooses between.
 	Services() []processor.Processor
 	// UsableServices are the services that can still be given work, in order.
@@ -485,12 +491,101 @@ func (s *ServiceSwitcher) gate(svc processor.Processor) func(frames.Frame) bool 
 	return func(frames.Frame) bool { return s.ActiveService() == svc }
 }
 
-// manualStrategy switches only when asked.
-type manualStrategy struct {
+// BaseSwitcherStrategy keeps a switcher's services and the one that is active,
+// and switches nowhere on its own: HandleFrame and HandleError return nil. A
+// strategy embeds it and overrides either, calling SetActiveIfAvailable to
+// switch.
+type BaseSwitcherStrategy struct {
+	self     SwitcherStrategy
 	mu       sync.Mutex
 	services []processor.Processor
 	active   processor.Processor
 	events   event.Registry
+}
+
+// NewBaseSwitcherStrategy builds the base of a strategy choosing between
+// services, the first of which starts active. self is the strategy embedding
+// it, which EventServiceSwitched names as its source; nil names the base.
+func NewBaseSwitcherStrategy(self SwitcherStrategy, services []processor.Processor) *BaseSwitcherStrategy {
+	b := &BaseSwitcherStrategy{self: self, services: services, active: services[0]}
+	if b.self == nil {
+		b.self = b
+	}
+	b.events.Register(EventServiceSwitched, false)
+	return b
+}
+
+// switcherStrategyBase seals SwitcherStrategy: a type is a strategy by
+// embedding BaseSwitcherStrategy.
+func (*BaseSwitcherStrategy) switcherStrategyBase() {}
+
+// Services implements SwitcherStrategy.
+func (b *BaseSwitcherStrategy) Services() []processor.Processor { return b.services }
+
+// UsableServices are the services that can still be given work, in order.
+func (b *BaseSwitcherStrategy) UsableServices() []processor.Processor {
+	var usable []processor.Processor
+	for _, svc := range b.services {
+		if svc.Usable() {
+			usable = append(usable, svc)
+		}
+	}
+	return usable
+}
+
+// ActiveService implements SwitcherStrategy.
+func (b *BaseSwitcherStrategy) ActiveService() processor.Processor {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.active
+}
+
+// Events implements SwitcherStrategy.
+func (b *BaseSwitcherStrategy) Events() *event.Registry { return &b.events }
+
+// HandleFrame does nothing: the base switches on no frame.
+func (*BaseSwitcherStrategy) HandleFrame(frames.Frame, processor.Direction) processor.Processor {
+	return nil
+}
+
+// HandleError does nothing: the base switches on no error.
+func (*BaseSwitcherStrategy) HandleError(*frames.ErrorFrame) processor.Processor { return nil }
+
+// SetActiveIfAvailable activates target if it is one of the strategy's
+// services, and returns it, or nil if it did not switch. A target it does not
+// manage is left alone, since the request was meant for another switcher. A
+// service that can no longer do its job is refused: making it active would only
+// route work to something that cannot handle it. Bring it back with its own
+// SetUsable first, once whatever stopped it working has been dealt with.
+func (b *BaseSwitcherStrategy) SetActiveIfAvailable(target frames.ServiceTarget) processor.Processor {
+	b.mu.Lock()
+	var found processor.Processor
+	for _, svc := range b.services {
+		if frames.ServiceTarget(svc) == target {
+			found = svc
+			break
+		}
+	}
+	if found == nil {
+		b.mu.Unlock()
+		return nil
+	}
+	if !found.Usable() {
+		b.mu.Unlock()
+		slog.Warn("not switching to a service that can no longer do its job",
+			"service", found.Name())
+		return nil
+	}
+	b.active = found
+	b.mu.Unlock()
+
+	b.events.Call(context.Background(), EventServiceSwitched, b.self, found)
+	return found
+}
+
+// manualStrategy switches only when asked.
+type manualStrategy struct {
+	*BaseSwitcherStrategy
 }
 
 // NewManualStrategy builds a strategy that changes the active service only on an
@@ -500,31 +595,10 @@ func NewManualStrategy(services []processor.Processor) SwitcherStrategy {
 }
 
 func newManualStrategy(services []processor.Processor) *manualStrategy {
-	m := &manualStrategy{services: services, active: services[0]}
-	m.events.Register(EventServiceSwitched, false)
+	m := &manualStrategy{}
+	m.BaseSwitcherStrategy = NewBaseSwitcherStrategy(m, services)
 	return m
 }
-
-func (m *manualStrategy) Services() []processor.Processor { return m.services }
-
-// UsableServices are the services that can still be given work, in order.
-func (m *manualStrategy) UsableServices() []processor.Processor {
-	var usable []processor.Processor
-	for _, svc := range m.services {
-		if svc.Usable() {
-			usable = append(usable, svc)
-		}
-	}
-	return usable
-}
-
-func (m *manualStrategy) ActiveService() processor.Processor {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.active
-}
-
-func (m *manualStrategy) Events() *event.Registry { return &m.events }
 
 // HandleFrame activates the service a manual switch request names.
 func (m *manualStrategy) HandleFrame(f frames.Frame, _ processor.Direction) processor.Processor {
@@ -532,42 +606,7 @@ func (m *manualStrategy) HandleFrame(f frames.Frame, _ processor.Direction) proc
 	if !ok {
 		return nil
 	}
-	return m.setActiveIfAvailable(sf.Service)
-}
-
-// HandleError does nothing: switching is manual.
-func (m *manualStrategy) HandleError(*frames.ErrorFrame) processor.Processor { return nil }
-
-// setActiveIfAvailable activates target if it is one of the strategy's services.
-// A target it does not manage is left alone, since the request was meant for
-// another switcher. A service that can no longer do its job is refused: making
-// it active would only route work to something that cannot handle it. Bring it
-// back with its own SetUsable first, once whatever stopped it working has been
-// dealt with.
-func (m *manualStrategy) setActiveIfAvailable(target frames.ServiceTarget) processor.Processor {
-	m.mu.Lock()
-	var found processor.Processor
-	for _, svc := range m.services {
-		if frames.ServiceTarget(svc) == target {
-			found = svc
-			break
-		}
-	}
-	if found == nil {
-		m.mu.Unlock()
-		return nil
-	}
-	if !found.Usable() {
-		m.mu.Unlock()
-		slog.Warn("not switching to a service that can no longer do its job",
-			"service", found.Name())
-		return nil
-	}
-	m.active = found
-	m.mu.Unlock()
-
-	m.events.Call(context.Background(), EventServiceSwitched, m, found)
-	return found
+	return m.SetActiveIfAvailable(sf.Service)
 }
 
 // failoverStrategy switches when asked, and moves on when the active service
@@ -580,7 +619,9 @@ type failoverStrategy struct {
 // the active one reports a non-fatal error, and can still be switched by hand.
 // The failed service stays in the list and can be switched back to.
 func NewFailoverStrategy(services []processor.Processor) SwitcherStrategy {
-	return &failoverStrategy{manualStrategy: newManualStrategy(services)}
+	f := &failoverStrategy{manualStrategy: &manualStrategy{}}
+	f.BaseSwitcherStrategy = NewBaseSwitcherStrategy(f, services)
+	return f
 }
 
 // HandleError moves to the next service that can still do its job.
@@ -618,7 +659,7 @@ func (f *failoverStrategy) HandleError(ef *frames.ErrorFrame) processor.Processo
 	for offset := 1; offset < len(services); offset++ {
 		candidate := services[(idx+offset)%len(services)]
 		if candidate.Usable() {
-			return f.setActiveIfAvailable(frames.ServiceTarget(candidate))
+			return f.SetActiveIfAvailable(frames.ServiceTarget(candidate))
 		}
 	}
 	slog.Error("no other service available to switch to", "err", ef.Error)

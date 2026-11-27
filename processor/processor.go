@@ -56,7 +56,8 @@ const inputCancelTimeout = 3 * time.Second
 // Running is the pipeline a processor belongs to, for the few things a
 // processor needs from it that the frame path cannot express on its own. It is
 // an interface rather than the concrete task because the task is built on top of
-// processors, so naming that type here would be circular.
+// processors, so naming that type here would be circular. jargo implements it;
+// it may gain methods in a minor release, so implement it only as a test double.
 type Running interface {
 	// Flush blocks until every frame queued ahead of the call has traveled the
 	// whole pipeline, so the pipeline has settled. Never call it from the

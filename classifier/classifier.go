@@ -236,6 +236,11 @@ type Capabilities interface {
 // another length is refused. It also says how long a clip it answers best, in
 // PreferredAudio.
 type Classifier interface {
+	// classifierBase is provided only by Base: a classifier is built by
+	// embedding Base, which is what lets this interface grow in a minor release
+	// without breaking a classifier written outside jargo.
+	classifierBase()
+
 	Capabilities
 	// Name is the classifier's name, which its metrics are reported under.
 	Name() string
@@ -284,6 +289,11 @@ type Base struct {
 	name     string
 	asker    Asker
 }
+
+// classifierBase seals Classifier: a type is a classifier by embedding Base.
+//
+//nolint:unused // satisfies the unexported method of Classifier
+func (*Base) classifierBase() {}
 
 // NewBase builds the base of a classifier of the named type, answering through
 // asker. name names this instance; empty uses "<typeName>#<n>".
