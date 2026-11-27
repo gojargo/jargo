@@ -34,6 +34,7 @@ import (
 	"github.com/gojargo/jargo/processor/turns"
 	"github.com/gojargo/jargo/service/llm"
 	"github.com/gojargo/jargo/service/settings"
+	"github.com/gojargo/jargo/service/wsutil"
 	"github.com/gojargo/jargo/transport/wsclient"
 	"github.com/gojargo/jargo/transport/wsserver/evalws"
 )
@@ -778,10 +779,11 @@ func (c *Client) Start(ctx context.Context) error {
 		// An error before bot-ready ends the handshake. The transport connects
 		// to the bot as it is set up, so a refused connection (an HTTP 403 for
 		// a spent token, nothing listening) surfaces here, as does the
-		// connection failing later. Any other error is the harness's: a
-		// service failing, or a bug in the harness's own transport code.
+		// connection failing later; the error's type says which it is. Any
+		// other error is the harness's: a service failing, or a bug in the
+		// harness's own transport code.
 		reason := describeError(ef)
-		if fromBotConnection(ef, botConnection) && (!c.connected.Load() || isConnectionError(ef.Err)) {
+		if fromBotConnection(ef, botConnection) && isConnectionError(ef.Err) {
 			c.refuse(FailureConnectFailed, reason)
 		} else {
 			c.refuse(FailureError, reason)
@@ -805,7 +807,7 @@ func (c *Client) Start(ctx context.Context) error {
 			// and the transport connects to the bot as it is set up: a refused
 			// connection (an HTTP 403 for a spent token, nothing listening)
 			// surfaces here.
-			if !c.connected.Load() {
+			if isConnectionError(err) {
 				c.refuse(FailureConnectFailed, err.Error())
 			} else {
 				c.refuse(FailureError, err.Error())
@@ -835,15 +837,19 @@ func fromBotConnection(ef *frames.ErrorFrame, botConnection []any) bool {
 	return false
 }
 
-// isConnectionError reports whether err is a connection failing: a network
-// error, or the WebSocket closing.
+// isConnectionError reports whether err is the connection to the bot failing:
+// the bot refusing the WebSocket handshake, a network error, or the WebSocket
+// closing. Any other error from the connection is a bug on this side.
 func isConnectionError(err error) bool {
 	if err == nil {
 		return false
 	}
-	var netErr net.Error
-	var closeErr websocket.CloseError
-	return errors.As(err, &netErr) || errors.As(err, &closeErr) ||
+	var (
+		netErr       net.Error
+		closeErr     websocket.CloseError
+		handshakeErr *wsutil.HandshakeError
+	)
+	return errors.As(err, &handshakeErr) || errors.As(err, &netErr) || errors.As(err, &closeErr) ||
 		errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed)
 }
 

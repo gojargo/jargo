@@ -2,6 +2,10 @@ package wsclient
 
 import (
 	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -10,6 +14,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
+	"github.com/gojargo/jargo/service/wsutil"
 	"github.com/gojargo/jargo/transport/wsserver"
 )
 
@@ -163,5 +168,26 @@ func TestEveryFrameIsPacedWhenPayloadsAreCoalesced(t *testing.T) {
 	case m := <-conn.received:
 		t.Errorf("a fourth payload was sent: %d bytes", len(m))
 	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+// TestARefusedUpgradeIsAHandshakeError checks a server that answers the upgrade
+// with a refusal is reported as a refused handshake, with the status and the
+// start of the body it refused with, so a caller can tell the server refusing
+// from a failure on this side.
+func TestARefusedUpgradeIsAHandshakeError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "spent token", http.StatusForbidden)
+	}))
+	defer srv.Close()
+
+	s := NewSession("ws"+strings.TrimPrefix(srv.URL, "http"), Params{}, Callbacks{}, "Test")
+	err := s.Connect(t.Context())
+	var refused *wsutil.HandshakeError
+	if !errors.As(err, &refused) {
+		t.Fatalf("Connect = %v, want a *wsutil.HandshakeError", err)
+	}
+	if refused.StatusCode != http.StatusForbidden || !strings.Contains(string(refused.Body), "spent token") {
+		t.Errorf("refused with %d %q, want 403 and the body", refused.StatusCode, refused.Body)
 	}
 }

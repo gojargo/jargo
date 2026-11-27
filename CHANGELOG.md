@@ -597,6 +597,16 @@ replacement.
 
 ### Fixed
 
+- **An eval run blames the bot's connection only for a connection error.** An
+  error from the connection to the bot counted as the bot refusing the
+  connection whenever it came before the client had marked itself connected,
+  and that mark is set on a goroutine of its own, so a bug in the harness's own
+  transport code early in a run could be reported as `connect_failed` against
+  the bot. The error's type decides now: a refused handshake, a network error
+  or the WebSocket closing is the connection's, anything else the harness's.
+  For that, `wsclient` reports a server refusing the upgrade as a
+  `*wsutil.HandshakeError` carrying the status and the start of the body.
+
 - **A simulation with bot audio records the bot's turn before the persona's
   answer to it.** The persona's answer is what ends the bot's turn, and the
   bot-turn aggregator reports the ended turn on a goroutine of its own, so the

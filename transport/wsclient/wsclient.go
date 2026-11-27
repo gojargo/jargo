@@ -13,6 +13,7 @@ package wsclient
 import (
 	"context"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"sync"
@@ -24,6 +25,7 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/shared"
 	"github.com/gojargo/jargo/processor"
+	"github.com/gojargo/jargo/service/wsutil"
 	"github.com/gojargo/jargo/transport"
 	"github.com/gojargo/jargo/transport/wsserver"
 	"github.com/gojargo/jargo/transport/wsserver/protobuf"
@@ -140,6 +142,11 @@ func (s *Session) connect(ctx context.Context) error {
 	dialCtx, cancel := context.WithTimeout(ctx, openTimeout)
 	defer cancel()
 	conn, resp, err := websocket.Dial(dialCtx, s.uri, &websocket.DialOptions{HTTPHeader: s.params.AdditionalHeaders})
+	if err != nil && resp != nil && resp.StatusCode != http.StatusSwitchingProtocols {
+		// The server answered and refused the upgrade: a typed refusal, so a
+		// caller can tell it from a bug on this side.
+		err = handshakeError(resp, err)
+	}
 	if resp != nil && resp.Body != nil {
 		_ = resp.Body.Close()
 	}
@@ -669,4 +676,17 @@ func (t *Transport) onMessage(ctx context.Context, conn *websocket.Conn, message
 	if in != nil {
 		in.onMessage(ctx, conn, message)
 	}
+}
+
+// handshakeBodyLimit bounds how much of a refused handshake's body is kept.
+const handshakeBodyLimit = 1 << 10
+
+// handshakeError is the refusal resp answered the upgrade with, the start of its
+// body included, where the server may explain it.
+func handshakeError(resp *http.Response, err error) *wsutil.HandshakeError {
+	var body []byte
+	if resp.Body != nil {
+		body, _ = io.ReadAll(io.LimitReader(resp.Body, handshakeBodyLimit))
+	}
+	return &wsutil.HandshakeError{StatusCode: resp.StatusCode, Header: resp.Header, Body: body, Err: err}
 }
