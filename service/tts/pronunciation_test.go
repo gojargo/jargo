@@ -1,7 +1,6 @@
 package tts_test
 
 import (
-	"bytes"
 	"context"
 	"log/slog"
 	"strings"
@@ -70,7 +69,7 @@ func TestPronunciationsAreAppliedWhenTheProviderReadsThem(t *testing.T) {
 
 // Other transforms still run, and the warning is logged once.
 func TestPronunciationsAreSkippedWhenTheProviderCannotReadThem(t *testing.T) {
-	var logs bytes.Buffer
+	var logs syncBuffer
 	prev := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn})))
 	t.Cleanup(func() { slog.SetDefault(prev) })

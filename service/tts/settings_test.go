@@ -1,7 +1,6 @@
 package tts_test
 
 import (
-	"bytes"
 	"context"
 	"log/slog"
 	"strings"
@@ -159,7 +158,7 @@ func TestTTSLanguageUpdateLeavesTheCallersDeltaUnchanged(t *testing.T) {
 // A code naming no language jargo knows may still be one the provider takes, so
 // it is stored as it came, and the log says so.
 func TestTTSSettingsUpdatePassesAnUnrecognizedLanguageAsItIs(t *testing.T) {
-	var logs bytes.Buffer
+	var logs syncBuffer
 	prev := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	t.Cleanup(func() { slog.SetDefault(prev) })

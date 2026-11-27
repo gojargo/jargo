@@ -4,7 +4,6 @@ package tts_test
 // expressive conversation.
 
 import (
-	"bytes"
 	"context"
 	"log/slog"
 	"reflect"
@@ -673,7 +672,7 @@ func TestADeliveryTheServiceCantPerformIsLeftOut(t *testing.T) {
 }
 
 func TestEachUnperformedTagIsWarnedAboutAsWritten(t *testing.T) {
-	var logs bytes.Buffer
+	var logs syncBuffer
 	prev := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn})))
 	t.Cleanup(func() { slog.SetDefault(prev) })
@@ -877,7 +876,7 @@ type timedWord2 struct {
 // their timestamps, and what was logged as a warning.
 func spokenWithWarnings(t *testing.T, syn tts.Synthesizer, text string) ([]timedWord2, string) {
 	t.Helper()
-	var logs bytes.Buffer
+	var logs syncBuffer
 	prev := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn})))
 	down, _ := runExpressive(t, false, response(text), newBase(syn, frames.TextTypeSentence))
