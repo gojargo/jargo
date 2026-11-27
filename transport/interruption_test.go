@@ -340,7 +340,7 @@ func TestBaseOutputInterruptionStopsBotSpeakingWithOnlyUninterruptibleControlFra
 func TestBaseOutputInterruptionDoesNotReplayAbortedAudio(t *testing.T) {
 	params := transport.DefaultParams()
 	params.AudioOutSampleRate = 8000
-	params.AudioOutEndSilenceSecs = 0
+	params.AudioOutEndSilenceSecs = new(0)
 
 	o := newFakeOutput(params)
 	task, stop := startFakeOutput(t, o)

@@ -1169,9 +1169,7 @@ func (c *Client) userAudioRate() int {
 // records, and its handlers.
 func (c *Client) newTransport() *ClientTransport {
 	params := wsclient.Params{
-		AudioInEnabled: c.params.BotAudio,
-		// The bot's audio travels on to the STT and the turn aggregator.
-		AudioInPassthrough: true,
+		AudioInEnabled:     c.params.BotAudio,
 		AudioOutEnabled:    c.SendsUserAudio(),
 		AudioOutSampleRate: c.userAudioRate(),
 		Serializer:         NewClientSerializer(),

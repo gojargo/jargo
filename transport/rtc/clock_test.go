@@ -115,7 +115,7 @@ func TestOutputTimelineSurvivesAStall(t *testing.T) {
 
 	params := transport.DefaultParams()
 	params.AudioInEnabled = false
-	params.AudioInPassthrough = false
+	params.AudioInPassthrough = new(false)
 	params.AudioOutSampleRate = opus.SampleRate
 	tr := rtc.NewTransport(server, params)
 

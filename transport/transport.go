@@ -47,8 +47,10 @@ type Params struct {
 	// which is how a client that has not said it is ready yet is kept off the
 	// pipeline.
 	AudioInStreamOnStart *bool
-	// AudioInPassthrough pushes received audio frames downstream.
-	AudioInPassthrough bool
+	// AudioInPassthrough pushes received audio frames downstream; nil defaults
+	// to true. Set it false for a transport whose audio is consumed inside the
+	// input transport alone.
+	AudioInPassthrough *bool
 	// AudioInFilter, when set, transforms received audio (for example noise
 	// reduction) before it is pushed downstream to VAD, STT and turn detection.
 	AudioInFilter audio.Filter
@@ -98,8 +100,9 @@ type Params struct {
 	AudioOutWriteTimeout time.Duration
 	// AudioOutEndSilenceSecs is how many seconds of silence are sent after the
 	// last of the audio when the pipeline ends, so the closing words are not
-	// clipped by whatever closes on top of them. 0 sends none.
-	AudioOutEndSilenceSecs int
+	// clipped by whatever closes on top of them. Nil defaults to 2 seconds, and
+	// 0 sends none.
+	AudioOutEndSilenceSecs *int
 	// AudioOutDestinations names the additional outgoing audio streams the
 	// transport serves, beyond the default unnamed one. A frame is routed to the
 	// destination it carries, so each stream keeps its own buffer, mixer and
@@ -254,13 +257,11 @@ func (p Params) VideoOutFormat() string {
 // is handed over already framed and the transport does not re-split it.
 func DefaultParams() Params {
 	return Params{
-		AudioInEnabled:         true,
-		AudioInChannels:        1,
-		AudioInPassthrough:     true,
-		AudioOutEnabled:        true,
-		AudioOutChannels:       1,
-		AudioOut10msChunks:     2,
-		AudioOutEndSilenceSecs: 2,
+		AudioInEnabled:     true,
+		AudioInChannels:    1,
+		AudioOutEnabled:    true,
+		AudioOutChannels:   1,
+		AudioOut10msChunks: 2,
 	}
 }
 
@@ -292,6 +293,25 @@ func (p Params) AudioOutStartVolume() float64 {
 func (p Params) AudioInStreamsOnStart() bool {
 	return p.AudioInStreamOnStart == nil || *p.AudioInStreamOnStart
 }
+
+// AudioInPassesThrough reports whether received audio is pushed downstream,
+// which it is unless the parameter says otherwise.
+func (p Params) AudioInPassesThrough() bool {
+	return p.AudioInPassthrough == nil || *p.AudioInPassthrough
+}
+
+// AudioOutEndSilence is how many seconds of silence are sent after the last of
+// the audio when the pipeline ends: the configured value, or 2 when unset.
+func (p Params) AudioOutEndSilence() int {
+	if p.AudioOutEndSilenceSecs == nil {
+		return defaultAudioOutEndSilenceSecs
+	}
+	return *p.AudioOutEndSilenceSecs
+}
+
+// defaultAudioOutEndSilenceSecs is the end silence sent when the parameter is
+// unset.
+const defaultAudioOutEndSilenceSecs = 2
 
 // AudioOutFillsSilence reports whether the outgoing stream is kept flowing with
 // silence while nothing is queued for it, which it is unless the parameter says

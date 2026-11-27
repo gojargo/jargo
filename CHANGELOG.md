@@ -222,6 +222,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **BREAKING: an empty `transport.Params` holds the defaults.**
+  `AudioInPassthrough` and `AudioOutEndSilenceSecs` were the two fields whose
+  zero value was not their default: a `Params` built field by field rather than
+  from `DefaultParams` dropped every received audio frame and sent no silence
+  after the last of the audio. Both are now pointers, nil meaning the default
+  (passthrough on, 2 seconds of end silence), as `AudioInStreamOnStart` and
+  `AudioOutAutoSilence` already were. `Params.AudioInPassesThrough` and
+  `Params.AudioOutEndSilence` read the resolved values. Set
+  `AudioInPassthrough: new(false)` or `AudioOutEndSilenceSecs: new(0)` to turn
+  either off.
+
 - **BREAKING: no package-level table a caller could change under the
   framework.** The question the classifier turn-stop strategy asks, the
   voicemail detector's question and the eval harness's name tables were

@@ -767,7 +767,7 @@ func (s *mediaSender) audioLoopWithoutMixer(ctx context.Context) {
 // bounded by a timeout: a transport that cannot take the silence must not hold
 // the shutdown up behind it.
 func (s *mediaSender) sendEndSilence(ctx context.Context) {
-	secs := s.out.params.AudioOutEndSilenceSecs
+	secs := s.out.params.AudioOutEndSilence()
 	if secs <= 0 {
 		return
 	}

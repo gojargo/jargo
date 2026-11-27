@@ -402,7 +402,7 @@ func (bi *BaseInput) audioLoop(ctx context.Context) {
 			if !bi.applyFilter(ctx, f) {
 				continue
 			}
-			if !bi.params.AudioInPassthrough {
+			if !bi.params.AudioInPassesThrough() {
 				continue
 			}
 			_ = bi.PushFrame(ctx, f, processor.Downstream)

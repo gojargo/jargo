@@ -186,7 +186,7 @@ func pushParticipants(t *testing.T, opts options, audio []participantAudio) []fr
 	t.Helper()
 	params := transport.DefaultParams()
 	params.AudioInSampleRate = 16000
-	params.AudioInPassthrough = true
+	params.AudioInPassthrough = new(true)
 	in := newInput(&Connection{closed: make(chan struct{})}, params, opts)
 	rec := newAudioRecorder()
 	w := pipeline.NewWorker(pipeline.New(in, rec), pipeline.WorkerConfig{

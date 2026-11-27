@@ -68,7 +68,7 @@ func TestBaseOutputResamplesAudioToTheTransportRate(t *testing.T) {
 	params := transport.DefaultParams()
 	params.AudioOutSampleRate = 48000 // 1920-byte chunks
 	// The closing silence would land in the same drain and blur the count.
-	params.AudioOutEndSilenceSecs = 0
+	params.AudioOutEndSilenceSecs = new(0)
 
 	o := newFakeOutput(params)
 	task, stop := startFakeOutput(t, o)
@@ -105,7 +105,7 @@ func TestBaseOutputResamplesAudioToTheTransportRate(t *testing.T) {
 func TestBaseOutputRebuildsTheResamplerWhenTheInputRateChanges(t *testing.T) {
 	params := transport.DefaultParams()
 	params.AudioOutSampleRate = 48000 // 1920-byte chunks
-	params.AudioOutEndSilenceSecs = 0
+	params.AudioOutEndSilenceSecs = new(0)
 
 	o := newFakeOutput(params)
 	task, stop := startFakeOutput(t, o)
@@ -184,7 +184,7 @@ func TestBaseOutputKeepsSpeechIntactAcrossAPauseBetweenChunks(t *testing.T) {
 	params := transport.DefaultParams()
 	params.AudioOutSampleRate = 48000 // 1920-byte chunks
 	// The closing silence is silence on purpose, and would fail the check below.
-	params.AudioOutEndSilenceSecs = 0
+	params.AudioOutEndSilenceSecs = new(0)
 
 	o := newFakeOutput(params)
 	task, stop := startFakeOutput(t, o)

@@ -599,7 +599,7 @@ func TestBaseOutputEndFrameDrainsAudio(t *testing.T) {
 	params.AudioOutSampleRate = 48000 // 1920-byte chunks
 	// This is about the queued audio surviving the end, so leave the closing
 	// silence out of the count; TestBaseOutputSendsClosingSilence covers that.
-	params.AudioOutEndSilenceSecs = 0
+	params.AudioOutEndSilenceSecs = new(0)
 
 	o := newPacedOutput(params)
 	task := pipeline.NewWorker(pipeline.New(o), pipeline.WorkerConfig{})
@@ -627,7 +627,7 @@ func TestBaseOutputEndFrameDrainsAudio(t *testing.T) {
 func TestBaseOutputEndFrameDeliversPendingTimedFrames(t *testing.T) {
 	params := transport.DefaultParams()
 	params.AudioOutSampleRate = 16000
-	params.AudioOutEndSilenceSecs = 0
+	params.AudioOutEndSilenceSecs = new(0)
 	o := newPacedOutput(params)
 
 	var mu sync.Mutex
@@ -860,7 +860,7 @@ func TestBaseOutputShortTurnSignalsBotSpeaking(t *testing.T) {
 func TestBaseOutputSendsClosingSilence(t *testing.T) {
 	params := transport.DefaultParams()
 	params.AudioOutSampleRate = 48000 // 1920-byte chunks
-	params.AudioOutEndSilenceSecs = 1
+	params.AudioOutEndSilenceSecs = new(1)
 
 	o := newFakeOutput(params)
 	task := pipeline.NewWorker(pipeline.New(o), pipeline.WorkerConfig{})
@@ -1868,7 +1868,7 @@ func TestBaseInputFilteredAudioKeepsItsFrame(t *testing.T) {
 func TestBaseInputFiltersWithPassthroughOff(t *testing.T) {
 	params := transport.DefaultParams()
 	params.AudioInSampleRate = 48000
-	params.AudioInPassthrough = false
+	params.AudioInPassthrough = new(false)
 	filter := &fakeFilter{}
 	params.AudioInFilter = filter
 
@@ -1899,7 +1899,7 @@ func TestBaseInputFiltersWithPassthroughOff(t *testing.T) {
 func TestBaseInputDoesNotWriteIntoAPushedFrame(t *testing.T) {
 	params := transport.DefaultParams()
 	params.AudioInSampleRate = 48000
-	params.AudioInPassthrough = false
+	params.AudioInPassthrough = new(false)
 	filter := &fakeFilter{}
 	params.AudioInFilter = filter
 
@@ -1973,7 +1973,7 @@ func oneSecondOfAudio() *frames.TTSAudioRawFrame {
 func TestOutputWritesOffAPeerThatStoppedReading(t *testing.T) {
 	params := transport.DefaultParams()
 	params.AudioOutSampleRate = 16000
-	params.AudioOutEndSilenceSecs = 0
+	params.AudioOutEndSilenceSecs = new(0)
 	params.AudioOutWriteTimeout = 300 * time.Millisecond
 
 	o := newWedgedOutput(params, 0)
@@ -2002,7 +2002,7 @@ func TestOutputWritesOffAPeerThatStoppedReading(t *testing.T) {
 func TestOutputDoesNotCutShortASlowWrite(t *testing.T) {
 	params := transport.DefaultParams()
 	params.AudioOutSampleRate = 16000
-	params.AudioOutEndSilenceSecs = 0
+	params.AudioOutEndSilenceSecs = new(0)
 	params.AudioOutWriteTimeout = time.Second
 
 	o := newWedgedOutput(params, 10*time.Millisecond)
