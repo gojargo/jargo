@@ -260,7 +260,15 @@ func TestInterruptionDropsAHeldReply(t *testing.T) {
 	h.speak()
 	h.queue(appendUser("Appended", true))
 	until(t, "the append written", func() bool { return slices.Equal(h.peer.createdTexts(), []string{"Appended"}) })
+	interruptions := len(captured[*frames.InterruptionFrame](h.down))
 	h.queue(frames.NewInterruptionFrame())
+	// The interruption must reach the assistant aggregator before the bot stops
+	// speaking: the bot finishing first would rightly release the held reply.
+	// Both travel the same path to it, so once the interruption is there the
+	// bot's stop can only come after.
+	until(t, "the interruption to reach the assistant aggregator", func() bool {
+		return len(captured[*frames.InterruptionFrame](h.down)) > interruptions
+	})
 	release()
 	until(t, "the requests to settle", func() bool { return h.requestsPending() == 0 })
 	replace := frames.NewLLMMessagesUpdateFrame(h.convo.Messages())
