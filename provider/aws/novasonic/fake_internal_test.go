@@ -211,7 +211,7 @@ func (r *recorder) names() []string {
 // harness is a service set up against a fake client, with recorders on either
 // side.
 type harness struct {
-	s      *Service
+	s      *LLMService
 	client *fakeClient
 	down   *recorder
 	up     *recorder

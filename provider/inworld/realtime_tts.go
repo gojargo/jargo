@@ -162,6 +162,11 @@ func (c RealtimeTTSConfig) withDefaults() RealtimeTTSConfig {
 	return c
 }
 
+// RealtimeTTSService is the Inworld text-to-speech service NewRealtimeTTS builds.
+type RealtimeTTSService struct {
+	*tts.Base
+}
+
 // NewRealtimeTTS builds an Inworld AI TTS service over the bidirectional
 // WebSocket API. Unlike NewTTS, which issues one HTTP request per sentence, it
 // holds one connection open for the call and one synthesis context open for
@@ -173,13 +178,21 @@ func (c RealtimeTTSConfig) withDefaults() RealtimeTTSConfig {
 // The connection is opened when the pipeline starts and kept alive while idle.
 // When it drops it is restored with backoff, and when that keeps failing the
 // service reports a permanent error and becomes unusable. See tts.Websocket.
-func NewRealtimeTTS(cfg RealtimeTTSConfig) *tts.Base {
-	b, _ := newRealtimeTTS(cfg)
+func NewRealtimeTTS(cfg RealtimeTTSConfig) *RealtimeTTSService {
+	s := &RealtimeTTSService{}
+	s.Base = buildRealtimeTTS(cfg, tts.WithSelf(s))
+	return s
+}
+
+// buildRealtimeTTS builds the service NewRealtimeTTS returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildRealtimeTTS(cfg RealtimeTTSConfig, opts ...tts.Option) *tts.Base {
+	b, _ := newRealtimeTTS(cfg, opts...)
 	return b
 }
 
 // newRealtimeTTS builds the service and returns its synthesizer alongside it.
-func newRealtimeTTS(cfg RealtimeTTSConfig) (*tts.Base, *realtimeSynthesizer) {
+func newRealtimeTTS(cfg RealtimeTTSConfig, opts ...tts.Option) (*tts.Base, *realtimeSynthesizer) {
 	cfg = cfg.withDefaults()
 	s := &realtimeSynthesizer{
 		cfg:                    cfg,
@@ -191,7 +204,7 @@ func newRealtimeTTS(cfg RealtimeTTSConfig) (*tts.Base, *realtimeSynthesizer) {
 	s.write = func(ctx context.Context, conn *wsutil.Conn, payload []byte) error {
 		return conn.Write(ctx, websocket.MessageText, payload)
 	}
-	b := tts.New("InworldRealtimeTTS", s)
+	b := tts.New("InworldRealtimeTTS", s, opts...)
 	s.svc = b
 	s.ws = tts.NewWebsocket(b, s, cfg.Websocket)
 	if cfg.TextAggregation == frames.TextTypeToken {

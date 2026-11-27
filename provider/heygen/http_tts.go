@@ -60,19 +60,32 @@ type HTTPTTSSettings struct {
 	settings.TTS
 }
 
+// HTTPTTSService is the HeyGen text-to-speech service NewHTTPTTS builds.
+type HTTPTTSService struct {
+	*tts.Base
+}
+
 // NewHTTPTTS builds a HeyGen Voice TTS service over the HTTP API.
 //
 // It sends each sentence to HeyGen's streaming speech endpoint and passes the
 // raw PCM audio on as it arrives. It defaults to "heygen-voice-1-turbo", the
 // lowest-latency model, and the public voice Nadine. Professional voice clones
 // need "heygen-voice-1", and are served only by this service.
-func NewHTTPTTS(cfg HTTPTTSConfig) *tts.Base {
-	b, _ := newHTTPTTS(cfg)
+func NewHTTPTTS(cfg HTTPTTSConfig) *HTTPTTSService {
+	s := &HTTPTTSService{}
+	s.Base = buildHTTPTTS(cfg, tts.WithSelf(s))
+	return s
+}
+
+// buildHTTPTTS builds the service NewHTTPTTS returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildHTTPTTS(cfg HTTPTTSConfig, opts ...tts.Option) *tts.Base {
+	b, _ := newHTTPTTS(cfg, opts...)
 	return b
 }
 
 // newHTTPTTS builds the service and returns its synthesizer alongside it.
-func newHTTPTTS(cfg HTTPTTSConfig) (*tts.Base, *httpSynthesizer) {
+func newHTTPTTS(cfg HTTPTTSConfig, opts ...tts.Option) (*tts.Base, *httpSynthesizer) {
 	if cfg.BaseURL == "" {
 		cfg.BaseURL = defaultHTTPBaseURL
 	}
@@ -88,7 +101,7 @@ func newHTTPTTS(cfg HTTPTTSConfig) (*tts.Base, *httpSynthesizer) {
 		synthesisRate: synthesisRate(cfg.SampleRate, httpSampleRates),
 		live:          newHTTPTTSSettings(cfg),
 	}
-	return tts.New("HeyGenHTTPTTS", s), s
+	return tts.New("HeyGenHTTPTTS", s, opts...), s
 }
 
 // newHTTPTTSSettings is the starting state, taken from what the service was

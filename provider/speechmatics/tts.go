@@ -37,15 +37,28 @@ type TTSConfig struct {
 // Validate reports whether the configuration is usable.
 func (c TTSConfig) Validate() error { return validate.Struct(c) }
 
+// TTSService is the Speechmatics text-to-speech service NewTTS builds.
+type TTSService struct {
+	*tts.Base
+}
+
 // NewTTS builds a Speechmatics TTS service.
-func NewTTS(cfg TTSConfig) *tts.Base {
+func NewTTS(cfg TTSConfig) *TTSService {
+	s := &TTSService{}
+	s.Base = buildTTS(cfg, tts.WithSelf(s))
+	return s
+}
+
+// buildTTS builds the service NewTTS returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildTTS(cfg TTSConfig, opts ...tts.Option) *tts.Base {
 	if cfg.BaseURL == "" {
 		cfg.BaseURL = ttsDefaultURL
 	}
 	if cfg.Voice == "" {
 		cfg.Voice = ttsDefaultVoice
 	}
-	return tts.New("SpeechmaticsTTS", &ttsSynthesizer{cfg: cfg, http: &http.Client{}})
+	return tts.New("SpeechmaticsTTS", &ttsSynthesizer{cfg: cfg, http: &http.Client{}}, opts...)
 }
 
 type ttsSynthesizer struct {

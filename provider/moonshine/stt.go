@@ -178,6 +178,11 @@ type transcriber interface {
 // advanced options.
 type loadFunc func(modelPath string, arch modelArch, options map[string]string) (transcriber, error)
 
+// STTService is the Moonshine speech-to-text service NewSTT builds.
+type STTService struct {
+	*stt.SegmentService
+}
+
 // NewSTT builds a Moonshine STT service. It is segmented: a VAD upstream
 // delimits each utterance, which is transcribed in one call on the CPU.
 //
@@ -190,7 +195,19 @@ type loadFunc func(modelPath string, arch modelArch, options map[string]string) 
 // non-streaming models for languages other than English (ModelTiny and
 // ModelBase), which are under the non-commercial Moonshine Community License
 // (https://www.moonshine.ai/license).
-func NewSTT(cfg STTConfig) (*stt.SegmentService, error) {
+func NewSTT(cfg STTConfig) (*STTService, error) {
+	s := &STTService{}
+	svc, err := buildSTT(cfg, stt.WithSelf(s))
+	if err != nil {
+		return nil, err
+	}
+	s.SegmentService = svc
+	return s, nil
+}
+
+// buildSTT builds the service NewSTT returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildSTT(cfg STTConfig, opts ...stt.Option) (*stt.SegmentService, error) {
 	lib, err := openLibrary(cfg.LibraryPath)
 	if err != nil {
 		return nil, err
@@ -199,7 +216,7 @@ func NewSTT(cfg STTConfig) (*stt.SegmentService, error) {
 	if err != nil {
 		return nil, err
 	}
-	svc, _, err := newSTT(cfg, lib.loadTranscriber, cat)
+	svc, _, err := newSTT(cfg, lib.loadTranscriber, cat, opts...)
 	return svc, err
 }
 
@@ -220,7 +237,9 @@ func (c STTConfig) catalog() (modelCatalog, error) {
 }
 
 // newSTT builds the service over load and cat, loading the configured model.
-func newSTT(cfg STTConfig, load loadFunc, cat modelCatalog) (*stt.SegmentService, *sttTranscriber, error) {
+func newSTT(
+	cfg STTConfig, load loadFunc, cat modelCatalog, opts ...stt.Option,
+) (*stt.SegmentService, *sttTranscriber, error) {
 	t := &sttTranscriber{cfg: cfg, load: load, catalog: cat, store: newSTTSettings(cfg)}
 	tr, err := t.loadModel(context.Background())
 	if err != nil {
@@ -228,7 +247,7 @@ func newSTT(cfg STTConfig, load loadFunc, cat modelCatalog) (*stt.SegmentService
 	}
 	t.current = tr
 	t.language = t.store.Language.Or("")
-	t.svc = stt.NewSegment("MoonshineSTT", t, cfg.SampleRate)
+	t.svc = stt.NewSegment("MoonshineSTT", t, cfg.SampleRate, opts...)
 	return t.svc, t, nil
 }
 

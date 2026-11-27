@@ -28,15 +28,28 @@ const (
 	pauseThreshold = 0.5
 )
 
+// STTService is the Kyutai speech-to-text service NewSTT builds.
+type STTService struct {
+	*stt.StreamService
+}
+
 // NewSTT builds a Kyutai streaming STT service backed by moshi-server.
-func NewSTT(cfg Config) *stt.StreamService {
+func NewSTT(cfg Config) *STTService {
+	s := &STTService{}
+	s.StreamService = buildSTT(cfg, stt.WithSelf(s))
+	return s
+}
+
+// buildSTT builds the service NewSTT returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildSTT(cfg Config, opts ...stt.Option) *stt.StreamService {
 	if cfg.URL == "" {
 		cfg.URL = defaultSTTURL
 	}
 	if cfg.APIKey == "" {
 		cfg.APIKey = defaultToken
 	}
-	return stt.NewStream("KyutaiSTT", &connector{cfg: cfg}, cfg.SampleRate)
+	return stt.NewStream("KyutaiSTT", &connector{cfg: cfg}, cfg.SampleRate, opts...)
 }
 
 type connector struct {

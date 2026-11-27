@@ -17,7 +17,7 @@ import (
 // audio that follows them.
 
 // observeStops counts the stops of the bot's speech the service has handled.
-func observeStops(s *Service) *atomic.Int64 {
+func observeStops(s *LLMService) *atomic.Int64 {
 	var stops atomic.Int64
 	event.On(s.Events(), processor.EventAfterProcessFrame, func(_ context.Context, f frames.Frame) {
 		if _, ok := f.(*frames.BotStoppedSpeakingFrame); ok {
@@ -39,7 +39,7 @@ func TestStopOfAnEarlierOutputKeepsTheNextOneTruncatable(t *testing.T) {
 	for _, generationEnded := range []bool{false, true} {
 		t.Run(fmt.Sprint(generationEnded), func(t *testing.T) {
 			var stops *atomic.Int64
-			h := converse(t, harnessOptions{setup: func(s *Service) { stops = observeStops(s) }})
+			h := converse(t, harnessOptions{setup: func(s *LLMService) { stops = observeStops(s) }})
 			base := stops.Load()
 			writing, release := h.output.gateWrites(t, 2)
 			first := h.peer.start(nil, nil)
@@ -80,7 +80,7 @@ func TestStopOfAnEarlierOutputKeepsTheNextOneTruncatable(t *testing.T) {
 
 func TestQueuedOutputPlaybackIsTimedFromTheEarlierStop(t *testing.T) {
 	var stops *atomic.Int64
-	h := converse(t, harnessOptions{setup: func(s *Service) { stops = observeStops(s) }})
+	h := converse(t, harnessOptions{setup: func(s *LLMService) { stops = observeStops(s) }})
 	base := stops.Load()
 	writing, release := h.output.gateWrites(t, 2)
 	first := h.peer.start(nil, nil)
@@ -159,7 +159,7 @@ func TestCompletedOutputIsNotTruncatedByALaterInterruption(t *testing.T) {
 
 func TestPlaybackStopWaitsForTheTransportWrite(t *testing.T) {
 	var stops *atomic.Int64
-	h := converse(t, harnessOptions{setup: func(s *Service) { stops = observeStops(s) }})
+	h := converse(t, harnessOptions{setup: func(s *LLMService) { stops = observeStops(s) }})
 	base := stops.Load()
 	writing, release := h.output.gateWrites(t, 1)
 	ref := h.peer.start(nil, nil)

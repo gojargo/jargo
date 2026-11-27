@@ -40,6 +40,11 @@ const (
 //nolint:gochecknoglobals // sentinel error
 var errNotConnected = errors.New("resembleai tts: websocket not connected")
 
+// TTSService is the Resemble AI text-to-speech service NewTTS builds.
+type TTSService struct {
+	*tts.Base
+}
+
 // NewTTS builds a Resemble AI TTS service.
 //
 // It holds one connection open for the call, opened when the pipeline starts.
@@ -47,15 +52,23 @@ var errNotConnected = errors.New("resembleai tts: websocket not connected")
 // service reports a permanent error and becomes unusable. Every sentence is a
 // request of its own, which Resemble AI ends on its own once its audio is
 // done, so each is spoken on an audio context of its own.
-func NewTTS(cfg Config) *tts.Base {
-	b, _ := newTTS(cfg)
+func NewTTS(cfg Config) *TTSService {
+	s := &TTSService{}
+	s.Base = buildTTS(cfg, tts.WithSelf(s))
+	return s
+}
+
+// buildTTS builds the service NewTTS returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildTTS(cfg Config, opts ...tts.Option) *tts.Base {
+	b, _ := newTTS(cfg, opts...)
 	return b
 }
 
 // newTTS builds the service and returns its synthesizer alongside it.
-func newTTS(cfg Config) (*tts.Base, *synthesizer) {
+func newTTS(cfg Config, opts ...tts.Option) (*tts.Base, *synthesizer) {
 	s := newSynthesizer(cfg)
-	b := tts.New("ResembleTTS", s)
+	b := tts.New("ResembleTTS", s, opts...)
 	// A request cannot be added to once sent, and Resemble AI ends it with its
 	// own audio_end, so the sentences of a turn cannot share a context.
 	b.SetReuseContextIDWithinTurn(false)

@@ -55,8 +55,8 @@ func TestRunInferenceAnswersOnce(t *testing.T) {
 // the other one: a one-shot inference is a plain request, so the connection it
 // holds open for its turns is left to them.
 func TestBothServicesRunOneShotInferences(t *testing.T) {
-	var _ llm.Inferencer = (*HTTPService)(nil)
-	var _ llm.Inferencer = (*Service)(nil)
+	var _ llm.Inferencer = (*HTTPLLMService)(nil)
+	var _ llm.Inferencer = (*LLMService)(nil)
 }
 
 // TestWebSocketServiceAnswersOneShotOverHTTP checks the WebSocket service does

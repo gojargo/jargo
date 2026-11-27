@@ -163,7 +163,7 @@ func sendEvent(ctx context.Context, stream sessionStream, ev map[string]any) err
 
 // sessionStartEvent opens a session with the inference settings, and the
 // endpointing sensitivity when one is set.
-func (s *Service) sessionStartEvent() map[string]any {
+func (s *LLMService) sessionStartEvent() map[string]any {
 	body := map[string]any{
 		"inferenceConfiguration": map[string]any{
 			"maxTokens":   optValue(s.live.MaxTokens.Value()),
@@ -187,7 +187,7 @@ func optValue[T any](v T, given bool) any {
 
 // promptStartEvent opens a prompt declaring the output the model produces and,
 // when there are any, the tools it may call.
-func (s *Service) promptStartEvent(tools []map[string]any, prompt string) map[string]any {
+func (s *LLMService) promptStartEvent(tools []map[string]any, prompt string) map[string]any {
 	ac := s.audio
 	body := map[string]any{
 		keyPromptName:             prompt,
@@ -248,7 +248,7 @@ func textEvents(text, role, prompt string, interactive bool) []map[string]any {
 }
 
 // audioInputStartEvent opens the block the user's audio is streamed in.
-func (s *Service) audioInputStartEvent(prompt, content string) map[string]any {
+func (s *LLMService) audioInputStartEvent(prompt, content string) map[string]any {
 	ac := s.audio
 	return contentStart(prompt, content, "AUDIO", "USER", true, map[string]any{
 		"audioInputConfiguration": map[string]any{
@@ -292,7 +292,7 @@ func toolResultEvents(prompt, toolCallID, result string) []map[string]any {
 // session continuation can address the next session as well as the current ---
 
 // sendText sends a text block to stream.
-func (s *Service) sendText(ctx context.Context, text, role, prompt string, stream sessionStream,
+func (s *LLMService) sendText(ctx context.Context, text, role, prompt string, stream sessionStream,
 	interactive bool,
 ) error {
 	if text == "" || stream == nil || prompt == "" {
@@ -307,31 +307,31 @@ func (s *Service) sendText(ctx context.Context, text, role, prompt string, strea
 }
 
 // sendPromptStart opens a prompt on stream.
-func (s *Service) sendPromptStart(ctx context.Context, tools []map[string]any, prompt string,
+func (s *LLMService) sendPromptStart(ctx context.Context, tools []map[string]any, prompt string,
 	stream sessionStream,
 ) error {
 	return sendEvent(ctx, stream, s.promptStartEvent(tools, prompt))
 }
 
 // sendAudioInputStart opens the audio block on stream.
-func (s *Service) sendAudioInputStart(ctx context.Context, prompt, content string, stream sessionStream) error {
+func (s *LLMService) sendAudioInputStart(ctx context.Context, prompt, content string, stream sessionStream) error {
 	return sendEvent(ctx, stream, s.audioInputStartEvent(prompt, content))
 }
 
 // sendAudio sends a chunk of the user's audio on stream.
-func (s *Service) sendAudio(ctx context.Context, audio []byte, prompt, content string, stream sessionStream) error {
+func (s *LLMService) sendAudio(ctx context.Context, audio []byte, prompt, content string, stream sessionStream) error {
 	return sendEvent(ctx, stream, audioInputEvent(audio, prompt, content))
 }
 
 // openStream opens a session on client.
-func (s *Service) openStream(ctx context.Context, client sessionClient) (sessionStream, error) {
+func (s *LLMService) openStream(ctx context.Context, client sessionClient) (sessionStream, error) {
 	return client.OpenStream(ctx, s.model())
 }
 
 // createClient builds a client to open sessions with.
-func (s *Service) createClient(ctx context.Context) (sessionClient, error) {
+func (s *LLMService) createClient(ctx context.Context) (sessionClient, error) {
 	return s.newClient(ctx, s.cfg)
 }
 
 // audioConfig is the audio the sessions take in and send back.
-func (s *Service) audioConfig() AudioConfig { return s.audio }
+func (s *LLMService) audioConfig() AudioConfig { return s.audio }

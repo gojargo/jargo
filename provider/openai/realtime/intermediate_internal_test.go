@@ -97,7 +97,7 @@ func settle() { time.Sleep(100 * time.Millisecond) }
 
 // startedService runs the service against srv in a pipeline, with a
 // conversation and the call call_1 the session is waiting on.
-func startedService(t *testing.T, srv *recordingSession) *Service {
+func startedService(t *testing.T, srv *recordingSession) *LLMService {
 	t.Helper()
 	s := New(Config{APIKey: "k", BaseURL: "ws" + strings.TrimPrefix(srv.URL, "http")})
 	w := pipeline.NewWorker(pipeline.New(s), pipeline.WorkerConfig{})
@@ -163,24 +163,24 @@ func asyncPayload(t *testing.T, item map[string]any) frames.AsyncToolMessage {
 	return m
 }
 
-func (s *Service) isOpen(callID string) bool {
+func (s *LLMService) isOpen(callID string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.openCalls[callID]
 }
 
-func (s *Service) pushContextUpstream(ctx context.Context) {
+func (s *LLMService) pushContextUpstream(ctx context.Context) {
 	s.mu.Lock()
 	convo := s.convo
 	s.mu.Unlock()
 	s.handleContext(ctx, convo, processor.Upstream)
 }
 
-func (s *Service) responseCreated(ctx context.Context) {
+func (s *LLMService) responseCreated(ctx context.Context) {
 	s.handleResponseEvent(ctx, &protocol.ServerEvent{Type: "response.created"})
 }
 
-func (s *Service) responseDone(ctx context.Context) {
+func (s *LLMService) responseDone(ctx context.Context) {
 	s.handleResponseEvent(ctx, &protocol.ServerEvent{Type: "response.done"})
 }
 

@@ -105,12 +105,25 @@ type TTSConfig struct {
 // Validate reports whether the configuration is usable.
 func (c TTSConfig) Validate() error { return validate.Struct(c) }
 
+// TTSService is the NVIDIA Riva text-to-speech service NewTTS builds.
+type TTSService struct {
+	*tts.Base
+}
+
 // NewTTS builds an NVIDIA Riva streaming text-to-speech service. Each sentence
 // opens a SynthesizeOnline stream, sends the text (split when the model's
 // request-length limit requires it), and streams the generated audio downstream.
-func NewTTS(cfg TTSConfig) *tts.Base {
+func NewTTS(cfg TTSConfig) *TTSService {
+	s := &TTSService{}
+	s.Base = buildTTS(cfg, tts.WithSelf(s))
+	return s
+}
+
+// buildTTS builds the service NewTTS returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildTTS(cfg TTSConfig, opts ...tts.Option) *tts.Base {
 	cfg = cfg.withTTSDefaults()
-	return tts.New("NvidiaTTS", &ttsSynthesizer{cfg: cfg})
+	return tts.New("NvidiaTTS", &ttsSynthesizer{cfg: cfg}, opts...)
 }
 
 // withTTSDefaults fills unset fields with their defaults.

@@ -101,6 +101,11 @@ type STTConfig struct {
 // Validate reports whether the configuration is usable.
 func (c STTConfig) Validate() error { return validate.Struct(c) }
 
+// STTService is the OpenAI Realtime speech-to-text service NewSTT builds.
+type STTService struct {
+	*stt.StreamService
+}
+
 // NewSTT builds an OpenAI Realtime transcription service. By default the
 // pipeline's local VAD delimits each utterance and the service commits the
 // audio for it when the VAD reports the user stopped; with
@@ -110,7 +115,15 @@ func (c STTConfig) Validate() error { return validate.Struct(c) }
 // The Realtime API exchanges 24 kHz audio, which is what the session is
 // configured for. The service resamples the pipeline's input audio to it, so
 // the transport may run at any input rate.
-func NewSTT(cfg STTConfig) *stt.StreamService {
+func NewSTT(cfg STTConfig) *STTService {
+	s := &STTService{}
+	s.StreamService = buildSTT(cfg, stt.WithSelf(s))
+	return s
+}
+
+// buildSTT builds the service NewSTT returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildSTT(cfg STTConfig, opts ...stt.Option) *stt.StreamService {
 	if cfg.BaseURL == "" {
 		cfg.BaseURL = defaultBaseURL
 	}
@@ -118,7 +131,7 @@ func NewSTT(cfg STTConfig) *stt.StreamService {
 		cfg.Model = defaultSTTModel
 	}
 	cfg = omitUnsupportedPrompt(cfg)
-	return stt.NewStream("OpenAIRealtimeSTT", &sttConnector{cfg: cfg}, 0)
+	return stt.NewStream("OpenAIRealtimeSTT", &sttConnector{cfg: cfg}, 0, opts...)
 }
 
 // omitUnsupportedPrompt drops a prompt the configured model does not accept.

@@ -1387,7 +1387,7 @@ func (r *realtimeRun) stop() {
 func TestRealtimeTTSHoldsOneConnectionForThePipeline(t *testing.T) {
 	server := newRealtimeServer(t, onText(audioMessage(make([]byte, 320)), map[string]any{"isFinal": true}))
 	b := NewRealtimeTTS(RealtimeTTSConfig{APIKey: "k", Host: server.host, SampleRate: 16000})
-	r := runRealtime(t, b)
+	r := runRealtime(t, b.Base)
 	if n := server.connections(); n != 1 {
 		t.Fatalf("the server saw %d connections when the pipeline started, want 1", n)
 	}
@@ -1427,7 +1427,7 @@ func TestRealtimeTTSReportsAFailedConnection(t *testing.T) {
 		mu.Unlock()
 	})
 
-	r := runRealtime(t, b)
+	r := runRealtime(t, b.Base)
 	defer r.stop()
 	waitUntil(t, "the refused connection was never reported", func() bool {
 		mu.Lock()

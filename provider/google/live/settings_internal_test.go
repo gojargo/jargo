@@ -30,7 +30,7 @@ func TestConstructorKeepsLanguageStringAsGiven(t *testing.T) {
 }
 
 // updateSettings sends s a settings update the way the pipeline does.
-func updateSettings(t *testing.T, s *Service, delta *Settings) {
+func updateSettings(t *testing.T, s *LLMService, delta *Settings) {
 	t.Helper()
 	f := frames.NewLLMUpdateSettingsFrame(delta)
 	if err := s.Base.ProcessFrame(context.Background(), f, processor.Downstream); err != nil {

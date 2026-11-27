@@ -164,6 +164,11 @@ func outputFormat(sampleRate int) (string, int) {
 	return "pcm_" + strconv.Itoa(defaultSampleRate), defaultSampleRate
 }
 
+// HTTPTTSService is the Speechify text-to-speech service NewHTTPTTS builds.
+type HTTPTTSService struct {
+	*tts.Base
+}
+
 // NewHTTPTTS builds a Speechify TTS service over the HTTP API. Each sentence is
 // one request, whose audio and word-level speech marks stream back as
 // server-sent events, so the conversation keeps only what was heard before an
@@ -171,13 +176,21 @@ func outputFormat(sampleRate int) (string, int) {
 //
 // Requests pin Speechify's API version rather than letting the workspace
 // default decide it.
-func NewHTTPTTS(cfg HTTPTTSConfig) *tts.Base {
-	b, _ := newHTTPTTS(cfg)
+func NewHTTPTTS(cfg HTTPTTSConfig) *HTTPTTSService {
+	s := &HTTPTTSService{}
+	s.Base = buildHTTPTTS(cfg, tts.WithSelf(s))
+	return s
+}
+
+// buildHTTPTTS builds the service NewHTTPTTS returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildHTTPTTS(cfg HTTPTTSConfig, opts ...tts.Option) *tts.Base {
+	b, _ := newHTTPTTS(cfg, opts...)
 	return b
 }
 
 // newHTTPTTS builds the service and returns its synthesizer alongside it.
-func newHTTPTTS(cfg HTTPTTSConfig) (*tts.Base, *synthesizer) {
+func newHTTPTTS(cfg HTTPTTSConfig, opts ...tts.Option) (*tts.Base, *synthesizer) {
 	if cfg.URL == "" {
 		cfg.URL = defaultURL
 	}
@@ -199,7 +212,7 @@ func newHTTPTTS(cfg HTTPTTSConfig) (*tts.Base, *synthesizer) {
 		live: newTTSSettings(cfg),
 	}
 	s.outputFormat, s.audioSampleRate = outputFormat(cfg.SampleRate)
-	b := tts.New("SpeechifyHTTPTTS", s)
+	b := tts.New("SpeechifyHTTPTTS", s, opts...)
 	if cfg.TextAggregation == frames.TextTypeToken {
 		b.SetTextAggregator(ttstext.NewTokenAggregator())
 	}

@@ -736,7 +736,7 @@ func (r *run) cancel() {
 func TestHoldsOneConnectionForThePipeline(t *testing.T) {
 	server := newFakeServer(t, speaking)
 	b := NewTTS(TTSConfig{APIKey: "k", URL: server.url})
-	r := runPipeline(t, b)
+	r := runPipeline(t, b.Base)
 	waitUntil(t, "the server saw no connection when the pipeline started", func() bool {
 		return server.connections() == 1
 	})

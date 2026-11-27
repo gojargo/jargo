@@ -71,11 +71,24 @@ func (c TTSConfig) withDefaults() TTSConfig {
 	return c
 }
 
+// TTSService is the Deepgram text-to-speech service NewTTS builds.
+type TTSService struct {
+	*tts.Base
+}
+
 // NewTTS builds a Deepgram Aura TTS service over HTTP, issuing one request per
 // sentence. The voice and the speed can change while the pipeline runs (see
 // TTSSettings); the next request is made with the new values.
-func NewTTS(cfg TTSConfig) *tts.Base {
-	return tts.New("DeepgramTTS", newSynthesizer(cfg))
+func NewTTS(cfg TTSConfig) *TTSService {
+	s := &TTSService{}
+	s.Base = buildTTS(cfg, tts.WithSelf(s))
+	return s
+}
+
+// buildTTS builds the service NewTTS returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildTTS(cfg TTSConfig, opts ...tts.Option) *tts.Base {
+	return tts.New("DeepgramTTS", newSynthesizer(cfg), opts...)
 }
 
 // newSynthesizer builds the HTTP synthesizer with its defaults applied.

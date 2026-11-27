@@ -163,6 +163,11 @@ func newTTSSettings(cfg TTSConfig) *TTSSettings {
 	return s
 }
 
+// TTSService is the HeyGen text-to-speech service NewTTS builds.
+type TTSService struct {
+	*tts.Base
+}
+
 // NewTTS builds a HeyGen Voice TTS service over the multi-stream-input
 // WebSocket.
 //
@@ -173,13 +178,21 @@ func newTTSSettings(cfg TTSConfig) *TTSSettings {
 //
 // It defaults to "heygen-voice-1-turbo" and the public voice Nadine.
 // Professional voice clones are served only by NewHTTPTTS.
-func NewTTS(cfg TTSConfig) *tts.Base {
-	b, _ := newTTS(cfg)
+func NewTTS(cfg TTSConfig) *TTSService {
+	s := &TTSService{}
+	s.Base = buildTTS(cfg, tts.WithSelf(s))
+	return s
+}
+
+// buildTTS builds the service NewTTS returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildTTS(cfg TTSConfig, opts ...tts.Option) *tts.Base {
+	b, _ := newTTS(cfg, opts...)
 	return b
 }
 
 // newTTS builds the service and returns the synthesizer driving it.
-func newTTS(cfg TTSConfig) (*tts.Base, *synthesizer) {
+func newTTS(cfg TTSConfig, opts ...tts.Option) (*tts.Base, *synthesizer) {
 	cfg = cfg.withDefaults()
 	s := &synthesizer{
 		cfg:               cfg,
@@ -189,7 +202,7 @@ func newTTS(cfg TTSConfig) (*tts.Base, *synthesizer) {
 		openContexts:      map[string]bool{},
 		wordClocks:        map[string]*wordClock{},
 	}
-	b := tts.New("HeyGenTTS", s)
+	b := tts.New("HeyGenTTS", s, opts...)
 	s.svc = b
 	s.ws = tts.NewWebsocket(b, s, cfg.Websocket)
 	if cfg.TextAggregation == frames.TextTypeToken {

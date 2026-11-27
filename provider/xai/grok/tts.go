@@ -170,6 +170,11 @@ func xaiLanguage(l language.Language) string {
 	return language.Resolve(l, xaiLanguages, true)
 }
 
+// TTSService is the Grok text-to-speech service NewTTS builds.
+type TTSService struct {
+	*tts.Base
+}
+
 // NewTTS builds an xAI streaming TTS service.
 //
 // It holds one connection open for the call, opened when the pipeline starts.
@@ -178,15 +183,23 @@ func xaiLanguage(l language.Language) string {
 // since xAI's messages name no request. When the connection drops it is
 // restored with backoff, and when that keeps failing the service reports a
 // permanent error and becomes unusable.
-func NewTTS(cfg TTSConfig) *tts.Base {
-	b, _ := newTTS(cfg)
+func NewTTS(cfg TTSConfig) *TTSService {
+	s := &TTSService{}
+	s.Base = buildTTS(cfg, tts.WithSelf(s))
+	return s
+}
+
+// buildTTS builds the service NewTTS returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildTTS(cfg TTSConfig, opts ...tts.Option) *tts.Base {
+	b, _ := newTTS(cfg, opts...)
 	return b
 }
 
 // newTTS builds the streaming service and returns its synthesizer alongside it.
-func newTTS(cfg TTSConfig) (*tts.Base, *ttsSynthesizer) {
+func newTTS(cfg TTSConfig, opts ...tts.Option) (*tts.Base, *ttsSynthesizer) {
 	s := newTTSSynthesizer(cfg)
-	b := tts.New("XAITTS", s.driven())
+	b := tts.New("XAITTS", s.driven(), opts...)
 	// The service names the language the settings start with, so the URL is
 	// built again from the store as it now stands.
 	s.refreshEndpoint()
@@ -214,12 +227,25 @@ func (s *ttsSynthesizer) driven() tts.Synthesizer {
 	return s
 }
 
+// HTTPTTSService is the Grok text-to-speech service NewHTTPTTS builds.
+type HTTPTTSService struct {
+	*tts.Base
+}
+
 // NewHTTPTTS builds an xAI batch TTS service. It synthesizes each sentence in
 // one request and streams the response body downstream. Prefer NewTTS: the
 // streaming service starts speaking sooner and reports word timings.
-func NewHTTPTTS(cfg TTSConfig) *tts.Base {
+func NewHTTPTTS(cfg TTSConfig) *HTTPTTSService {
+	s := &HTTPTTSService{}
+	s.Base = buildHTTPTTS(cfg, tts.WithSelf(s))
+	return s
+}
+
+// buildHTTPTTS builds the service NewHTTPTTS returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildHTTPTTS(cfg TTSConfig, opts ...tts.Option) *tts.Base {
 	cfg = applyTTSDefaults(cfg, defaultTTSHTTPURL)
-	return tts.New("XAIHTTPTTS", &httpTTSSynthesizer{cfg: cfg, http: &http.Client{}})
+	return tts.New("XAIHTTPTTS", &httpTTSSynthesizer{cfg: cfg, http: &http.Client{}}, opts...)
 }
 
 // ttsService is the part of the TTS service the synthesizer asks about the

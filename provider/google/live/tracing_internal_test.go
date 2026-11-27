@@ -23,7 +23,7 @@ import (
 // tracedService is a service set up on a pipeline traced or not, with its
 // spans recorded. Its session is one that is never acknowledged: the tests
 // drive the message handler themselves.
-func tracedService(t *testing.T, cfg Config, traced bool) (*Service, *tracetest.SpanRecorder) {
+func tracedService(t *testing.T, cfg Config, traced bool) (*LLMService, *tracetest.SpanRecorder) {
 	t.Helper()
 	rec := tracetest.NewSpanRecorder()
 	prev := otel.GetTracerProvider()
@@ -104,7 +104,7 @@ func TestSetupSpanTracingDisabledRecordsNothing(t *testing.T) {
 }
 
 // midReply is a traced service in the middle of a spoken reply.
-func midReply(t *testing.T, model string) (*Service, *tracetest.SpanRecorder) {
+func midReply(t *testing.T, model string) (*LLMService, *tracetest.SpanRecorder) {
 	t.Helper()
 	s, rec := tracedService(t, Config{Model: model}, true)
 	s.handle(context.Background(), decode(t, audioMessage([]byte{1, 2})))

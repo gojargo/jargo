@@ -208,6 +208,11 @@ func (s *FluxTTSSettings) ApplyUpdate(delta any) (settings.Changed, error) {
 	return changed, nil
 }
 
+// FluxTTSService is the Deepgram text-to-speech service NewFluxTTS builds.
+type FluxTTSService struct {
+	*tts.Base
+}
+
 // NewFluxTTS builds a Deepgram Flux streaming WebSocket TTS service.
 //
 // Flux keeps acoustic state across turns on a single connection, so prosody
@@ -224,16 +229,24 @@ func (s *FluxTTSSettings) ApplyUpdate(delta any) (settings.Changed, error) {
 // Flux's inline pronunciation markup is early access and is refused with a
 // fatal error on any connection whose speed is not 1.0, so the service formats
 // no pronunciations: words given a pronunciation are spoken as written.
-func NewFluxTTS(cfg FluxTTSConfig) *tts.Base {
-	b, _ := newFluxTTS(cfg)
+func NewFluxTTS(cfg FluxTTSConfig) *FluxTTSService {
+	s := &FluxTTSService{}
+	s.Base = buildFluxTTS(cfg, tts.WithSelf(s))
+	return s
+}
+
+// buildFluxTTS builds the service NewFluxTTS returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildFluxTTS(cfg FluxTTSConfig, opts ...tts.Option) *tts.Base {
+	b, _ := newFluxTTS(cfg, opts...)
 	return b
 }
 
 // newFluxTTS builds the service and the synthesizer behind it.
-func newFluxTTS(cfg FluxTTSConfig) (*tts.Base, *fluxSynth) {
+func newFluxTTS(cfg FluxTTSConfig, opts ...tts.Option) (*tts.Base, *fluxSynth) {
 	cfg = cfg.withDefaults()
 	s := &fluxSynth{cfg: cfg, live: newFluxTTSSettings(cfg)}
-	b := tts.New("DeepgramFluxTTS", s)
+	b := tts.New("DeepgramFluxTTS", s, opts...)
 	s.base = b
 	// The connection carries one Flux session, whose audio names no turn: it
 	// is labeled with the context playing, so replacing the connection leaves

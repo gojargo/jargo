@@ -41,13 +41,13 @@ func (r *sentEvents) sessionUpdates() []protocol.SessionUpdateEvent {
 
 // offlineService is a service set up against a server that never answers, its
 // events captured rather than sent.
-func offlineService(t *testing.T, cfg Config) (*Service, *sentEvents) {
+func offlineService(t *testing.T, cfg Config) (*LLMService, *sentEvents) {
 	t.Helper()
 	return offlineServiceWith(t, cfg, processor.Setup{Clock: clock.NewSystem()})
 }
 
 // offlineServiceWith is offlineService, set up with setup.
-func offlineServiceWith(t *testing.T, cfg Config, setup processor.Setup) (*Service, *sentEvents) {
+func offlineServiceWith(t *testing.T, cfg Config, setup processor.Setup) (*LLMService, *sentEvents) {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		c, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
@@ -81,7 +81,7 @@ func offlineServiceWith(t *testing.T, cfg Config, setup processor.Setup) (*Servi
 }
 
 // sendAndCapture runs a session update and returns the session it sent.
-func sendAndCapture(t *testing.T, s *Service, sent *sentEvents) protocol.SessionProperties {
+func sendAndCapture(t *testing.T, s *LLMService, sent *sentEvents) protocol.SessionProperties {
 	t.Helper()
 	s.sendSessionUpdate(context.Background())
 	updates := sent.sessionUpdates()
@@ -152,7 +152,7 @@ func TestNoWarningWhenReasoningIsUnsetOnUnsupportedModel(t *testing.T) {
 }
 
 // update sends a settings update the way the pipeline does.
-func update(t *testing.T, s *Service, delta *Settings) {
+func update(t *testing.T, s *LLMService, delta *Settings) {
 	t.Helper()
 	if err := s.Base.ProcessFrame(context.Background(), frames.NewLLMUpdateSettingsFrame(delta),
 		processor.Downstream); err != nil {

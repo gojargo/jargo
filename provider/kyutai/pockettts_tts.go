@@ -22,8 +22,21 @@ import (
 	"github.com/gojargo/jargo/service/tts"
 )
 
+// PocketTTSService is the Kyutai text-to-speech service NewPocketTTS builds.
+type PocketTTSService struct {
+	*tts.Base
+}
+
 // NewPocketTTS builds a Pocket TTS service against a local pocket-tts server.
-func NewPocketTTS(cfg PocketTTSConfig) *tts.Base {
+func NewPocketTTS(cfg PocketTTSConfig) *PocketTTSService {
+	s := &PocketTTSService{}
+	s.Base = buildPocketTTS(cfg, tts.WithSelf(s))
+	return s
+}
+
+// buildPocketTTS builds the service NewPocketTTS returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildPocketTTS(cfg PocketTTSConfig, opts ...tts.Option) *tts.Base {
 	if cfg.SampleRate == 0 {
 		cfg.SampleRate = pocketSampleRate
 	}
@@ -32,7 +45,7 @@ func NewPocketTTS(cfg PocketTTSConfig) *tts.Base {
 	if cfg.Voice != "" {
 		live.Voice = settings.Set(cfg.Voice)
 	}
-	return tts.New("PocketTTS", &pocketSynthesizer{cfg: cfg, http: &http.Client{}, live: live})
+	return tts.New("PocketTTS", &pocketSynthesizer{cfg: cfg, http: &http.Client{}, live: live}, opts...)
 }
 
 type pocketSynthesizer struct {

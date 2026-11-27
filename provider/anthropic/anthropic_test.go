@@ -15,7 +15,7 @@ import (
 
 // mustParams converts the conversation and fails the test if the conversion
 // did.
-func (s *Service) mustParams(t *testing.T, convo *frames.LLMContext) sdk.MessageNewParams {
+func (s *LLMService) mustParams(t *testing.T, convo *frames.LLMContext) sdk.MessageNewParams {
 	t.Helper()
 	p, err := s.newParams(convo, adapter.Options{})
 	if err != nil {

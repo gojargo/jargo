@@ -81,7 +81,7 @@ func (d *droppingSession) setup(i int) map[string]any {
 }
 
 // startedOn sets up a service against url, which opens its session.
-func startedOn(t *testing.T, url string) (*Service, *capture, *capture) {
+func startedOn(t *testing.T, url string) (*LLMService, *capture, *capture) {
 	t.Helper()
 	s := New(Config{APIKey: "k", BaseURL: url})
 	sink, source := newCapture(), newCapture()
@@ -213,7 +213,7 @@ func newReplyDroppingSession(t *testing.T, drop <-chan struct{}) *replyDroppingS
 // replyRun runs a service against srv in a pipeline, counting the frames that
 // reach its end.
 type replyRun struct {
-	s    *Service
+	s    *LLMService
 	w    *pipeline.Worker
 	done chan struct{}
 
@@ -324,9 +324,9 @@ func TestAnEndFrameHeldForTheReplyIsReleasedWhenItDrops(t *testing.T) {
 // A failed send while the service closes its own session, to stop or to open it
 // again, is expected and ignored.
 func TestASendErrorWhileDisconnectingIsIgnored(t *testing.T) {
-	for name, disconnect := range map[string]func(s *Service){
-		"stopping":  func(s *Service) { s.stopped.Store(true) },
-		"reopening": func(s *Service) { s.disconnect() },
+	for name, disconnect := range map[string]func(s *LLMService){
+		"stopping":  func(s *LLMService) { s.stopped.Store(true) },
+		"reopening": func(s *LLMService) { s.disconnect() },
 	} {
 		t.Run(name, func(t *testing.T) {
 			s, _, source := newTestServiceBothWays(t)

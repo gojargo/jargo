@@ -739,7 +739,7 @@ func isStopped(f frames.Frame) bool { _, ok := f.(*frames.TTSStoppedFrame); retu
 func speak(t *testing.T, server *fakeTTSServer, cfg TTSConfig, text string) *run {
 	t.Helper()
 	cfg.APIKey, cfg.URL = "test-key", server.url
-	r := runPipeline(t, NewTTS(cfg))
+	r := runPipeline(t, NewTTS(cfg).Base)
 	r.task.QueueFrame(frames.NewTTSSpeakFrame(text))
 	r.waitFor(isStopped)
 	r.stop()
@@ -862,7 +862,7 @@ func TestWordTimestampsFromAudiolessDelta(t *testing.T) {
 // started.
 func TestHoldsOneConnectionForThePipeline(t *testing.T) {
 	server := newFakeTTSServer(t, onDone(audioDelta(make([]byte, 3200), nil, nil), audioDone()))
-	r := runPipeline(t, NewTTS(TTSConfig{APIKey: "k", URL: server.url}))
+	r := runPipeline(t, NewTTS(TTSConfig{APIKey: "k", URL: server.url}).Base)
 	waitUntil(t, "the server saw no connection when the pipeline started", func() bool {
 		return server.connections() == 1
 	})
@@ -891,7 +891,7 @@ func TestReportsAFailedConnection(t *testing.T) {
 		mu.Unlock()
 	})
 
-	r := runPipeline(t, b)
+	r := runPipeline(t, b.Base)
 	defer r.stop()
 	waitUntil(t, "the refused connection was never reported", func() bool {
 		mu.Lock()

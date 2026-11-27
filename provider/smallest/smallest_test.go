@@ -536,7 +536,7 @@ func TestWordTimestampOffsetResetsOnNewTurn(t *testing.T) {
 func TestSpeaksWithWordTimestamps(t *testing.T) {
 	server := newFakeServer(t, speaking)
 	b := NewTTS(Config{APIKey: "k", URL: server.url, SampleRate: 16000})
-	r := runPipeline(t, b)
+	r := runPipeline(t, b.Base)
 	defer r.cancel()
 
 	r.task.QueueFrame(frames.NewTTSSpeakFrame("Hello."))
@@ -832,7 +832,7 @@ func (r *run) wait() {
 func TestHoldsOneConnectionForThePipeline(t *testing.T) {
 	server := newFakeServer(t, speaking)
 	b := NewTTS(Config{APIKey: "k", URL: server.url})
-	r := runPipeline(t, b)
+	r := runPipeline(t, b.Base)
 	waitUntil(t, "the server saw no connection when the pipeline started", func() bool {
 		return server.connections() == 1
 	})
@@ -862,7 +862,7 @@ func TestReportsAFailedConnection(t *testing.T) {
 		mu.Unlock()
 	})
 
-	r := runPipeline(t, b)
+	r := runPipeline(t, b.Base)
 	defer r.stop()
 	waitUntil(t, "the refused connection was never reported", func() bool {
 		mu.Lock()

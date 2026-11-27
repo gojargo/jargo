@@ -20,7 +20,7 @@ const (
 
 // ttfatService points a Gemini service at a stub streaming first, then rest
 // after the gap.
-func ttfatService(t *testing.T, first, rest string) *Service {
+func ttfatService(t *testing.T, first, rest string) *LLMService {
 	t.Helper()
 	srv := httptest.NewServer(providertest.StagedStream("text/event-stream", first, rest, ttfatGap))
 	t.Cleanup(srv.Close)

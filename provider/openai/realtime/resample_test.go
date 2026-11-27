@@ -9,7 +9,7 @@ import (
 
 // sendOneSecond converts one second of audio at rate, in 20 ms frames the way
 // an input transport delivers it, and returns how many bytes reach the session.
-func sendOneSecond(s *Service, rate int) int {
+func sendOneSecond(s *LLMService, rate int) int {
 	frameBytes := rate * 2 / 50
 	sent := 0
 	for range 50 {

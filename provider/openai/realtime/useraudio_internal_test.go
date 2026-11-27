@@ -59,7 +59,7 @@ const (
 
 // userAudioService is a service whose events are captured, with the server's
 // turn detection off when manual is set.
-func userAudioService(t *testing.T, manual bool, prerollSecs *float64) (*Service, *sentEvents) {
+func userAudioService(t *testing.T, manual bool, prerollSecs *float64) (*LLMService, *sentEvents) {
 	t.Helper()
 	cfg := Config{UserAudioPrerollSecs: prerollSecs}
 	if manual {
@@ -74,11 +74,11 @@ func userAudioService(t *testing.T, manual bool, prerollSecs *float64) (*Service
 
 // sendUserAudio sends mono audio at the given rate as the input transport
 // would deliver it.
-func sendUserAudio(s *Service, rate int, data []byte) {
+func sendUserAudio(s *LLMService, rate int, data []byte) {
 	s.sendAudio(context.Background(), frames.AudioRawData{Audio: data, SampleRate: rate, NumChannels: 1})
 }
 
-func (s *Service) prerollBytes() []byte {
+func (s *LLMService) prerollBytes() []byte {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]byte(nil), s.preroll...)
@@ -191,7 +191,7 @@ func TestServerModeInterruptionDoesNotClearOrReplay(t *testing.T) {
 
 // sendSecondOfUserAudio sends 1s of audio in 20ms frames, the way an input
 // transport delivers it.
-func sendSecondOfUserAudio(s *Service, rate int) {
+func sendSecondOfUserAudio(s *LLMService, rate int) {
 	frameBytes := rate * 2 / 50
 	for range 50 {
 		sendUserAudio(s, rate, bytes.Repeat([]byte{0x01, 0x02}, frameBytes/2))

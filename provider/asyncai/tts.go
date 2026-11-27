@@ -46,20 +46,33 @@ var errNotConnected = errors.New("asyncai tts: websocket not connected")
 //nolint:gochecknoglobals // the set of fields, fixed
 var sessionInitFields = []string{"model", keyVoice, keyLanguage}
 
+// TTSService is the Async text-to-speech service NewTTS builds.
+type TTSService struct {
+	*tts.Base
+}
+
 // NewTTS builds an Async TTS service.
 //
 // It holds one connection open for the call, opened when the pipeline starts.
 // When it drops it is restored with backoff, and when that keeps failing the
 // service reports a permanent error and becomes unusable. See tts.Websocket.
-func NewTTS(cfg Config) *tts.Base {
-	b, _ := newTTS(cfg)
+func NewTTS(cfg Config) *TTSService {
+	s := &TTSService{}
+	s.Base = buildTTS(cfg, tts.WithSelf(s))
+	return s
+}
+
+// buildTTS builds the service NewTTS returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildTTS(cfg Config, opts ...tts.Option) *tts.Base {
+	b, _ := newTTS(cfg, opts...)
 	return b
 }
 
 // newTTS builds the service and returns its synthesizer alongside it.
-func newTTS(cfg Config) (*tts.Base, *synthesizer) {
+func newTTS(cfg Config, opts ...tts.Option) (*tts.Base, *synthesizer) {
 	s := newSynthesizer(cfg)
-	b := tts.New("AsyncAITTS", s)
+	b := tts.New("AsyncAITTS", s, opts...)
 	// The audio of a request is labeled by the context it names, but the next
 	// request's frames are still held until this one's audio has played.
 	b.SetPauseFrameProcessing(tts.PauseOptions{Enabled: true})

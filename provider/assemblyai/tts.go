@@ -150,6 +150,11 @@ func (c TTSConfig) withDefaults() TTSConfig {
 	return c
 }
 
+// TTSService is the AssemblyAI text-to-speech service NewTTS builds.
+type TTSService struct {
+	*tts.Base
+}
+
 // NewTTS builds an AssemblyAI streaming TTS service.
 //
 // It streams text to AssemblyAI over a single WebSocket session and plays the
@@ -162,13 +167,21 @@ func (c TTSConfig) withDefaults() TTSConfig {
 // The session is configured at connect time, so changing the voice, language or
 // model reconnects. A session lasts at most an hour; the service replaces it
 // between requests before it expires.
-func NewTTS(cfg TTSConfig) *tts.Base {
-	b, _ := newTTS(cfg)
+func NewTTS(cfg TTSConfig) *TTSService {
+	s := &TTSService{}
+	s.Base = buildTTS(cfg, tts.WithSelf(s))
+	return s
+}
+
+// buildTTS builds the service NewTTS returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildTTS(cfg TTSConfig, opts ...tts.Option) *tts.Base {
+	b, _ := newTTS(cfg, opts...)
 	return b
 }
 
 // newTTS builds the service and returns the synthesizer driving it.
-func newTTS(cfg TTSConfig) (*tts.Base, *synthesizer) {
+func newTTS(cfg TTSConfig, opts ...tts.Option) (*tts.Base, *synthesizer) {
 	cfg = cfg.withDefaults()
 	s := &synthesizer{
 		cfg:                  cfg,
@@ -182,7 +195,7 @@ func newTTS(cfg TTSConfig) (*tts.Base, *synthesizer) {
 		sessionRenewalMargin: sessionRenewalMargin,
 		now:                  time.Now,
 	}
-	b := tts.New("AssemblyAITTS", s)
+	b := tts.New("AssemblyAITTS", s, opts...)
 	s.svc = b
 	s.ws = tts.NewWebsocket(b, s, cfg.Websocket)
 	if cfg.TextAggregation == frames.TextTypeToken {

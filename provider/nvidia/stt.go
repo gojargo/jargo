@@ -93,12 +93,25 @@ type STTConfig struct {
 // Validate reports whether the configuration is usable.
 func (c STTConfig) Validate() error { return validate.Struct(c) }
 
+// STTService is the NVIDIA Riva speech-to-text service NewSTT builds.
+type STTService struct {
+	*stt.StreamService
+}
+
 // NewSTT builds an NVIDIA Riva streaming speech-to-text service. A finalized
 // result (Riva's is_final, driven by server-side endpointing) marks the end of
 // the user's turn.
-func NewSTT(cfg STTConfig) *stt.StreamService {
+func NewSTT(cfg STTConfig) *STTService {
+	s := &STTService{}
+	s.StreamService = buildSTT(cfg, stt.WithSelf(s))
+	return s
+}
+
+// buildSTT builds the service NewSTT returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildSTT(cfg STTConfig, opts ...stt.Option) *stt.StreamService {
 	cfg = cfg.withDefaults()
-	return stt.NewStream("NvidiaSTT", &sttConnector{cfg: cfg}, cfg.SampleRate)
+	return stt.NewStream("NvidiaSTT", &sttConnector{cfg: cfg}, cfg.SampleRate, opts...)
 }
 
 // withDefaults fills unset fields with their defaults.

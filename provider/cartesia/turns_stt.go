@@ -174,11 +174,24 @@ func (c TurnsSTTConfig) Validate() error {
 	return err
 }
 
+// TurnsSTTService is the Cartesia speech-to-text service NewTurnsSTT builds.
+type TurnsSTTService struct {
+	*stt.StreamService
+}
+
 // NewTurnsSTT builds a Cartesia turn-detecting STT service. Unlike NewSTT, the
 // server decides where a turn begins and ends and reports those boundaries, so
 // the pipeline does not need its own end-of-turn detection. The service
 // recommends external turn strategies accordingly.
-func NewTurnsSTT(cfg TurnsSTTConfig) *stt.StreamService {
+func NewTurnsSTT(cfg TurnsSTTConfig) *TurnsSTTService {
+	s := &TurnsSTTService{}
+	s.StreamService = buildTurnsSTT(cfg, stt.WithSelf(s))
+	return s
+}
+
+// buildTurnsSTT builds the service NewTurnsSTT returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildTurnsSTT(cfg TurnsSTTConfig, opts ...stt.Option) *stt.StreamService {
 	if cfg.URL == "" {
 		cfg.URL = defaultTurnsURL
 	}
@@ -189,7 +202,7 @@ func NewTurnsSTT(cfg TurnsSTTConfig) *stt.StreamService {
 		cfg.Model = defaultTurnsModel
 	}
 	c := newTurnsConnector(cfg)
-	svc := stt.NewStream("CartesiaTurnsSTT", c, cfg.SampleRate)
+	svc := stt.NewStream("CartesiaTurnsSTT", c, cfg.SampleRate, opts...)
 	// The connector reports the errors the server sends through the service, so
 	// they are classified like any other.
 	c.svc = svc

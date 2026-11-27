@@ -63,8 +63,8 @@ func requestConfig(b *llm.Base, cfg Config, live *LLMSettings) Config {
 
 // Settings returns the service's runtime-updatable settings, implementing
 // llm.SettingsHolder.
-func (s *HTTPService) Settings() any { return s.live }
+func (s *HTTPLLMService) Settings() any { return s.live }
 
 // Settings returns the service's runtime-updatable settings, implementing
 // llm.SettingsHolder.
-func (s *Service) Settings() any { return s.live }
+func (s *LLMService) Settings() any { return s.live }

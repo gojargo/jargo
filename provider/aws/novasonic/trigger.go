@@ -72,7 +72,7 @@ func normalizedTrigger(text string) bool { return strings.ToLower(strings.TrimSp
 // playing it the user saying "ready". It is sent once the session is set up,
 // right away when it already is. Nova 2 Sonic and later need none: a
 // conversation ending with a user message, run with an LLMRunFrame, starts them.
-func (s *Service) TriggerAssistantResponse(ctx context.Context) {
+func (s *LLMService) TriggerAssistantResponse(ctx context.Context) {
 	if !assistantResponseTriggerNeeded(s.model()) {
 		slog.WarnContext(ctx, "the assistant response trigger is not needed for this model; skipping. "+
 			"An LLMRunFrame should be enough to prompt the assistant to respond, "+
@@ -99,7 +99,7 @@ func (s *Service) TriggerAssistantResponse(ctx context.Context) {
 // chunks at the pace of real audio, led by silence on a session just
 // connected. The recording is transcribed into the conversation, alongside the
 // instruction to wait for it.
-func (s *Service) sendAssistantResponseTrigger(ctx context.Context) {
+func (s *LLMService) sendAssistantResponseTrigger(ctx context.Context) {
 	s.mu.Lock()
 	connectedTime := s.connectedTime
 	if connectedTime.IsZero() {

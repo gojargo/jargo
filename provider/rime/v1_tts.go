@@ -209,6 +209,11 @@ func (c V1TTSConfig) withDefaults() V1TTSConfig {
 	return c
 }
 
+// V1TTSService is the Rime text-to-speech service NewV1TTS builds.
+type V1TTSService struct {
+	*tts.Base
+}
+
 // NewV1TTS builds a Rime TTS service over the WebSocket v1 API, which carries
 // protobuf envelopes in binary or proto3 JSON encoding. It holds one connection
 // open for the call and gives each turn a synthesis context on it; an
@@ -219,13 +224,25 @@ func (c V1TTSConfig) withDefaults() V1TTSConfig {
 //
 // The configuration is validated first, and an error is returned for one that
 // is not usable.
-func NewV1TTS(cfg V1TTSConfig) (*tts.Base, error) {
-	b, _, err := newV1TTS(cfg)
+func NewV1TTS(cfg V1TTSConfig) (*V1TTSService, error) {
+	s := &V1TTSService{}
+	svc, err := buildV1TTS(cfg, tts.WithSelf(s))
+	if err != nil {
+		return nil, err
+	}
+	s.Base = svc
+	return s, nil
+}
+
+// buildV1TTS builds the service NewV1TTS returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildV1TTS(cfg V1TTSConfig, opts ...tts.Option) (*tts.Base, error) {
+	b, _, err := newV1TTS(cfg, opts...)
 	return b, err
 }
 
 // newV1TTS builds the service and returns its synthesizer alongside it.
-func newV1TTS(cfg V1TTSConfig) (*tts.Base, *v1Synthesizer, error) {
+func newV1TTS(cfg V1TTSConfig, opts ...tts.Option) (*tts.Base, *v1Synthesizer, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, nil, err
 	}
@@ -237,7 +254,7 @@ func newV1TTS(cfg V1TTSConfig) (*tts.Base, *v1Synthesizer, error) {
 		contexts:       map[string]bool{},
 		failedContexts: map[string]bool{},
 	}
-	b := tts.New("RimeV1TTS", s)
+	b := tts.New("RimeV1TTS", s, opts...)
 	s.base = b
 	s.ws = tts.NewWebsocket(b, s, cfg.Websocket)
 	// Spelled-out text is kept in one aggregate, so a split never breaks it.

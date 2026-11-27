@@ -628,7 +628,7 @@ func (r *run) wait() {
 func TestHoldsOneConnectionForThePipeline(t *testing.T) {
 	server := newFakeServer(t, onTranscript(audioMessage(make([]byte, 480))))
 	b := NewTTS(Config{APIKey: "k", Voice: "v1", URL: server.url, SampleRate: 24000})
-	r := runPipeline(t, b)
+	r := runPipeline(t, b.Base)
 	if n := server.connections(); n != 1 {
 		t.Fatalf("the server saw %d connections when the pipeline started, want 1", n)
 	}
@@ -655,7 +655,7 @@ func TestReportsAFailedConnection(t *testing.T) {
 		mu.Unlock()
 	})
 
-	r := runPipeline(t, b)
+	r := runPipeline(t, b.Base)
 	defer r.stop()
 	waitUntil(t, "the refused connection was never reported", func() bool {
 		mu.Lock()

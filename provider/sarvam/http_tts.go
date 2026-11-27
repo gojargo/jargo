@@ -72,6 +72,11 @@ type HTTPTTSConfig struct {
 // Validate reports whether the configuration is usable.
 func (c HTTPTTSConfig) Validate() error { return validate.Struct(c) }
 
+// HTTPTTSService is the Sarvam text-to-speech service NewHTTPTTS builds.
+type HTTPTTSService struct {
+	*tts.Base
+}
+
 // NewHTTPTTS builds a Sarvam TTS service over the HTTP API. Each sentence is
 // one request, answered with the whole of its audio. Prefer NewTTS on a call,
 // where the audio streams back over a connection held open for it.
@@ -80,13 +85,21 @@ func (c HTTPTTSConfig) Validate() error { return validate.Struct(c) }
 // no pitch or loudness. bulbul:v4-flash takes pitch, loudness and pace, but no
 // temperature, and its own catalog of speakers. Both always preprocess the
 // text.
-func NewHTTPTTS(cfg HTTPTTSConfig) *tts.Base {
-	b, _ := newHTTPTTS(cfg)
+func NewHTTPTTS(cfg HTTPTTSConfig) *HTTPTTSService {
+	s := &HTTPTTSService{}
+	s.Base = buildHTTPTTS(cfg, tts.WithSelf(s))
+	return s
+}
+
+// buildHTTPTTS builds the service NewHTTPTTS returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildHTTPTTS(cfg HTTPTTSConfig, opts ...tts.Option) *tts.Base {
+	b, _ := newHTTPTTS(cfg, opts...)
 	return b
 }
 
 // newHTTPTTS builds the service and returns its synthesizer alongside it.
-func newHTTPTTS(cfg HTTPTTSConfig) (*tts.Base, *httpSynthesizer) {
+func newHTTPTTS(cfg HTTPTTSConfig, opts ...tts.Option) (*tts.Base, *httpSynthesizer) {
 	if cfg.URL == "" {
 		cfg.URL = defaultHTTPTTSURL
 	}
@@ -111,7 +124,7 @@ func newHTTPTTS(cfg HTTPTTSConfig) (*tts.Base, *httpSynthesizer) {
 		mc:         mc,
 		live:       newHTTPTTSSettings(cfg, mc),
 	}
-	return tts.New("SarvamHTTPTTS", s), s
+	return tts.New("SarvamHTTPTTS", s, opts...), s
 }
 
 // httpSynthesizer speaks each sentence with one request to the HTTP API.

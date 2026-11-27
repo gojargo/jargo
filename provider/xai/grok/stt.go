@@ -111,10 +111,23 @@ func (c STTConfig) Validate() error {
 	return nil
 }
 
+// STTService is the Grok speech-to-text service NewSTT builds.
+type STTService struct {
+	*stt.StreamService
+}
+
 // NewSTT builds an xAI streaming speech-to-text service.
-func NewSTT(cfg STTConfig) *stt.StreamService {
+func NewSTT(cfg STTConfig) *STTService {
+	s := &STTService{}
+	s.StreamService = buildSTT(cfg, stt.WithSelf(s))
+	return s
+}
+
+// buildSTT builds the service NewSTT returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildSTT(cfg STTConfig, opts ...stt.Option) *stt.StreamService {
 	cfg = cfg.withDefaults()
-	return stt.NewStream("XAISTT", &sttConnector{cfg: cfg}, cfg.SampleRate)
+	return stt.NewStream("XAISTT", &sttConnector{cfg: cfg}, cfg.SampleRate, opts...)
 }
 
 // withDefaults fills in what the configuration leaves unset.

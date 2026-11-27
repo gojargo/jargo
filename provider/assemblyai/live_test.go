@@ -230,7 +230,7 @@ func TestStopTerminatesTheSessionBeforeClosing(t *testing.T) {
 	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{IdleTimeout: -1})
 	done := make(chan error, 1)
 	go func() { done <- task.Run(context.Background()) }()
-	waitConnected(t, svc)
+	waitConnected(t, svc.StreamService)
 
 	started := time.Now()
 	task.StopWhenDone()
@@ -260,7 +260,7 @@ func TestCancelTerminatesTheSession(t *testing.T) {
 	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{IdleTimeout: -1})
 	done := make(chan error, 1)
 	go func() { done <- task.Run(context.Background()) }()
-	waitConnected(t, svc)
+	waitConnected(t, svc.StreamService)
 
 	task.Cancel(context.Background(), "test")
 	select {

@@ -18,7 +18,7 @@ import (
 // audioService is a service on a ready, seeded session, with server-side
 // detection off when vadDisabled, and the pre-roll pinned when prerollSecs is
 // set.
-func audioService(t *testing.T, vadDisabled bool, prerollSecs *float64) (*Service, *recordingSession) {
+func audioService(t *testing.T, vadDisabled bool, prerollSecs *float64) (*LLMService, *recordingSession) {
 	t.Helper()
 	srv := newRecordingSession(t)
 	cfg := Config{APIKey: "test-key", BaseURL: wsURL(srv), UserAudioPrerollSecs: prerollSecs}
@@ -87,7 +87,7 @@ func equalKinds(got []string, want ...string) bool {
 	return true
 }
 
-func (s *Service) prerollLen() int {
+func (s *LLMService) prerollLen() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return len(s.preroll)

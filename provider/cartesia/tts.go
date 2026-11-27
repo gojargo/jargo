@@ -43,16 +43,29 @@ type GenerationConfig struct {
 //nolint:gochecknoglobals // sentinel error
 var errNotConnected = errors.New("cartesia tts: websocket not connected")
 
+// TTSService is the Cartesia text-to-speech service NewTTS builds.
+type TTSService struct {
+	*tts.Base
+}
+
 // NewTTS builds a Cartesia TTS service.
-func NewTTS(cfg Config) *tts.Base {
-	b, _ := newTTS(cfg)
+func NewTTS(cfg Config) *TTSService {
+	s := &TTSService{}
+	s.Base = buildTTS(cfg, tts.WithSelf(s))
+	return s
+}
+
+// buildTTS builds the service NewTTS returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildTTS(cfg Config, opts ...tts.Option) *tts.Base {
+	b, _ := newTTS(cfg, opts...)
 	return b
 }
 
 // newTTS builds the service and the synthesizer behind it, which is the only
 // way the synthesizer should be built: it speaks through the service's
 // connection lifecycle, and its settings store is not optional.
-func newTTS(cfg Config) (*tts.Base, *synthesizer) {
+func newTTS(cfg Config, opts ...tts.Option) (*tts.Base, *synthesizer) {
 	cfg = ttsDefaults(cfg)
 
 	s := &synthesizer{cfg: cfg, live: newTTSSettings(cfg)}
@@ -60,7 +73,7 @@ func newTTS(cfg Config) (*tts.Base, *synthesizer) {
 	// Always word-aligned: Cartesia reports when each word is spoken, so the
 	// base emits each word's text as its audio plays and the conversation keeps
 	// only what was heard before an interruption.
-	b := tts.New("CartesiaTTS", ts)
+	b := tts.New("CartesiaTTS", ts, opts...)
 	s.base = b
 	s.ws = tts.NewWebsocket(b, ts, cfg.Websocket)
 	// Always hold off on a sentence boundary inside a spell tag. The tag is full

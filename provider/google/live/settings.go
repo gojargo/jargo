@@ -211,31 +211,31 @@ func warnTextModality(m Modality) {
 }
 
 // Settings returns the store a settings update is merged into.
-func (s *Service) Settings() any { return s.live }
+func (s *LLMService) Settings() any { return s.live }
 
 // UpdateSettings reports every setting an update changed as not applied: the
 // Live API takes them all in the setup message, so they reach the session only
 // when it next opens.
-func (s *Service) UpdateSettings(ctx context.Context, changed settings.Changed) error {
+func (s *LLMService) UpdateSettings(ctx context.Context, changed settings.Changed) error {
 	s.WarnUnhandledUpdatedSettings(ctx, changed.Names())
 	return nil
 }
 
 // SetModelModalities sets what the model responds with, for the next session.
-func (s *Service) SetModelModalities(m Modality) {
+func (s *LLMService) SetModelModalities(m Modality) {
 	warnTextModality(m)
 	s.live.Modalities = settings.Set(m)
 }
 
 // SetLanguage sets the language the model speaks, for the next session.
-func (s *Service) SetLanguage(l language.Language) {
+func (s *LLMService) SetLanguage(l language.Language) {
 	code := geminiLanguage(l)
 	s.live.Language = settings.Set(code)
 	slog.Info("set the Gemini language", "service", s.Name(), "language", string(code))
 }
 
 // model is the model the session runs.
-func (s *Service) model() string { return s.live.Model.Or("") }
+func (s *LLMService) model() string { return s.live.Model.Or("") }
 
 // geminiLanguage is the locale code Gemini Live takes for l: the one it lists
 // for the language, or l as it stands when it lists none.

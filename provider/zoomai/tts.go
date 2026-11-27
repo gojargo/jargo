@@ -85,6 +85,11 @@ type HTTPTTSSettings struct {
 	Volume settings.Opt[float64] `settings:"volume"`
 }
 
+// HTTPTTSService is the Zoom text-to-speech service NewHTTPTTS builds.
+type HTTPTTSService struct {
+	*tts.Base
+}
+
 // NewHTTPTTS builds a Zoom AI Services TTS service over the HTTP API, in Fast
 // mode.
 //
@@ -93,13 +98,21 @@ type HTTPTTSSettings struct {
 // finishes. Zoom TTS returns 44.1 kHz audio, which is resampled to the
 // service's output rate. An interruption closes the request, which stops
 // synthesis on the server.
-func NewHTTPTTS(cfg HTTPTTSConfig) *tts.Base {
-	b, _ := newHTTPTTS(cfg)
+func NewHTTPTTS(cfg HTTPTTSConfig) *HTTPTTSService {
+	s := &HTTPTTSService{}
+	s.Base = buildHTTPTTS(cfg, tts.WithSelf(s))
+	return s
+}
+
+// buildHTTPTTS builds the service NewHTTPTTS returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildHTTPTTS(cfg HTTPTTSConfig, opts ...tts.Option) *tts.Base {
+	b, _ := newHTTPTTS(cfg, opts...)
 	return b
 }
 
 // newHTTPTTS builds the service and returns its synthesizer alongside it.
-func newHTTPTTS(cfg HTTPTTSConfig) (*tts.Base, *httpSynthesizer) {
+func newHTTPTTS(cfg HTTPTTSConfig, opts ...tts.Option) (*tts.Base, *httpSynthesizer) {
 	cfg.URL = zoomaiutil.CheckURL(cmp.Or(cfg.URL, defaultTTSURL), "Zoom TTS", "text")
 	if cfg.SampleRate == 0 {
 		cfg.SampleRate = defaultSampleRate
@@ -108,7 +121,7 @@ func newHTTPTTS(cfg HTTPTTSConfig) (*tts.Base, *httpSynthesizer) {
 		cfg.Client = &http.Client{}
 	}
 	s := &httpSynthesizer{cfg: cfg, live: newHTTPTTSSettings(cfg)}
-	return tts.New("ZoomAIHTTPTTS", s), s
+	return tts.New("ZoomAIHTTPTTS", s, opts...), s
 }
 
 // newHTTPTTSSettings is the starting state, taken from what the service was

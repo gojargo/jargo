@@ -55,10 +55,23 @@ type STTConfig struct {
 // Validate reports whether the configuration is usable.
 func (c STTConfig) Validate() error { return validate.Struct(c) }
 
+// STTService is the OpenAI speech-to-text service NewSTT builds.
+type STTService struct {
+	*stt.SegmentService
+}
+
 // NewSTT builds an OpenAI transcription service. It is segmented: a turn
 // detector upstream delimits each utterance, which is transcribed in one request.
-func NewSTT(cfg STTConfig) *stt.SegmentService {
-	return NewCompatSTT("OpenAISTT", defaultLLMBaseURL, defaultSTTModel, cfg)
+func NewSTT(cfg STTConfig) *STTService {
+	s := &STTService{}
+	s.SegmentService = buildSTT(cfg, stt.WithSelf(s))
+	return s
+}
+
+// buildSTT builds the service NewSTT returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildSTT(cfg STTConfig, opts ...stt.Option) *stt.SegmentService {
+	return NewCompatSTT("OpenAISTT", defaultLLMBaseURL, defaultSTTModel, cfg, opts...)
 }
 
 // STTRequestShaper customizes how a transcription request is addressed and
@@ -82,14 +95,16 @@ func (defaultSTTShaper) Authorize(req *http.Request, apiKey string) {
 
 // NewCompatSTT builds a transcription service for any endpoint that implements
 // OpenAI's /audio/transcriptions API (e.g. Groq).
-func NewCompatSTT(name, baseURL, defaultModel string, cfg STTConfig) *stt.SegmentService {
-	return NewShapedSTT(name, baseURL, defaultModel, defaultSTTShaper{}, cfg)
+func NewCompatSTT(name, baseURL, defaultModel string, cfg STTConfig, opts ...stt.Option) *stt.SegmentService {
+	return NewShapedSTT(name, baseURL, defaultModel, defaultSTTShaper{}, cfg, opts...)
 }
 
 // NewShapedSTT builds a transcription service whose requests are addressed and
 // authorized by shaper. It is the base for deployments that don't use OpenAI's
 // URL layout or Bearer auth, such as Azure OpenAI.
-func NewShapedSTT(name, baseURL, defaultModel string, shaper STTRequestShaper, cfg STTConfig) *stt.SegmentService {
+func NewShapedSTT(
+	name, baseURL, defaultModel string, shaper STTRequestShaper, cfg STTConfig, opts ...stt.Option,
+) *stt.SegmentService {
 	if cfg.BaseURL == "" {
 		cfg.BaseURL = baseURL
 	}
@@ -97,7 +112,7 @@ func NewShapedSTT(name, baseURL, defaultModel string, shaper STTRequestShaper, c
 		cfg.Model = defaultModel
 	}
 	t := &transcriber{cfg: cfg, http: httpClientOr(cfg.HTTPClient), shaper: shaper}
-	return stt.NewSegment(name, t, cfg.SampleRate)
+	return stt.NewSegment(name, t, cfg.SampleRate, opts...)
 }
 
 type transcriber struct {

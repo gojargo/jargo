@@ -28,8 +28,8 @@ import (
 	"github.com/google/uuid"
 )
 
-// Service is the Gemini Live speech-to-speech processor.
-type Service struct {
+// LLMService is the Gemini Live speech-to-speech processor.
+type LLMService struct {
 	// adapter converts the conversation into what the session takes: the
 	// system instruction, the history, and the tools it carries.
 	adapter Adapter
@@ -220,7 +220,7 @@ func (c apiKeyConnector) Endpoint(context.Context) (string, http.Header, error) 
 func (apiKeyConnector) ModelPath(model string) string { return "models/" + model }
 
 // New builds a Gemini Live service.
-func New(cfg Config) *Service {
+func New(cfg Config) *LLMService {
 	if cfg.BaseURL == "" {
 		cfg.BaseURL = defaultBaseURL
 	}
@@ -230,7 +230,7 @@ func New(cfg Config) *Service {
 // NewWithConnector builds a Gemini Live service that dials through conn. It is
 // the base for deployments that do not use the Gemini API's own endpoint or
 // api-key auth; name is the processor label.
-func NewWithConnector(name string, conn Connector, cfg Config) *Service {
+func NewWithConnector(name string, conn Connector, cfg Config) *LLMService {
 	if cfg.Model == "" {
 		cfg.Model = defaultModel
 	}
@@ -242,7 +242,7 @@ func NewWithConnector(name string, conn Connector, cfg Config) *Service {
 	if cfg.UserAudioPrerollSecs != nil {
 		prerollSecs = *cfg.UserAudioPrerollSecs
 	}
-	s := &Service{
+	s := &LLMService{
 		vadDisabled:   cfg.VAD != nil && cfg.VAD.Disabled != nil && *cfg.VAD.Disabled,
 		prerollSecs:   prerollSecs,
 		prerollPinned: cfg.UserAudioPrerollSecs != nil,
@@ -269,13 +269,13 @@ func NewWithConnector(name string, conn Connector, cfg Config) *Service {
 // it is sent, and says so with llm.WithContinuousGeneration, so the base never
 // asks it to answer a conversation. It exists because the base identifies the
 // service it belongs to by the generator it was built with.
-func (s *Service) Generate(context.Context, *frames.LLMContext, llm.Emit) error {
+func (s *LLMService) Generate(context.Context, *frames.LLMContext, llm.Emit) error {
 	return errNotGenerator
 }
 
 // ProcessFrame opens the session on StartFrame, forwards input audio to the
 // model, and tears the session down when the pipeline ends.
-func (s *Service) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
+func (s *LLMService) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
 	if end, ok := f.(*frames.EndFrame); ok && s.deferEnd(ctx, end) {
 		return nil
 	}
@@ -328,7 +328,7 @@ func (s *Service) ProcessFrame(ctx context.Context, f frames.Frame, dir processo
 // handleUserInput takes what the pipeline reports about the user: their turn
 // starting and stopping, how its own voice activity detection is tuned, and
 // text they typed.
-func (s *Service) handleUserInput(ctx context.Context, f frames.Frame) {
+func (s *LLMService) handleUserInput(ctx context.Context, f frames.Frame) {
 	switch fr := f.(type) {
 	case *frames.UserStartedSpeakingFrame:
 		s.handleUserStartedSpeaking(ctx)
@@ -344,7 +344,7 @@ func (s *Service) handleUserInput(ctx context.Context, f frames.Frame) {
 // Setup sets the service up and opens the session, ahead of the pipeline
 // starting, so it is ready sooner. A session that cannot be opened is reported
 // as an error.
-func (s *Service) Setup(ctx context.Context, setup processor.Setup) error {
+func (s *LLMService) Setup(ctx context.Context, setup processor.Setup) error {
 	if err := s.Base.Setup(ctx, setup); err != nil {
 		return err
 	}
@@ -357,14 +357,14 @@ func (s *Service) Setup(ctx context.Context, setup processor.Setup) error {
 }
 
 // Cleanup tears down the session and stops the read loop.
-func (s *Service) Cleanup(ctx context.Context) error {
+func (s *LLMService) Cleanup(ctx context.Context) error {
 	s.stop()
 	return s.Base.Cleanup(ctx)
 }
 
 // stop closes the session for good: a session lost from now on is not opened
 // again.
-func (s *Service) stop() {
+func (s *LLMService) stop() {
 	s.stopped.Store(true)
 	s.connMu.Lock()
 	defer s.connMu.Unlock()
@@ -373,7 +373,7 @@ func (s *Service) stop() {
 
 // connect dials the Live WebSocket, sends the setup message, and starts the read
 // loop.
-func (s *Service) connect(ctx context.Context) error {
+func (s *LLMService) connect(ctx context.Context) error {
 	endpoint, header, err := s.connector.Endpoint(ctx)
 	if err != nil {
 		return err
@@ -410,7 +410,7 @@ func (s *Service) connect(ctx context.Context) error {
 // generationConfig is the part of the setup the model generates by: what it
 // responds with, its voice and language, and the sampling and reasoning
 // settings.
-func (s *Service) generationConfig() map[string]any {
+func (s *LLMService) generationConfig() map[string]any {
 	live := s.live
 	gen := map[string]any{
 		"responseModalities": []string{string(live.Modalities.Or(ModalityAudio))},
@@ -441,7 +441,7 @@ func (s *Service) generationConfig() map[string]any {
 
 // setup is the initial session-configuration message, built from the settings
 // the service holds.
-func (s *Service) setup() (map[string]any, error) {
+func (s *LLMService) setup() (map[string]any, error) {
 	live := s.live
 	gen := s.generationConfig()
 
@@ -562,7 +562,7 @@ func activityDetection(vad *VADParams) map[string]any {
 // sessionInstructionAndTools settles the system instruction and the tools a
 // session opens with. Without a conversation yet, they are the configured ones,
 // with the built-in tools added.
-func (s *Service) sessionInstructionAndTools() (string, []map[string]any, error) {
+func (s *LLMService) sessionInstructionAndTools() (string, []map[string]any, error) {
 	s.mu.Lock()
 	convo := s.convo
 	s.mu.Unlock()
@@ -578,7 +578,7 @@ func (s *Service) sessionInstructionAndTools() (string, []map[string]any, error)
 
 // sessionParams converts the conversation against what the service was
 // configured with.
-func (s *Service) sessionParams(convo *frames.LLMContext) (gemini.Params, error) {
+func (s *LLMService) sessionParams(convo *frames.LLMContext) (gemini.Params, error) {
 	return s.adapter.LLMInvocationParams(convo, adapter.Options{
 		SystemInstruction: s.SystemInstruction(),
 		ServiceTools:      s.cfg.Tools,
@@ -587,11 +587,11 @@ func (s *Service) sessionParams(convo *frames.LLMContext) (gemini.Params, error)
 
 // ServiceTools returns the tools configured on the service, which the base
 // registers the handlers of while the conversation advertises no tools.
-func (s *Service) ServiceTools() frames.ToolsSchema { return s.cfg.Tools }
+func (s *LLMService) ServiceTools() frames.ToolsSchema { return s.cfg.Tools }
 
 // LLMAdapter returns the adapter this service converts through, so the base can
 // give it the tools the service implements itself.
-func (s *Service) LLMAdapter() llm.BuiltinToolHolder { return &s.adapter }
+func (s *LLMService) LLMAdapter() llm.BuiltinToolHolder { return &s.adapter }
 
 // handleContext takes the conversation the pipeline reported.
 //
@@ -605,7 +605,7 @@ func (s *Service) LLMAdapter() llm.BuiltinToolHolder { return &s.adapter }
 // so what it brings is the results of the tool calls the model asked for, and,
 // when it comes from upstream, the aggregator asking the model to answer content
 // appended since it last spoke.
-func (s *Service) handleContext(ctx context.Context, convo *frames.LLMContext, dir processor.Direction) {
+func (s *LLMService) handleContext(ctx context.Context, convo *frames.LLMContext, dir processor.Direction) {
 	s.mu.Lock()
 	first := s.convo == nil
 	s.convo = convo
@@ -679,7 +679,7 @@ func (s *Service) handleContext(ctx context.Context, convo *frames.LLMContext, d
 
 // inferenceOnContextInitialization says whether the model answers the
 // conversation the session is seeded with.
-func (s *Service) inferenceOnContextInitialization() bool {
+func (s *LLMService) inferenceOnContextInitialization() bool {
 	return s.cfg.InferenceOnContextInitialization == nil || *s.cfg.InferenceOnContextInitialization
 }
 
@@ -689,7 +689,7 @@ func (s *Service) inferenceOnContextInitialization() bool {
 // again without one after the conversation was taken in, the conversation is
 // seeded again, so the new session has what the old one had before it takes
 // input. Otherwise the conversation has yet to arrive, and seeding waits for it.
-func (s *Service) handleSessionReady(ctx context.Context) {
+func (s *LLMService) handleSessionReady(ctx context.Context) {
 	s.traceSetup(ctx)
 	s.mu.Lock()
 	s.ready.Store(true)
@@ -725,7 +725,7 @@ func (s *Service) handleSessionReady(ctx context.Context) {
 //
 // A 2.5 model also requires the seed to end on a user turn, so a blank one is
 // added when it does not.
-func (s *Service) createInitialResponse(ctx context.Context, forReconnect bool) {
+func (s *LLMService) createInitialResponse(ctx context.Context, forReconnect bool) {
 	s.mu.Lock()
 	if !s.ready.Load() {
 		s.runWhenReady = true
@@ -787,7 +787,7 @@ func (s *Service) createInitialResponse(ctx context.Context, forReconnect bool) 
 // handleUserStoppedSpeaking starts the wait for the model's answer, and on a
 // 2.5 session seeded without being asked to answer, completes the turn so the
 // model answers with what it was seeded with in mind.
-func (s *Service) handleUserStoppedSpeaking(ctx context.Context) {
+func (s *LLMService) handleUserStoppedSpeaking(ctx context.Context) {
 	s.mu.Lock()
 	s.userIsSpeaking = false
 	s.preroll = nil
@@ -816,7 +816,7 @@ func (s *Service) handleUserStoppedSpeaking(ctx context.Context) {
 // Results are broadcast by the base; the downstream copy is observed here and
 // sent as it is produced, so a tool that reports progress reaches the model
 // while it is still working.
-func (s *Service) PushFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
+func (s *LLMService) PushFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
 	if r, ok := f.(*frames.FunctionCallResultFrame); ok && dir == processor.Downstream {
 		s.handleFunctionCallResult(ctx, r)
 	}
@@ -828,7 +828,7 @@ func (s *Service) PushFrame(ctx context.Context, f frames.Frame, dir processor.D
 // response that keeps the call open, which only a non-blocking call allows, so
 // this follows the same model gating as the rest of the asynchronous tool
 // support.
-func (s *Service) AcceptsIntermediateFunctionCallResults() bool {
+func (s *LLMService) AcceptsIntermediateFunctionCallResults() bool {
 	return s.supportsNonBlockingTools()
 }
 
@@ -836,7 +836,7 @@ func (s *Service) AcceptsIntermediateFunctionCallResults() bool {
 // on interruption on a session that takes no non-blocking calls: the
 // conversation freezes while the tool runs, so what the option asks for, the
 // conversation carrying on meanwhile, cannot happen.
-func (s *Service) reportUnsupportedAsyncTools(ctx context.Context, convo *frames.LLMContext) {
+func (s *LLMService) reportUnsupportedAsyncTools(ctx context.Context, convo *frames.LLMContext) {
 	if s.supportsNonBlockingTools() || s.asyncToolWarned.Load() {
 		return
 	}
@@ -865,7 +865,7 @@ const unnamedToolResult = "tool_call_result"
 
 // handleFunctionCallResult sends one result to the session, and says whether
 // the model should answer it.
-func (s *Service) handleFunctionCallResult(ctx context.Context, f *frames.FunctionCallResultFrame) {
+func (s *LLMService) handleFunctionCallResult(ctx context.Context, f *frames.FunctionCallResultFrame) {
 	final := f.Properties.Final()
 	s.mu.Lock()
 	name, known := s.toolNames[f.ToolCallID]
@@ -910,7 +910,7 @@ func (s *Service) handleFunctionCallResult(ctx context.Context, f *frames.Functi
 //
 // The messages are taken from this frame, not read from the conversation. The
 // user aggregator's realtimeHandleMessagesAppend explains why.
-func (s *Service) handleMessagesAppend(ctx context.Context, f *frames.LLMMessagesAppendFrame) {
+func (s *LLMService) handleMessagesAppend(ctx context.Context, f *frames.LLMMessagesAppendFrame) {
 	s.mu.Lock()
 	convo := s.convo
 	s.mu.Unlock()
@@ -938,7 +938,7 @@ func (s *Service) handleMessagesAppend(ctx context.Context, f *frames.LLMMessage
 }
 
 // completeTurn asks the model to answer the content it has been given.
-func (s *Service) completeTurn(ctx context.Context) {
+func (s *LLMService) completeTurn(ctx context.Context) {
 	if !s.ready.Load() {
 		return
 	}
@@ -952,7 +952,7 @@ func (s *Service) completeTurn(ctx context.Context) {
 // sendTurnComplete sends client content that completes the turn. The 3.x
 // models want that, but also run no inference without a realtime input, so one
 // follows.
-func (s *Service) sendTurnComplete(ctx context.Context, content map[string]any) {
+func (s *LLMService) sendTurnComplete(ctx context.Context, content map[string]any) {
 	if err := s.send(map[string]any{keyClientContent: content}); err != nil {
 		s.handleSendError(ctx, err)
 		return
@@ -966,7 +966,7 @@ func (s *Service) sendTurnComplete(ctx context.Context, content map[string]any) 
 
 // reconnect opens the session again, so its setup carries what the conversation
 // settled, and resumes it from the last handle the server gave.
-func (s *Service) reconnect(ctx context.Context) {
+func (s *LLMService) reconnect(ctx context.Context) {
 	s.connMu.Lock()
 	defer s.connMu.Unlock()
 	if s.stopped.Load() {
@@ -981,7 +981,7 @@ func (s *Service) reconnect(ctx context.Context) {
 
 // handleConnectionLost handles a session that dropped: it ends any reply the
 // drop cut off, then opens the session again or gives up.
-func (s *Service) handleConnectionLost(ctx context.Context, lost *wsutil.Conn, err error) {
+func (s *LLMService) handleConnectionLost(ctx context.Context, lost *wsutil.Conn, err error) {
 	s.mu.Lock()
 	current := s.conn == lost
 	s.mu.Unlock()
@@ -1002,7 +1002,7 @@ func (s *Service) handleConnectionLost(ctx context.Context, lost *wsutil.Conn, e
 // completed turn would be. Otherwise the service goes on believing the model
 // is answering, downstream processors never see the reply end, and an EndFrame
 // is held until its deferral runs out.
-func (s *Service) endCutOffBotTurn(ctx context.Context) bool {
+func (s *LLMService) endCutOffBotTurn(ctx context.Context) bool {
 	s.mu.Lock()
 	responding, endHeld := s.botResponding, s.deferredEnd != nil
 	s.mu.Unlock()
@@ -1026,7 +1026,7 @@ func (s *Service) endCutOffBotTurn(ctx context.Context) bool {
 // handleConnectionError opens a lost session again, unless sessions have been
 // lost maxConsecutiveFailures times in a row, which is reported as an error
 // instead.
-func (s *Service) handleConnectionError(ctx context.Context, lost *wsutil.Conn, err error) {
+func (s *LLMService) handleConnectionError(ctx context.Context, lost *wsutil.Conn, err error) {
 	s.mu.Lock()
 	s.consecutiveFailures++
 	failures := s.consecutiveFailures
@@ -1050,7 +1050,7 @@ func (s *Service) handleConnectionError(ctx context.Context, lost *wsutil.Conn, 
 
 // resetFailuresOnceStable forgets the sessions lost before, once the current
 // one has stayed up for stableConnection.
-func (s *Service) resetFailuresOnceStable() {
+func (s *LLMService) resetFailuresOnceStable() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.consecutiveFailures > 0 && !s.connectedAt.IsZero() && time.Since(s.connectedAt) >= stableConnection {
@@ -1064,7 +1064,7 @@ func (s *Service) resetFailuresOnceStable() {
 // servers and hard to recover from cleanly, so it is reported as an error
 // rather than retried. One failing because the session was closing, or was not
 // ready, is expected and ignored.
-func (s *Service) handleSendError(ctx context.Context, err error) {
+func (s *LLMService) handleSendError(ctx context.Context, err error) {
 	if s.stopped.Load() || !s.ready.Load() {
 		return
 	}
@@ -1081,7 +1081,7 @@ func (s *Service) handleSendError(ctx context.Context, err error) {
 //
 // Nothing prompts a reply afterwards: the Live API answers a tool response on
 // its own, unlike the sessions that have to be asked.
-func (s *Service) processCompletedCalls(ctx context.Context, convo *frames.LLMContext, send bool) {
+func (s *LLMService) processCompletedCalls(ctx context.Context, convo *frames.LLMContext, send bool) {
 	s.reportUnsupportedAsyncTools(ctx, convo)
 	for _, m := range convo.Messages() {
 		if async, ok := frames.ParseAsyncToolMessage(m); ok {
@@ -1117,7 +1117,7 @@ func (s *Service) processCompletedCalls(ctx context.Context, convo *frames.LLMCo
 
 // resultSeen reports whether the model has already been given this call's
 // result.
-func (s *Service) resultSeen(toolCallID string) bool {
+func (s *LLMService) resultSeen(toolCallID string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.sentResults[toolCallID]
@@ -1125,7 +1125,7 @@ func (s *Service) resultSeen(toolCallID string) bool {
 
 // recordResult marks a call's result as settled, so a conversation reported
 // again does not send it twice.
-func (s *Service) recordResult(toolCallID string) {
+func (s *LLMService) recordResult(toolCallID string) {
 	s.mu.Lock()
 	s.sentResults[toolCallID] = true
 	s.mu.Unlock()
@@ -1134,7 +1134,7 @@ func (s *Service) recordResult(toolCallID string) {
 // sendToolResult hands one call's final result to the session, for the model
 // to answer. The response names the function as well as the call, so the name
 // the call went out under is looked back up here.
-func (s *Service) sendToolResult(ctx context.Context, toolCallID, result string) {
+func (s *LLMService) sendToolResult(ctx context.Context, toolCallID, result string) {
 	s.mu.Lock()
 	name := s.toolNames[toolCallID]
 	s.mu.Unlock()
@@ -1146,7 +1146,7 @@ func (s *Service) sendToolResult(ctx context.Context, toolCallID, result string)
 // a non-blocking call allows. spoken says whether the model should address the
 // result; it is told to stay silent otherwise, so the result is context it can
 // draw on if the conversation turns that way.
-func (s *Service) sendToolResultAs(ctx context.Context, toolCallID, name, result string, final, spoken bool) {
+func (s *LLMService) sendToolResultAs(ctx context.Context, toolCallID, name, result string, final, spoken bool) {
 	payload := wire.FunctionResponseDict(result)
 	slog.DebugContext(ctx, "sending a tool result to the live session",
 		"service", s.Name(), "tool_call_id", toolCallID, "function", name)
@@ -1214,7 +1214,7 @@ func withScheduling(response any, scheduling string) any {
 // declarations, so there a synchronous tool cannot block, which is said once.
 //
 // See https://ai.google.dev/gemini-api/docs/live-api/tools#async-function-calling.
-func (s *Service) tagToolBehaviors(tools []map[string]any) {
+func (s *LLMService) tagToolBehaviors(tools []map[string]any) {
 	declareBlocking := toolsDefaultToNonBlocking(s.model()) && supportsBlockingTools(s.model())
 	for _, tool := range tools {
 		decls, ok := tool["functionDeclarations"].([]map[string]any)
@@ -1241,7 +1241,7 @@ func (s *Service) tagToolBehaviors(tools []map[string]any) {
 // warnSyncToolCannotBlock reports, once for the session, that a synchronous tool
 // will not pause the conversation on a model that runs every call without
 // waiting.
-func (s *Service) warnSyncToolCannotBlock(name string) {
+func (s *LLMService) warnSyncToolCannotBlock(name string) {
 	s.syncToolWarning.Do(func() {
 		slog.Warn("this model runs every function call without waiting for it, so a synchronous "+
 			"tool does not pause the conversation and the model may keep talking before its result arrives",
@@ -1250,7 +1250,7 @@ func (s *Service) warnSyncToolCannotBlock(name string) {
 }
 
 // runToolCalls runs the calls the model asked for in one message.
-func (s *Service) runToolCalls(ctx context.Context, tc *toolCall) {
+func (s *LLMService) runToolCalls(ctx context.Context, tc *toolCall) {
 	if tc == nil || len(tc.FunctionCalls) == 0 {
 		return
 	}
@@ -1293,7 +1293,7 @@ func (s *Service) runToolCalls(ctx context.Context, tc *toolCall) {
 // only inside the user's turn, the session discarding anything outside one, and
 // keeps the most recent audio outside a turn as the pre-roll to replay when the
 // next one starts.
-func (s *Service) sendAudio(ctx context.Context, pcm []byte, sampleRate, channels int) {
+func (s *LLMService) sendAudio(ctx context.Context, pcm []byte, sampleRate, channels int) {
 	if len(pcm) == 0 || s.audioPaused.Load() || !s.ready.Load() || !s.readyForInput.Load() {
 		return
 	}
@@ -1317,7 +1317,7 @@ func (s *Service) sendAudio(ctx context.Context, pcm []byte, sampleRate, channel
 }
 
 // sendAudioBlob sends one chunk of PCM as realtime input.
-func (s *Service) sendAudioBlob(ctx context.Context, pcm []byte, sampleRate int) {
+func (s *LLMService) sendAudioBlob(ctx context.Context, pcm []byte, sampleRate int) {
 	s.sendRealtimeInput(ctx, map[string]any{
 		"audio": map[string]any{
 			"data":     base64.StdEncoding.EncodeToString(pcm),
@@ -1327,7 +1327,7 @@ func (s *Service) sendAudioBlob(ctx context.Context, pcm []byte, sampleRate int)
 }
 
 // sendRealtimeInput sends one realtime input message.
-func (s *Service) sendRealtimeInput(ctx context.Context, input map[string]any) {
+func (s *LLMService) sendRealtimeInput(ctx context.Context, input map[string]any) {
 	if err := s.send(map[string]any{keyRealtimeInput: input}); err != nil {
 		s.handleSendError(ctx, err)
 	}
@@ -1337,7 +1337,7 @@ func (s *Service) sendRealtimeInput(ctx context.Context, input map[string]any) {
 // detection off, the session is told so, and the pre-roll is replayed inside
 // the turn: the speech that started it arrived, and was kept, before the turn
 // was detected.
-func (s *Service) handleUserStartedSpeaking(ctx context.Context) {
+func (s *LLMService) handleUserStartedSpeaking(ctx context.Context) {
 	s.mu.Lock()
 	s.userIsSpeaking = true
 	s.mu.Unlock()
@@ -1349,7 +1349,7 @@ func (s *Service) handleUserStartedSpeaking(ctx context.Context) {
 }
 
 // flushPreroll sends the pre-roll, then clears it.
-func (s *Service) flushPreroll(ctx context.Context) {
+func (s *LLMService) flushPreroll(ctx context.Context) {
 	s.mu.Lock()
 	pcm, rate := s.preroll, s.prerollRate
 	s.preroll = nil
@@ -1364,7 +1364,7 @@ func (s *Service) flushPreroll(ctx context.Context) {
 // pipeline's voice activity detection, which is the speech its turn detection
 // takes in before confirming a turn, plus a margin. A pre-roll pinned in the
 // Config is left as it is.
-func (s *Service) handleSpeechControlParams(f *frames.SpeechControlParamsFrame) {
+func (s *LLMService) handleSpeechControlParams(f *frames.SpeechControlParamsFrame) {
 	if f.VADParams == nil {
 		return
 	}
@@ -1378,7 +1378,7 @@ func (s *Service) handleSpeechControlParams(f *frames.SpeechControlParamsFrame) 
 
 // sendUserText sends the user's text as realtime input, in step with their
 // audio. The API infers the end of the turn from the user's activity.
-func (s *Service) sendUserText(ctx context.Context, text string) {
+func (s *LLMService) sendUserText(ctx context.Context, text string) {
 	if !s.ready.Load() || !s.readyForInput.Load() {
 		return
 	}
@@ -1386,10 +1386,10 @@ func (s *Service) sendUserText(ctx context.Context, text string) {
 }
 
 // SetAudioInputPaused stops, or resumes, user audio reaching the session.
-func (s *Service) SetAudioInputPaused(paused bool) { s.audioPaused.Store(paused) }
+func (s *LLMService) SetAudioInputPaused(paused bool) { s.audioPaused.Store(paused) }
 
 // send marshals v and writes it as a text frame, serializing concurrent writes.
-func (s *Service) send(v any) error {
+func (s *LLMService) send(v any) error {
 	data, err := json.Marshal(v)
 	if err != nil {
 		return err
@@ -1406,7 +1406,7 @@ func (s *Service) send(v any) error {
 }
 
 // disconnect cancels the session, closes the socket, and waits for the read loop.
-func (s *Service) disconnect() {
+func (s *LLMService) disconnect() {
 	s.StopAllMetrics(context.Background())
 	// Nothing is going to report this session finished now, so a turn held open
 	// waiting for it is dropped rather than left with a watch running on it.
@@ -1611,7 +1611,7 @@ type textPayload struct {
 }
 
 // readLoop reads server messages until the connection is closed or canceled.
-func (s *Service) readLoop(conn *wsutil.Conn, connCtx context.Context) {
+func (s *LLMService) readLoop(conn *wsutil.Conn, connCtx context.Context) {
 	defer s.wg.Done()
 	for {
 		_, data, err := conn.Read(connCtx)
@@ -1634,7 +1634,7 @@ func (s *Service) readLoop(conn *wsutil.Conn, connCtx context.Context) {
 }
 
 // handle maps a server message onto downstream pipeline frames.
-func (s *Service) handle(ctx context.Context, msg serverMessage) {
+func (s *LLMService) handle(ctx context.Context, msg serverMessage) {
 	if msg.SetupComplete != nil {
 		s.handleSessionReady(ctx)
 	}
@@ -1667,7 +1667,7 @@ func (s *Service) handle(ctx context.Context, msg serverMessage) {
 //
 // idle and statusKnown are what the model said about whether it has finished
 // working, which decides whether a completed turn ends the reply.
-func (s *Service) handleServerContent(ctx context.Context, msg serverMessage, idle, statusKnown bool) {
+func (s *LLMService) handleServerContent(ctx context.Context, msg serverMessage, idle, statusKnown bool) {
 	sc := msg.ServerContent
 	if sc.Interrupted {
 		// The bot was cut off, so the pipeline is interrupted. No user-speaking
@@ -1725,7 +1725,7 @@ func (s *Service) handleServerContent(ctx context.Context, msg serverMessage, id
 }
 
 // handleUsage reports the accounting that arrives with the turn it belongs to.
-func (s *Service) handleUsage(ctx context.Context, msg serverMessage) {
+func (s *LLMService) handleUsage(ctx context.Context, msg serverMessage) {
 	_ = s.StartLLMUsageMetrics(ctx, msg.UsageMetadata.tokenUsage())
 }
 
@@ -1733,7 +1733,7 @@ func (s *Service) handleUsage(ctx context.Context, msg serverMessage) {
 // reply owed for appended content, which the user's turn makes one of its own,
 // and the response in progress. No response end goes with it: the
 // interruption already tells the assistant aggregator the response is over.
-func (s *Service) handleInterruption(ctx context.Context) {
+func (s *LLMService) handleInterruption(ctx context.Context) {
 	s.discardHeldTurn()
 	s.mu.Lock()
 	s.contentAwaitingResponse = false
@@ -1749,7 +1749,7 @@ func (s *Service) handleInterruption(ctx context.Context) {
 
 // setBotRespondingLocked records whether the model is answering and reports
 // whether that changed. Call it with mu held.
-func (s *Service) setBotRespondingLocked(responding bool) bool {
+func (s *LLMService) setBotRespondingLocked(responding bool) bool {
 	if s.botResponding == responding {
 		return false
 	}
@@ -1760,7 +1760,7 @@ func (s *Service) setBotRespondingLocked(responding bool) bool {
 // startResponse opens the model's response downstream if it is not open yet:
 // with a TTSStartedFrame when it is spoken, so what follows reaches the
 // assistant aggregator as the bot's speech.
-func (s *Service) startResponse(ctx context.Context, spoken bool) {
+func (s *LLMService) startResponse(ctx context.Context, spoken bool) {
 	s.mu.Lock()
 	started := s.setBotRespondingLocked(true)
 	s.mu.Unlock()
@@ -1775,7 +1775,7 @@ func (s *Service) startResponse(ctx context.Context, spoken bool) {
 
 // handleModelTurn takes the first part of what the model produced: its text, in
 // the text modality, as the response or as a thought, and its audio.
-func (s *Service) handleModelTurn(ctx context.Context, parts []part, grounding *groundingMetadata) {
+func (s *LLMService) handleModelTurn(ctx context.Context, parts []part, grounding *groundingMetadata) {
 	if len(parts) == 0 {
 		return
 	}
@@ -1828,7 +1828,7 @@ func (s *Service) handleModelTurn(ctx context.Context, parts []part, grounding *
 
 // handleTurnComplete closes the model's response: a spoken one with a
 // TTSStoppedFrame as well.
-func (s *Service) handleTurnComplete(ctx context.Context) {
+func (s *LLMService) handleTurnComplete(ctx context.Context) {
 	s.mu.Lock()
 	text := s.botText
 	s.botText = ""
@@ -1854,7 +1854,7 @@ func (s *Service) handleTurnComplete(ctx context.Context) {
 // deferEnd holds an EndFrame while the model is answering, reporting whether it
 // did. The frame is processed once the answer finishes, or after
 // endFrameDeferral if it never does.
-func (s *Service) deferEnd(ctx context.Context, end *frames.EndFrame) bool {
+func (s *LLMService) deferEnd(ctx context.Context, end *frames.EndFrame) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.botResponding {
@@ -1873,7 +1873,7 @@ func (s *Service) deferEnd(ctx context.Context, end *frames.EndFrame) bool {
 
 // releaseDeferredEnd processes an EndFrame held while the model answered, by
 // queuing it to this service again.
-func (s *Service) releaseDeferredEnd(ctx context.Context) {
+func (s *LLMService) releaseDeferredEnd(ctx context.Context) {
 	s.mu.Lock()
 	end := s.deferredEnd
 	s.deferredEnd = nil
@@ -1888,7 +1888,7 @@ func (s *Service) releaseDeferredEnd(ctx context.Context) {
 }
 
 // stopEndDeferralLocked stops the release timer. Call it with mu held.
-func (s *Service) stopEndDeferralLocked() {
+func (s *LLMService) stopEndDeferralLocked() {
 	if s.endDeferral != nil {
 		s.endDeferral.Stop()
 		s.endDeferral = nil
@@ -1897,7 +1897,7 @@ func (s *Service) stopEndDeferralLocked() {
 
 // pushGrounding reports the web search an answer drew on: the suggestions to
 // show beside it, and each page found with the parts of the answer it supports.
-func (s *Service) pushGrounding(ctx context.Context, g *groundingMetadata, searchResult string) {
+func (s *LLMService) pushGrounding(ctx context.Context, g *groundingMetadata, searchResult string) {
 	rendered := ""
 	if g.SearchEntryPoint != nil {
 		rendered = g.SearchEntryPoint.RenderedContent
@@ -1935,7 +1935,7 @@ const transcriptFlushAfter = 500 * time.Millisecond
 // handleInputTranscription assembles the user's words into sentences. They
 // arrive as single words or short phrases, so they are held until a sentence
 // ends, and sent on unfinished if no more arrive for transcriptFlushAfter.
-func (s *Service) handleInputTranscription(ctx context.Context, text string) {
+func (s *LLMService) handleInputTranscription(ctx context.Context, text string) {
 	if text == "" {
 		return
 	}
@@ -1966,7 +1966,7 @@ func (s *Service) handleInputTranscription(ctx context.Context, text string) {
 
 // flushUserTranscript sends on the user's words held without completing a
 // sentence, once they have stopped coming.
-func (s *Service) flushUserTranscript(ctx context.Context) {
+func (s *LLMService) flushUserTranscript(ctx context.Context) {
 	s.mu.Lock()
 	text := s.userTranscript
 	s.userTranscript = ""
@@ -1978,7 +1978,7 @@ func (s *Service) flushUserTranscript(ctx context.Context) {
 }
 
 // stopTranscriptFlushLocked stops the pending flush. Call it with mu held.
-func (s *Service) stopTranscriptFlushLocked() {
+func (s *LLMService) stopTranscriptFlushLocked() {
 	if s.transcriptFlush != nil {
 		s.transcriptFlush.Stop()
 		s.transcriptFlush = nil
@@ -1987,7 +1987,7 @@ func (s *Service) stopTranscriptFlushLocked() {
 
 // pushUserTranscript sends the user's words upstream, where the user aggregator
 // is: everything downstream of this service is the reply to them.
-func (s *Service) pushUserTranscript(ctx context.Context, text string) {
+func (s *LLMService) pushUserTranscript(ctx context.Context, text string) {
 	_ = s.PushFrame(ctx, frames.NewTranscriptionFrame(text, "", frames.NowTimestamp()), processor.Upstream)
 }
 
@@ -1996,7 +1996,7 @@ func (s *Service) pushUserTranscript(ctx context.Context, text string) {
 // response. They go out as an LLMTextFrame, which RTVI reports as the bot's
 // text but which is kept out of the conversation, and as a TTSTextFrame, which
 // is what the assistant aggregator records the spoken answer from.
-func (s *Service) handleOutputTranscription(ctx context.Context, text string, grounding *groundingMetadata) {
+func (s *LLMService) handleOutputTranscription(ctx context.Context, text string, grounding *groundingMetadata) {
 	if text == "" {
 		return
 	}
@@ -2025,7 +2025,7 @@ const heldTurnTimeout = 30 * time.Second
 
 // holdTurn keeps the bot's turn open past a completed generation, because the
 // model is still reasoning in the background and has more to say.
-func (s *Service) holdTurn(ctx context.Context) {
+func (s *LLMService) holdTurn(ctx context.Context) {
 	s.mu.Lock()
 	s.turnHeld = true
 	s.mu.Unlock()
@@ -2037,7 +2037,7 @@ func (s *Service) holdTurn(ctx context.Context) {
 // restartHeldTurnWatchdog starts the watch again, for a turn being held. It is
 // called on every server message, since one arriving is the session proving it
 // is still there.
-func (s *Service) restartHeldTurnWatchdog(ctx context.Context) {
+func (s *LLMService) restartHeldTurnWatchdog(ctx context.Context) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.turnHeld {
@@ -2052,7 +2052,7 @@ func (s *Service) restartHeldTurnWatchdog(ctx context.Context) {
 }
 
 // stopHeldTurnWatchdogLocked stops the watch. Call it with mu held.
-func (s *Service) stopHeldTurnWatchdogLocked() {
+func (s *LLMService) stopHeldTurnWatchdogLocked() {
 	if s.heldTurnWatchdog != nil {
 		s.heldTurnWatchdog.Stop()
 		s.heldTurnWatchdog = nil
@@ -2062,7 +2062,7 @@ func (s *Service) stopHeldTurnWatchdogLocked() {
 // completeHeldTurn closes a turn that was held while the model worked. Taking
 // the hold and clearing it happen together, so a status arriving as the watchdog
 // fires closes the turn once between them.
-func (s *Service) completeHeldTurn(ctx context.Context) {
+func (s *LLMService) completeHeldTurn(ctx context.Context) {
 	s.mu.Lock()
 	held := s.turnHeld
 	s.turnHeld = false
@@ -2076,7 +2076,7 @@ func (s *Service) completeHeldTurn(ctx context.Context) {
 
 // discardHeldTurn drops a held turn without closing it, for an interruption,
 // which has ended the turn already, and for a generation that supersedes it.
-func (s *Service) discardHeldTurn() {
+func (s *LLMService) discardHeldTurn() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.turnHeld = false
@@ -2086,14 +2086,14 @@ func (s *Service) discardHeldTurn() {
 // CanGenerateMetrics reports that this service times the conversation and reports
 // the result, so the pipeline counts it when it collects the processors that
 // report metrics.
-func (s *Service) CanGenerateMetrics() bool { return true }
+func (s *LLMService) CanGenerateMetrics() bool { return true }
 
 // ServiceMetadataFrame describes this service to the pipeline as a realtime one.
 // The user aggregator reads that and stops holding turns open for transcripts,
 // which this service is not answering from, and writes the user's message when
 // the answer starts rather than when the turn ends, because the transcript for
 // what the user said arrives late.
-func (s *Service) ServiceMetadataFrame() frames.ServiceMetadata {
+func (s *LLMService) ServiceMetadataFrame() frames.ServiceMetadata {
 	// The API reports an interruption but no turn starting or ending.
 	s.WarnIfRealtimeServiceEmitsNoTurnFrames(false)
 	f := frames.NewLLMServiceMetadataFrame(s.Name())

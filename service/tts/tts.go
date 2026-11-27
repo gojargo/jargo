@@ -345,9 +345,13 @@ func (b *Base) model() string {
 	return b.meta.Model
 }
 
-// New builds a TTS Base named name driven by syn. The concrete service passes
-// itself as syn and embeds the returned Base.
-func New(name string, syn Synthesizer) *Base {
+// New builds a TTS Base named name driven by syn. A service type that embeds the
+// returned Base passes itself with WithSelf.
+func New(name string, syn Synthesizer, opts ...Option) *Base {
+	var o options
+	for _, opt := range opts {
+		opt(&o)
+	}
 	b := &Base{syn: syn, zeroAudioLimit: defaultZeroAudioContextLimit, stopFrameTimeout: defaultStopFrameTimeout}
 	// Sentences are found in the language the service speaks, as the settings
 	// name it before the provider names it its own way, and English when they
@@ -362,7 +366,11 @@ func New(name string, syn Synthesizer) *Base {
 	if t, ok := syn.(TrailingSpaceRequirer); ok {
 		b.appendTrailingSpace = t.RequiresTrailingSpace()
 	}
-	b.Base = service.New(name, b)
+	var self processor.Processor = b
+	if o.self != nil {
+		self = o.self
+	}
+	b.Base = service.New(name, self)
 	// A provider is handed the language its settings start with as the caller
 	// gave it, and it is named the provider's way here, as an update's is: the
 	// store holds the provider's code from the start.

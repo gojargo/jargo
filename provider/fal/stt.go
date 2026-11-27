@@ -15,13 +15,26 @@ import (
 	"github.com/gojargo/jargo/service/stt"
 )
 
+// STTService is the Fal speech-to-text service NewSTT builds.
+type STTService struct {
+	*stt.SegmentService
+}
+
 // NewSTT builds a Fal Wizper transcription service. It is segmented: a turn
 // detector upstream delimits each utterance, transcribed in one request.
-func NewSTT(cfg Config) *stt.SegmentService {
+func NewSTT(cfg Config) *STTService {
+	s := &STTService{}
+	s.SegmentService = buildSTT(cfg, stt.WithSelf(s))
+	return s
+}
+
+// buildSTT builds the service NewSTT returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildSTT(cfg Config, opts ...stt.Option) *stt.SegmentService {
 	if cfg.Endpoint == "" {
 		cfg.Endpoint = defaultEndpoint
 	}
-	return stt.NewSegment("FalSTT", &transcriber{cfg: cfg, http: &http.Client{}}, cfg.SampleRate)
+	return stt.NewSegment("FalSTT", &transcriber{cfg: cfg, http: &http.Client{}}, cfg.SampleRate, opts...)
 }
 
 type transcriber struct {

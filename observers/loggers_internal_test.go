@@ -15,10 +15,10 @@ import (
 // simply go unreported, which reads as a quiet pipeline rather than a defect.
 var (
 	_ llmService = (*llm.Base)(nil)
-	_ llmService = (*openairealtime.Service)(nil)
-	_ llmService = (*googlelive.Service)(nil)
-	_ llmService = (*awsnovasonic.Service)(nil)
-	_ llmService = (*xairealtime.Service)(nil)
+	_ llmService = (*openairealtime.LLMService)(nil)
+	_ llmService = (*googlelive.LLMService)(nil)
+	_ llmService = (*awsnovasonic.LLMService)(nil)
+	_ llmService = (*xairealtime.LLMService)(nil)
 
 	_ sttService = (*stt.StreamService)(nil)
 	_ sttService = (*stt.SegmentService)(nil)

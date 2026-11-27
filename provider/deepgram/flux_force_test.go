@@ -254,10 +254,10 @@ func TestForceEndTurnIsInertOnAClosedSession(t *testing.T) {
 // asks nothing of a service with no session open, and refuses a service that
 // is not Flux.
 func TestForceEndTurnNeedsAFluxSession(t *testing.T) {
-	if err := ForceEndTurn(NewFluxSTT(FluxConfig{APIKey: "k"})); err != nil {
+	if err := ForceEndTurn(NewFluxSTT(FluxConfig{APIKey: "k"}).StreamService); err != nil {
 		t.Errorf("ForceEndTurn with no session = %v, want nothing done", err)
 	}
-	if err := ForceEndTurn(NewSTT(Config{APIKey: "k"})); !errors.Is(err, errNotFlux) {
+	if err := ForceEndTurn(NewSTT(Config{APIKey: "k"}).StreamService); !errors.Is(err, errNotFlux) {
 		t.Errorf("ForceEndTurn on a listen service = %v, want it refused", err)
 	}
 }

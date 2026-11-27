@@ -54,8 +54,8 @@ func (s apiKeyShaper) Authorize(_ context.Context, req *http.Request) error {
 	return nil
 }
 
-// Service is a streaming Gemini LLM processor.
-type Service struct {
+// LLMService is a streaming Gemini LLM processor.
+type LLMService struct {
 	*llm.Base
 	// adapter converts the conversation into the request Gemini takes.
 	adapter Adapter
@@ -68,21 +68,21 @@ type Service struct {
 }
 
 // NewLLM builds a Gemini LLM service.
-func NewLLM(cfg Config) *Service {
+func NewLLM(cfg Config) *LLMService {
 	return NewShapedLLM("GoogleLLM", apiKeyShaper{apiKey: cfg.APIKey}, cfg)
 }
 
 // NewShapedLLM builds a Gemini LLM service whose requests are addressed and
 // authorized by shaper. It is the base for deployments that do not use the
 // Gemini API's own URL layout or api-key auth; name is the processor label.
-func NewShapedLLM(name string, shaper RequestShaper, cfg Config) *Service {
+func NewShapedLLM(name string, shaper RequestShaper, cfg Config) *LLMService {
 	if cfg.Model == "" {
 		cfg.Model = defaultModel
 	}
 	if cfg.MaxTokens == 0 {
 		cfg.MaxTokens = defaultMaxTokens
 	}
-	s := &Service{cfg: cfg, live: newLLMSettings(cfg), http: &http.Client{}, shaper: shaper}
+	s := &LLMService{cfg: cfg, live: newLLMSettings(cfg), http: &http.Client{}, shaper: shaper}
 	s.Base = llm.New(name, s)
 	s.Base.SetModel(cfg.Model)
 	s.warnIfThinkingBudgetIgnored()
@@ -163,7 +163,7 @@ func (u usageMetadata) tokenUsage() frames.LLMTokenUsage {
 }
 
 // Generate streams a Gemini completion, emitting each text delta.
-func (s *Service) Generate(ctx context.Context, convo *frames.LLMContext, emit llm.Emit) (err error) {
+func (s *LLMService) Generate(ctx context.Context, convo *frames.LLMContext, emit llm.Emit) (err error) {
 	rs := &responseStream{s: s, ctx: ctx, text: emit}
 	defer func() { err = rs.reportUsage(err) }()
 	cfg := s.requestConfig()
@@ -180,7 +180,7 @@ func (s *Service) Generate(ctx context.Context, convo *frames.LLMContext, emit l
 
 // RunInference answers the conversation once, off to the side of the pipeline:
 // no streaming, no frames, just the text. It implements llm.Inferencer.
-func (s *Service) RunInference(
+func (s *LLMService) RunInference(
 	ctx context.Context, convo *frames.LLMContext, opts llm.InferenceOptions,
 ) (string, error) {
 	// The call's own instruction, or else the service's: an inference is still
@@ -228,7 +228,7 @@ func (s *Service) RunInference(
 // answerText reads the answer out of a one-shot response, logging why the model
 // stopped when it stopped for a notable reason. A withheld answer reads as no
 // text, and the log says why.
-func (s *Service) answerText(answer genChunk) string {
+func (s *LLMService) answerText(answer genChunk) string {
 	if len(answer.Candidates) > 0 {
 		s.handleFinishReason(answer.Candidates[0].FinishReason)
 	}
@@ -244,7 +244,7 @@ func (s *Service) answerText(answer genChunk) string {
 }
 
 // SupportsResponseSchema implements llm.ResponseSchemaSupporter.
-func (s *Service) SupportsResponseSchema() bool { return true }
+func (s *LLMService) SupportsResponseSchema() bool { return true }
 
 // modelVersion reads the version out of a Gemini model id: "gemini-2.5-flash"
 // is 2.5 and "gemini-2.0-flash" 2.0.
@@ -255,7 +255,7 @@ var modelVersion = regexp.MustCompile(`gemini(?:-[a-z]+)*-(\d+)(?:\.(\d+))?`)
 // ModelSupportsResponseSchema implements llm.ResponseSchemaSupporter. Gemini
 // takes a JSON schema from the 2.5 models on. A model id without a version is
 // assumed to support it.
-func (s *Service) ModelSupportsResponseSchema(model string) bool {
+func (s *LLMService) ModelSupportsResponseSchema(model string) bool {
 	m := modelVersion.FindStringSubmatch(model)
 	if m == nil {
 		return true
@@ -267,10 +267,10 @@ func (s *Service) ModelSupportsResponseSchema(model string) bool {
 
 // genConfig builds the generationConfig block from the settings as they
 // stand.
-func (s *Service) genConfig() map[string]any { return s.genConfigFor(s.requestConfig()) }
+func (s *LLMService) genConfig() map[string]any { return s.genConfigFor(s.requestConfig()) }
 
 // genConfigFor builds the generationConfig block from cfg's controls.
-func (s *Service) genConfigFor(cfg Config) map[string]any {
+func (s *LLMService) genConfigFor(cfg Config) map[string]any {
 	g := map[string]any{"maxOutputTokens": cfg.MaxTokens}
 	if cfg.Temperature != nil {
 		g["temperature"] = *cfg.Temperature
@@ -329,7 +329,7 @@ func ThinkingParams(t *ThinkingConfig) map[string]any {
 // left as it is, and so is every one when UseProviderThinkingDefault is set. The
 // first request for each model logs the setting sent, or that the model runs at
 // Google's default, warning for an unlisted model that can think.
-func (s *Service) applyThinkingDefault(g map[string]any, model string) {
+func (s *LLMService) applyThinkingDefault(g map[string]any, model string) {
 	if _, set := g[keyThinkingConfig]; set {
 		return
 	}
@@ -358,7 +358,7 @@ func thinkingSetting(thinking map[string]any) string {
 // request varies by model and by backend, and a refusal names no field, so this
 // warning is the only signal there is. It reads the settings as they stand, so
 // it is run again when an update changes the model or the thinking.
-func (s *Service) warnIfThinkingBudgetIgnored() {
+func (s *LLMService) warnIfThinkingBudgetIgnored() {
 	cfg := s.requestConfig()
 	if cfg.Thinking == nil || cfg.Thinking.Budget == nil {
 		return
@@ -375,7 +375,7 @@ func (s *Service) warnIfThinkingBudgetIgnored() {
 
 // UpdateSettings re-checks the thinking configuration against an update that
 // changed the model or the thinking. It implements llm.SettingsUpdater.
-func (s *Service) UpdateSettings(_ context.Context, changed settings.Changed) error {
+func (s *LLMService) UpdateSettings(_ context.Context, changed settings.Changed) error {
 	if changed.Has("model") || changed.Has("thinking") {
 		s.warnIfThinkingBudgetIgnored()
 	}
@@ -387,7 +387,7 @@ func (s *Service) UpdateSettings(_ context.Context, changed settings.Changed) er
 // refused, or the output ran into the token limit. Whatever text did arrive is
 // still passed on, so without this the turn simply ends short with nothing said
 // about why.
-func (s *Service) handleFinishReason(reason string) {
+func (s *LLMService) handleFinishReason(reason string) {
 	switch reason {
 	case "", "STOP", "FINISH_REASON_UNSPECIFIED":
 		return
@@ -425,14 +425,14 @@ func supportsPrefill(model string) bool {
 
 // requestBody builds the generateContent body from the settings as they stand,
 // optionally advertising tools.
-func (s *Service) requestBody(
+func (s *LLMService) requestBody(
 	convo *frames.LLMContext, opts adapter.Options, withTools bool,
 ) (map[string]any, error) {
 	return s.requestBodyFor(s.requestConfig(), convo, opts, withTools)
 }
 
 // requestBodyFor builds the generateContent body from cfg.
-func (s *Service) requestBodyFor(
+func (s *LLMService) requestBodyFor(
 	cfg Config, convo *frames.LLMContext, opts adapter.Options, withTools bool,
 ) (map[string]any, error) {
 	// A model that cannot continue a trailing model turn rejects the request
@@ -463,7 +463,7 @@ func (s *Service) requestBodyFor(
 
 // newRequestTo marshals reqBody and builds the request to model, streaming or
 // not.
-func (s *Service) newRequestTo(
+func (s *LLMService) newRequestTo(
 	ctx context.Context, model string, reqBody map[string]any, stream bool,
 ) (*http.Request, error) {
 	body, err := json.Marshal(reqBody)
@@ -487,7 +487,7 @@ func (s *Service) newRequestTo(
 // text, thoughts and thought signatures go downstream as frames, and each
 // function call goes to tool.
 type responseStream struct {
-	s   *Service
+	s   *LLMService
 	ctx context.Context //nolint:containedctx // scoped to one response
 	// text receives each chunk of the answer.
 	text func(string) error
@@ -616,7 +616,7 @@ func (r *responseStream) keepThoughtSignature(p genPart, callID string) error {
 // streamChunks issues req and hands each chunk of the streamed answer to rs,
 // bounding how long the model may go quiet for and re-issuing a request that
 // never began answering once, when RetryOnTimeout asks for it.
-func (s *Service) streamChunks(req *http.Request, rs *responseStream) error {
+func (s *LLMService) streamChunks(req *http.Request, rs *responseStream) error {
 	return stream.WithRetry(req, stream.Config{
 		Client:         s.http,
 		IdleTimeout:    s.cfg.streamIdleTimeout(),
@@ -665,7 +665,7 @@ func parseChunk(data string) (genChunk, bool) {
 // the sink as they arrive and reports each functionCall the model produces. The
 // conversation's tools are sent on the request, and any tool turns already in
 // the context are replayed as functionCall / functionResponse parts.
-func (s *Service) GenerateWithTools(ctx context.Context, convo *frames.LLMContext, sink llm.Sink) (err error) {
+func (s *LLMService) GenerateWithTools(ctx context.Context, convo *frames.LLMContext, sink llm.Sink) (err error) {
 	rs := &responseStream{s: s, ctx: ctx, text: sink.Text, tool: sink.Tool}
 	defer func() { err = rs.reportUsage(err) }()
 	cfg := s.requestConfig()
@@ -685,16 +685,16 @@ func (s *Service) GenerateWithTools(ctx context.Context, convo *frames.LLMContex
 // LLMAdapter returns the adapter this service converts through, so the base can
 // add the tools it implements itself to what every request advertises. It
 // implements llm.AdapterHolder.
-func (s *Service) LLMAdapter() llm.BuiltinToolHolder { return &s.adapter }
+func (s *LLMService) LLMAdapter() llm.BuiltinToolHolder { return &s.adapter }
 
 // MessagesForLogging renders the conversation as this provider will see it, for
 // the generation span. It implements llm.TraceRenderer.
-func (s *Service) MessagesForLogging(convo *frames.LLMContext) []map[string]any {
+func (s *LLMService) MessagesForLogging(convo *frames.LLMContext) []map[string]any {
 	return s.adapter.MessagesForLogging(convo)
 }
 
 // ToolsForLogging renders the toolset as this provider will see it, for the
 // generation span. It implements llm.TraceRenderer.
-func (s *Service) ToolsForLogging(schema frames.ToolsSchema) []any {
+func (s *LLMService) ToolsForLogging(schema frames.ToolsSchema) []any {
 	return adapter.ToolsForLogging(&s.adapter, schema)
 }

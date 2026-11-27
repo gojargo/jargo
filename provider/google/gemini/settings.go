@@ -56,11 +56,11 @@ func newLLMSettings(cfg Config) *LLMSettings {
 
 // Settings returns the service's runtime-updatable settings, implementing
 // llm.SettingsHolder.
-func (s *Service) Settings() any { return s.live }
+func (s *LLMService) Settings() any { return s.live }
 
 // requestConfig is the service's config with the live settings in place of
 // what they replace, read whole: it is what one request is built from.
-func (s *Service) requestConfig() Config {
+func (s *LLMService) requestConfig() Config {
 	cfg := s.cfg
 	s.ReadSettings(func() {
 		l := s.live

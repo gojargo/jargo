@@ -82,7 +82,7 @@ func TestRunHTTPTTSSuccess(t *testing.T) {
 	f := newHTTPBland(t, pcmResponse(payload))
 	b := NewHTTPTTS(HTTPTTSConfig{APIKey: "test-key", URL: f.base + "/", SampleRate: 24000})
 
-	down, _ := runTest(t, b, queue(frames.NewTTSSpeakFrame("Hello from Bland.")))
+	down, _ := runTest(t, b.Base, queue(frames.NewTTSSpeakFrame("Hello from Bland.")))
 
 	if !hasFrame[*frames.TTSStartedFrame](down) || !hasFrame[*frames.TTSStoppedFrame](down) {
 		t.Errorf("frames = %v, want started and stopped", down)
@@ -119,7 +119,7 @@ func TestRunHTTPTTSSuccess(t *testing.T) {
 // auto_formatting reaches the /v2/tts body when set.
 func TestHTTPTTSSendsAutoFormatting(t *testing.T) {
 	f := newHTTPBland(t, pcmResponse(pcmBytes(4096)))
-	runTest(t, NewHTTPTTS(HTTPTTSConfig{APIKey: "k", URL: f.base, SampleRate: 24000, AutoFormatting: new(true)}),
+	runTest(t, NewHTTPTTS(HTTPTTSConfig{APIKey: "k", URL: f.base, SampleRate: 24000, AutoFormatting: new(true)}).Base,
 		queue(frames.NewTTSSpeakFrame("Call 7327412065.")))
 
 	if got := f.firstPayload(t)["auto_formatting"]; got != true {
@@ -131,7 +131,7 @@ func TestHTTPTTSSendsAutoFormatting(t *testing.T) {
 func TestHTTPTTSResamplesUnsupportedPipelineRate(t *testing.T) {
 	payload := pcmBytes(4800)
 	f := newHTTPBland(t, pcmResponse(payload))
-	down, _ := runTest(t, NewHTTPTTS(HTTPTTSConfig{APIKey: "k", URL: f.base, SampleRate: 22050}),
+	down, _ := runTest(t, NewHTTPTTS(HTTPTTSConfig{APIKey: "k", URL: f.base, SampleRate: 22050}).Base,
 		queue(frames.NewTTSSpeakFrame("Hi.")))
 
 	if got := sampleRateOf(f.firstPayload(t)); got != float64(48000) {
@@ -163,7 +163,7 @@ func TestHTTPTTSReassemblesAudioSplitAcrossChunks(t *testing.T) {
 			start = end
 		}
 	})
-	down, _ := runTest(t, NewHTTPTTS(HTTPTTSConfig{APIKey: "k", URL: f.base, SampleRate: 24000}),
+	down, _ := runTest(t, NewHTTPTTS(HTTPTTSConfig{APIKey: "k", URL: f.base, SampleRate: 24000}).Base,
 		queue(frames.NewTTSSpeakFrame("Hi.")))
 
 	if got := audioOf(down); !bytes.Equal(got, payload) {
@@ -227,7 +227,7 @@ func TestHTTPTTSErrorResponse(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newHTTPBland(t, tc.respond)
-			_, up := runTest(t, NewHTTPTTS(HTTPTTSConfig{APIKey: "k", URL: f.base, SampleRate: 24000}),
+			_, up := runTest(t, NewHTTPTTS(HTTPTTSConfig{APIKey: "k", URL: f.base, SampleRate: 24000}).Base,
 				queue(frames.NewTTSSpeakFrame("Hi.")))
 
 			errs := errorsOf(up)

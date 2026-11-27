@@ -20,7 +20,7 @@ func (f *fakeSink) Text(t string) error          { f.text.WriteString(t); return
 func (f *fakeSink) Tool(c frames.ToolCall) error { f.calls = append(f.calls, c); return nil }
 
 // mustBody builds a request body and fails the test if the conversion did.
-func mustBody(t *testing.T, s *Service, convo *frames.LLMContext) map[string]any {
+func mustBody(t *testing.T, s *LLMService, convo *frames.LLMContext) map[string]any {
 	t.Helper()
 	body, err := s.requestBody(convo, adapter.Options{}, false)
 	if err != nil {

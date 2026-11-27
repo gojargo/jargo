@@ -901,7 +901,7 @@ func TestTTSHoldsOneConnectionForThePipeline(t *testing.T) {
 		return nil
 	})
 	b := NewTTS(TTSConfig{APIKey: "k", URL: server.url})
-	r := runTTSPipeline(t, b)
+	r := runTTSPipeline(t, b.Base)
 	waitFor(t, "the server saw no connection when the pipeline started", func() bool {
 		return server.connections() == 1
 	})
@@ -954,7 +954,7 @@ func TestTTSSettingsChangeMidSentenceFinalizesTheOldStream(t *testing.T) {
 		return nil
 	})
 	b := NewTTS(TTSConfig{APIKey: "k", URL: server.url, TextAggregation: frames.TextTypeToken})
-	r := runTTSPipeline(t, b)
+	r := runTTSPipeline(t, b.Base)
 	defer r.stop()
 
 	r.task.QueueFrame(frames.NewLLMFullResponseStartFrame())
@@ -1005,7 +1005,7 @@ func TestTTSReportsAFailedConnection(t *testing.T) {
 		mu.Unlock()
 	})
 
-	r := runTTSPipeline(t, b)
+	r := runTTSPipeline(t, b.Base)
 	defer r.stop()
 	waitFor(t, "the refused connection was never reported", func() bool {
 		mu.Lock()

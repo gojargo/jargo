@@ -64,8 +64,8 @@ func (s apiKeyShaper) Authorize(_ context.Context, req *http.Request) error {
 	return nil
 }
 
-// Service is a streaming Gemini LLM processor using the Interactions API.
-type Service struct {
+// LLMService is a streaming Gemini LLM processor using the Interactions API.
+type LLMService struct {
 	*llm.Base
 	// adapter converts the conversation into the steps the API takes.
 	adapter Adapter
@@ -82,21 +82,21 @@ type Service struct {
 }
 
 // NewLLM builds an Interactions LLM service on the Gemini API.
-func NewLLM(cfg Config) *Service {
+func NewLLM(cfg Config) *LLMService {
 	return NewShapedLLM("GoogleInteractionsLLM", apiKeyShaper{apiKey: cfg.APIKey}, cfg)
 }
 
 // NewShapedLLM builds an Interactions LLM service whose requests are addressed
 // and authorized by shaper. It is the base for deployments that do not use the
 // Gemini API's own URL or api-key auth; name is the processor label.
-func NewShapedLLM(name string, shaper RequestShaper, cfg Config) *Service {
+func NewShapedLLM(name string, shaper RequestShaper, cfg Config) *LLMService {
 	if cfg.Model == "" {
 		cfg.Model = defaultModel
 	}
 	if cfg.MaxTokens == 0 {
 		cfg.MaxTokens = defaultMaxTokens
 	}
-	s := &Service{
+	s := &LLMService{
 		cfg:               cfg,
 		live:              newLLMSettings(cfg),
 		http:              &http.Client{},
@@ -109,32 +109,32 @@ func NewShapedLLM(name string, shaper RequestShaper, cfg Config) *Service {
 }
 
 // SupportsResponseSchema implements llm.ResponseSchemaSupporter.
-func (s *Service) SupportsResponseSchema() bool { return true }
+func (s *LLMService) SupportsResponseSchema() bool { return true }
 
 // ModelSupportsResponseSchema implements llm.ResponseSchemaSupporter: every
 // model the Interactions API serves can enforce a response schema.
-func (s *Service) ModelSupportsResponseSchema(string) bool { return true }
+func (s *LLMService) ModelSupportsResponseSchema(string) bool { return true }
 
 // LLMAdapter returns the adapter this service converts through, so the base can
 // add the tools it implements itself to what every request advertises. It
 // implements llm.AdapterHolder.
-func (s *Service) LLMAdapter() llm.BuiltinToolHolder { return &s.adapter }
+func (s *LLMService) LLMAdapter() llm.BuiltinToolHolder { return &s.adapter }
 
 // MessagesForLogging renders the conversation as this provider will see it, for
 // the generation span. It implements llm.TraceRenderer.
-func (s *Service) MessagesForLogging(convo *frames.LLMContext) []map[string]any {
+func (s *LLMService) MessagesForLogging(convo *frames.LLMContext) []map[string]any {
 	return s.adapter.MessagesForLogging(convo)
 }
 
 // ToolsForLogging renders the toolset as this provider will see it, for the
 // generation span. It implements llm.TraceRenderer.
-func (s *Service) ToolsForLogging(schema frames.ToolsSchema) []any {
+func (s *LLMService) ToolsForLogging(schema frames.ToolsSchema) []any {
 	return adapter.ToolsForLogging(&s.adapter, schema)
 }
 
 // RunInference answers the conversation once, off to the side of the pipeline:
 // no streaming, no frames, just the text. It implements llm.Inferencer.
-func (s *Service) RunInference(
+func (s *LLMService) RunInference(
 	ctx context.Context, convo *frames.LLMContext, opts llm.InferenceOptions,
 ) (string, error) {
 	instruction := opts.SystemInstruction
@@ -191,7 +191,7 @@ func (s *Service) RunInference(
 // Generate streams a response to the conversation, emitting each text delta.
 // The conversation advertises no tools, but the service's own may still be
 // offered, and the calls the model makes to them are run.
-func (s *Service) Generate(ctx context.Context, convo *frames.LLMContext, emit llm.Emit) error {
+func (s *LLMService) Generate(ctx context.Context, convo *frames.LLMContext, emit llm.Emit) error {
 	var calls []frames.ToolCall
 	err := s.processContext(ctx, convo, emit, func(call frames.ToolCall) error {
 		calls = append(calls, call)
@@ -206,13 +206,13 @@ func (s *Service) Generate(ctx context.Context, convo *frames.LLMContext, emit l
 // GenerateWithTools streams a tool-capable response, emitting text deltas to the
 // sink as they arrive and reporting each function call the model made once the
 // response is complete.
-func (s *Service) GenerateWithTools(ctx context.Context, convo *frames.LLMContext, sink llm.Sink) error {
+func (s *LLMService) GenerateWithTools(ctx context.Context, convo *frames.LLMContext, sink llm.Sink) error {
 	return s.processContext(ctx, convo, sink.Text, sink.Tool)
 }
 
 // processContext runs one streamed response, reporting its token usage once it
 // is over, whether it completed or not.
-func (s *Service) processContext(
+func (s *LLMService) processContext(
 	ctx context.Context, convo *frames.LLMContext, text func(string) error, tool func(frames.ToolCall) error,
 ) (err error) {
 	response := newResponseState(convo)
@@ -278,7 +278,7 @@ func decodeEvent(data string) (event, bool) {
 
 // buildRequest builds an Interactions request from the conversation's
 // invocation params and the settings as they stand.
-func (s *Service) buildRequest(cfg requestSettings, params Params) map[string]any {
+func (s *LLMService) buildRequest(cfg requestSettings, params Params) map[string]any {
 	request := map[string]any{"model": cfg.Model, "input": params.Input, "store": false}
 
 	if params.SystemInstruction != "" {
@@ -321,7 +321,7 @@ func (s *Service) buildRequest(cfg requestSettings, params Params) map[string]an
 
 // generationConfigFor builds the generation configuration from the settings,
 // warning about each one the Interactions API has no field for.
-func (s *Service) generationConfigFor(cfg requestSettings) map[string]any {
+func (s *LLMService) generationConfigFor(cfg requestSettings) map[string]any {
 	generation := map[string]any{}
 	if cfg.Temperature != nil {
 		generation["temperature"] = *cfg.Temperature
@@ -356,7 +356,7 @@ func (s *Service) generationConfigFor(cfg requestSettings) map[string]any {
 // applyThinking puts a thinking configuration into the generation
 // configuration. The level and thought summaries apply; a budget is ignored with
 // a warning.
-func (s *Service) applyThinking(generation map[string]any, thinking *ThinkingConfig) {
+func (s *LLMService) applyThinking(generation map[string]any, thinking *ThinkingConfig) {
 	if thinking == nil {
 		return
 	}
@@ -390,7 +390,7 @@ func generationConfig(request map[string]any) map[string]any {
 // API takes no budget. With use_provider_thinking_default set, no default is
 // sent. The first request for each model logs the setting sent, or that the
 // model runs at Google's default.
-func (s *Service) maybeApplyThinkingDefault(request map[string]any, model string) {
+func (s *LLMService) maybeApplyThinkingDefault(request map[string]any, model string) {
 	if g, ok := request[keyGenerationConfig].(map[string]any); ok {
 		if _, set := g[keyThinkingLevel]; set {
 			return
@@ -407,7 +407,7 @@ func (s *Service) maybeApplyThinkingDefault(request map[string]any, model string
 
 // warnUnsupported reports, once per setting, a setting the Interactions API has
 // no field for.
-func (s *Service) warnUnsupported(name, reason string) {
+func (s *LLMService) warnUnsupported(name, reason string) {
 	s.warnedMu.Lock()
 	warned := s.warnedUnsupported[name]
 	s.warnedUnsupported[name] = true
@@ -418,7 +418,7 @@ func (s *Service) warnUnsupported(name, reason string) {
 }
 
 // newRequest marshals the request and builds the POST that sends it.
-func (s *Service) newRequest(ctx context.Context, request map[string]any) (*http.Request, error) {
+func (s *LLMService) newRequest(ctx context.Context, request map[string]any) (*http.Request, error) {
 	body, err := json.Marshal(request)
 	if err != nil {
 		return nil, err
@@ -546,7 +546,9 @@ func newResponseState(convo *frames.LLMContext) *responseState {
 }
 
 // handleEvent acts on one stream event.
-func (s *Service) handleEvent(ctx context.Context, ev event, response *responseState, text func(string) error) error {
+func (s *LLMService) handleEvent(
+	ctx context.Context, ev event, response *responseState, text func(string) error,
+) error {
 	switch ev.EventType {
 	case "step.start":
 		return s.handleStepStart(ctx, ev, response)
@@ -567,7 +569,7 @@ func (s *Service) handleEvent(ctx context.Context, ev event, response *responseS
 }
 
 // handleStepStart records a step the model began.
-func (s *Service) handleStepStart(ctx context.Context, ev event, response *responseState) error {
+func (s *LLMService) handleStepStart(ctx context.Context, ev event, response *responseState) error {
 	if ev.Step == nil {
 		return nil
 	}
@@ -587,7 +589,7 @@ func (s *Service) handleStepStart(ctx context.Context, ev event, response *respo
 
 // handleStepStop completes a step: a function call is ready to run, and a text
 // step a signature was tied to has the text the signature is stored with.
-func (s *Service) handleStepStop(ctx context.Context, ev event, response *responseState) error {
+func (s *LLMService) handleStepStop(ctx context.Context, ev event, response *responseState) error {
 	if call, ok := response.calls[ev.Index]; ok {
 		delete(response.calls, ev.Index)
 		response.functionCalls = append(response.functionCalls, s.functionCall(ctx, call))
@@ -601,7 +603,7 @@ func (s *Service) handleStepStop(ctx context.Context, ev event, response *respon
 
 // handleCompleted reads the interaction a response ended with: the model that
 // answered, how it ended, and its usage.
-func (s *Service) handleCompleted(ctx context.Context, ev event, response *responseState) {
+func (s *LLMService) handleCompleted(ctx context.Context, ev event, response *responseState) {
 	if ev.Interaction == nil {
 		return
 	}
@@ -618,7 +620,7 @@ func (s *Service) handleCompleted(ctx context.Context, ev event, response *respo
 
 // handleDelta acts on a step's delta: answer text, a function call's arguments,
 // a thought summary or a thought signature.
-func (s *Service) handleDelta(
+func (s *LLMService) handleDelta(
 	ctx context.Context, ev event, response *responseState, text func(string) error,
 ) error {
 	delta := ev.Delta
@@ -648,7 +650,7 @@ func (s *Service) handleDelta(
 }
 
 // pushThought pushes a thought summary as a whole thought.
-func (s *Service) pushThought(ctx context.Context, text string) error {
+func (s *LLMService) pushThought(ctx context.Context, text string) error {
 	for _, f := range []frames.Frame{
 		frames.NewLLMThoughtStartFrame(),
 		frames.NewLLMThoughtTextFrame(text),
@@ -676,7 +678,7 @@ func joinedText(response *responseState) string {
 // Nothing reaches the TTS for such a response, so the bot stays silent until the
 // user speaks again. The warning lists the steps the response produced instead,
 // and the non-fatal error lets the application react.
-func (s *Service) reportEmptyResponse(ctx context.Context, response *responseState) {
+func (s *LLMService) reportEmptyResponse(ctx context.Context, response *responseState) {
 	steps := make([]string, 0, len(response.steps))
 	for _, i := range slices.Sorted(maps.Keys(response.steps)) {
 		steps = append(steps, response.steps[i])
@@ -691,7 +693,7 @@ func (s *Service) reportEmptyResponse(ctx context.Context, response *responseSta
 //
 // A function call is named by its id right away. Text is named by what it says,
 // so its signature is stored when the text step stops.
-func (s *Service) bookmarkPendingSignature(ctx context.Context, response *responseState, index int) error {
+func (s *LLMService) bookmarkPendingSignature(ctx context.Context, response *responseState, index int) error {
 	if response.pendingSignature == nil {
 		return nil
 	}
@@ -707,7 +709,7 @@ func (s *Service) bookmarkPendingSignature(ctx context.Context, response *respon
 // storeSignature appends the pending thought signature to the conversation, in
 // the form the Gemini service stores it, bookmarked by what it was received
 // with.
-func (s *Service) storeSignature(
+func (s *LLMService) storeSignature(
 	ctx context.Context, response *responseState, bookmarkKey, bookmarkValue string,
 ) error {
 	signature := response.pendingSignature
@@ -724,7 +726,7 @@ func (s *Service) storeSignature(
 // functionCall is the call a finished function-call step made. Arguments that
 // streamed in replace the ones the step started with; arguments that cannot be
 // read leave the starting ones in place.
-func (s *Service) functionCall(ctx context.Context, call *pendingCall) frames.ToolCall {
+func (s *LLMService) functionCall(ctx context.Context, call *pendingCall) frames.ToolCall {
 	arguments := call.initial
 	if len(bytes.TrimSpace(arguments)) == 0 || string(bytes.TrimSpace(arguments)) == "null" {
 		arguments = json.RawMessage("{}")

@@ -117,6 +117,11 @@ func nativeDependencies() dependencies {
 	}
 }
 
+// TTSService is the Piper text-to-speech service NewTTS builds.
+type TTSService struct {
+	*tts.Base
+}
+
 // NewTTS builds a Piper TTS service, which runs the voice in process and
 // streams the audio of each utterance as libpiper synthesizes it.
 //
@@ -130,13 +135,25 @@ func nativeDependencies() dependencies {
 // them takes effect from the next one. The voice is loaded once, so a change to
 // it is stored but not applied, and is reported as not supported; NewHTTPTTS
 // switches voices while running.
-func NewTTS(cfg Config) (*tts.Base, error) {
-	b, _, err := newTTS(cfg, nativeDependencies())
+func NewTTS(cfg Config) (*TTSService, error) {
+	s := &TTSService{}
+	svc, err := buildTTS(cfg, tts.WithSelf(s))
+	if err != nil {
+		return nil, err
+	}
+	s.Base = svc
+	return s, nil
+}
+
+// buildTTS builds the service NewTTS returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildTTS(cfg Config, opts ...tts.Option) (*tts.Base, error) {
+	b, _, err := newTTS(cfg, nativeDependencies(), opts...)
 	return b, err
 }
 
 // newTTS builds the service over deps, returning its synthesizer alongside it.
-func newTTS(cfg Config, deps dependencies) (*tts.Base, *synthesizer, error) {
+func newTTS(cfg Config, deps dependencies, opts ...tts.Option) (*tts.Base, *synthesizer, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, nil, err
 	}
@@ -204,7 +221,7 @@ func newTTS(cfg Config, deps dependencies) (*tts.Base, *synthesizer, error) {
 	if s.sampleRate == 0 {
 		s.sampleRate = rate
 	}
-	b := tts.New("PiperTTS", s)
+	b := tts.New("PiperTTS", s, opts...)
 	s.svc = b
 	return b, s, nil
 }

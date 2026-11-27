@@ -19,12 +19,25 @@ import (
 	"github.com/gojargo/jargo/service/wsutil"
 )
 
+// STTService is the Gladia speech-to-text service NewSTT builds.
+type STTService struct {
+	*stt.StreamService
+}
+
 // NewSTT builds a Gladia streaming STT service. It works best behind a turn
 // detector: Gladia finalizes per utterance rather than per turn.
-func NewSTT(cfg Config) *stt.StreamService {
+func NewSTT(cfg Config) *STTService {
+	s := &STTService{}
+	s.StreamService = buildSTT(cfg, stt.WithSelf(s))
+	return s
+}
+
+// buildSTT builds the service NewSTT returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildSTT(cfg Config, opts ...stt.Option) *stt.StreamService {
 	cfg = withDefaults(cfg)
 	c := &connector{cfg: cfg, http: &http.Client{}}
-	svc := stt.NewStream("GladiaSTT", c, cfg.SampleRate)
+	svc := stt.NewStream("GladiaSTT", c, cfg.SampleRate, opts...)
 	// The connector is handed the service it drives, so it can report a failure
 	// Gladia attaches to a message without ending the session. There is no call
 	// left to fail by the time it arrives on the read loop, so the service is

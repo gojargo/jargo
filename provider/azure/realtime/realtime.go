@@ -58,7 +58,7 @@ type Config struct {
 func (c Config) Validate() error { return validate.Struct(c) }
 
 // New builds an Azure OpenAI Realtime service.
-func New(cfg Config) *openairealtime.Service {
+func New(cfg Config) *openairealtime.LLMService {
 	if strings.Contains(cfg.BaseURL, "api-version=") {
 		// The preview surface rejects the session configuration and names its
 		// events differently, so it fails partway through a connection that opens

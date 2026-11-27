@@ -46,7 +46,7 @@ func TestNewServices(t *testing.T) {
 // recordedBody starts a fake Responses endpoint that answers every request with
 // a short streamed reply, or a one-shot one for an inference, and returns the
 // service pointed at it with a reader for the last request body.
-func recordedBody(t *testing.T, cfg Config) (*HTTPService, func() map[string]any) {
+func recordedBody(t *testing.T, cfg Config) (*HTTPLLMService, func() map[string]any) {
 	t.Helper()
 	var body map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -73,7 +73,7 @@ func recordedBody(t *testing.T, cfg Config) (*HTTPService, func() map[string]any
 }
 
 // generateHTTP runs one streamed turn and fails the test if it failed.
-func generateHTTP(t *testing.T, svc *HTTPService, convo *frames.LLMContext) {
+func generateHTTP(t *testing.T, svc *HTTPLLMService, convo *frames.LLMContext) {
 	t.Helper()
 	if err := svc.Generate(context.Background(), convo, func(string) error { return nil }); err != nil {
 		t.Fatalf("Generate: %v", err)
@@ -188,8 +188,8 @@ func TestInferenceOnAnEmptyConversation(t *testing.T) {
 // through, which is where the base puts the tools the service implements
 // itself (a cancel tool, say), so they reach the request.
 func TestServiceOffersCancelTools(t *testing.T) {
-	var _ llm.AdapterHolder = (*HTTPService)(nil)
-	var _ llm.AdapterHolder = (*Service)(nil)
+	var _ llm.AdapterHolder = (*HTTPLLMService)(nil)
+	var _ llm.AdapterHolder = (*LLMService)(nil)
 
 	svc, body := recordedBody(t, Config{})
 	svc.LLMAdapter().SetBuiltin(adapter.Builtin{Tool: frames.Tool{

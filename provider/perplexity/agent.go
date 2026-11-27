@@ -92,7 +92,7 @@ func (c AgentConfig) Validate() error {
 // its lowest-latency configuration, with the model in place of the preset's
 // own, and logs that it did for each model. Answers can carry citation markers
 // such as "[1]".
-func NewAgentLLM(cfg AgentConfig) *responses.HTTPService {
+func NewAgentLLM(cfg AgentConfig) *responses.HTTPLLMService {
 	model := cfg.Model
 	switch {
 	case cfg.PresetModel:

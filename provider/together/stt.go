@@ -61,8 +61,21 @@ type STTConfig struct {
 // Validate reports whether the configuration is usable.
 func (c STTConfig) Validate() error { return validate.Struct(c) }
 
+// STTService is the Together AI speech-to-text service NewSTT builds.
+type STTService struct {
+	*stt.StreamService
+}
+
 // NewSTT builds a Together AI streaming STT service.
-func NewSTT(cfg STTConfig) *stt.StreamService {
+func NewSTT(cfg STTConfig) *STTService {
+	s := &STTService{}
+	s.StreamService = buildSTT(cfg, stt.WithSelf(s))
+	return s
+}
+
+// buildSTT builds the service NewSTT returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildSTT(cfg STTConfig, opts ...stt.Option) *stt.StreamService {
 	if cfg.BaseURL == "" {
 		cfg.BaseURL = sttBaseURL
 	}
@@ -72,7 +85,7 @@ func NewSTT(cfg STTConfig) *stt.StreamService {
 	if cfg.TurnDetection == "" {
 		cfg.TurnDetection = defaultTurnDetection
 	}
-	return stt.NewStream("TogetherSTT", &connector{cfg: cfg}, cfg.SampleRate)
+	return stt.NewStream("TogetherSTT", &connector{cfg: cfg}, cfg.SampleRate, opts...)
 }
 
 type connector struct {

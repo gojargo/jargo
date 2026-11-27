@@ -138,6 +138,11 @@ func (c TTSConfig) withTTSDefaults() TTSConfig {
 	return c
 }
 
+// TTSService is the Soniox text-to-speech service NewTTS builds.
+type TTSService struct {
+	*tts.Base
+}
+
 // NewTTS builds a Soniox streaming TTS service.
 //
 // It holds one connection open for the call, opened when the pipeline starts,
@@ -149,13 +154,21 @@ func (c TTSConfig) withTTSDefaults() TTSConfig {
 // is canceled. When the connection drops it is restored with backoff, and when
 // that keeps failing the service reports a permanent error and becomes
 // unusable.
-func NewTTS(cfg TTSConfig) *tts.Base {
-	b, _ := newTTS(cfg)
+func NewTTS(cfg TTSConfig) *TTSService {
+	s := &TTSService{}
+	s.Base = buildTTS(cfg, tts.WithSelf(s))
+	return s
+}
+
+// buildTTS builds the service NewTTS returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildTTS(cfg TTSConfig, opts ...tts.Option) *tts.Base {
+	b, _ := newTTS(cfg, opts...)
 	return b
 }
 
 // newTTS builds the service and returns its synthesizer alongside it.
-func newTTS(cfg TTSConfig) (*tts.Base, *ttsSynthesizer) {
+func newTTS(cfg TTSConfig, opts ...tts.Option) (*tts.Base, *ttsSynthesizer) {
 	s := newTTSSynthesizer(cfg)
 	var syn tts.WebsocketService = s
 	if s.cfg.wordTimestamps() {
@@ -163,7 +176,7 @@ func newTTS(cfg TTSConfig) (*tts.Base, *ttsSynthesizer) {
 		// takes the word-aligned path solely when timings were requested.
 		syn = &timedTTSSynthesizer{ttsSynthesizer: s}
 	}
-	b := tts.New("SonioxTTS", syn)
+	b := tts.New("SonioxTTS", syn, opts...)
 	s.svc = b
 	s.ws = tts.NewWebsocket(b, syn, s.cfg.Websocket)
 	if s.cfg.TextAggregation == frames.TextTypeToken {

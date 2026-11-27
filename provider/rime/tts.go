@@ -11,8 +11,21 @@ import (
 	"github.com/gojargo/jargo/service/tts"
 )
 
+// TTSService is the Rime text-to-speech service NewTTS builds.
+type TTSService struct {
+	*tts.Base
+}
+
 // NewTTS builds a Rime TTS service.
-func NewTTS(cfg Config) *tts.Base {
+func NewTTS(cfg Config) *TTSService {
+	s := &TTSService{}
+	s.Base = buildTTS(cfg, tts.WithSelf(s))
+	return s
+}
+
+// buildTTS builds the service NewTTS returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildTTS(cfg Config, opts ...tts.Option) *tts.Base {
 	if cfg.Model == "" {
 		cfg.Model = defaultModel
 	}
@@ -22,7 +35,7 @@ func NewTTS(cfg Config) *tts.Base {
 	if cfg.SampleRate == 0 {
 		cfg.SampleRate = defaultSampleRate
 	}
-	return tts.New("RimeTTS", &synthesizer{cfg: cfg, http: &http.Client{}})
+	return tts.New("RimeTTS", &synthesizer{cfg: cfg, http: &http.Client{}}, opts...)
 }
 
 type synthesizer struct {

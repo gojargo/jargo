@@ -68,7 +68,7 @@ func (c S2SConfig) Validate() error { return validateConfig(c, c.Credentials) }
 // NewS2S builds a Vertex AI Gemini Live speech-to-speech service. It behaves
 // exactly like the Gemini Live service; only the endpoint, the authorization
 // and the model's resource name differ.
-func NewS2S(cfg S2SConfig) *live.Service {
+func NewS2S(cfg S2SConfig) *live.LLMService {
 	if cfg.Model == "" {
 		cfg.Model = defaultLiveModel
 	}

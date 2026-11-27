@@ -108,8 +108,21 @@ type STTConfig struct {
 // Validate reports whether the configuration is usable.
 func (c STTConfig) Validate() error { return validate.Struct(c) }
 
+// STTService is the Cartesia speech-to-text service NewSTT builds.
+type STTService struct {
+	*stt.StreamService
+}
+
 // NewSTT builds a Cartesia streaming STT service.
-func NewSTT(cfg STTConfig) *stt.StreamService {
+func NewSTT(cfg STTConfig) *STTService {
+	s := &STTService{}
+	s.StreamService = buildSTT(cfg, stt.WithSelf(s))
+	return s
+}
+
+// buildSTT builds the service NewSTT returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildSTT(cfg STTConfig, opts ...stt.Option) *stt.StreamService {
 	if cfg.URL == "" {
 		cfg.URL = defaultSTTURL
 	}
@@ -123,7 +136,7 @@ func NewSTT(cfg STTConfig) *stt.StreamService {
 		cfg.Encoding = defaultSTTEncoding
 	}
 	c := newSTTConnector(cfg)
-	svc := stt.NewStream("CartesiaSTT", c, cfg.SampleRate)
+	svc := stt.NewStream("CartesiaSTT", c, cfg.SampleRate, opts...)
 	c.svc = svc
 	return svc
 }

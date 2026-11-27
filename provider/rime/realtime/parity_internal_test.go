@@ -184,7 +184,7 @@ func TestUsageOnceForTerminalResponseWithRawDiagnostics(t *testing.T) {
 			var raw func() []ResponseEnded
 			h := converse(t, harnessOptions{
 				params: pipeline.Params{EnableMetrics: true, EnableUsageMetrics: true},
-				setup:  func(s *Service) { raw = observe[ResponseEnded](s) },
+				setup:  func(s *LLMService) { raw = observe[ResponseEnded](s) },
 			})
 			ended := len(raw())
 			ref := h.peer.start(nil, nil)

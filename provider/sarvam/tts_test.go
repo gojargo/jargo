@@ -878,7 +878,7 @@ func (r *run) wait() {
 func TestHoldsOneConnectionForThePipeline(t *testing.T) {
 	server := newTTSFakeServer(t, onText(audioMessage(make([]byte, 480)), finalEvent()))
 	b := NewTTS(TTSConfig{APIKey: "k", URL: server.url})
-	r := runPipeline(t, b)
+	r := runPipeline(t, b.Base)
 	ttsWaitUntil(t, "the server saw no connection when the pipeline started", func() bool {
 		return server.connections() == 1
 	})
@@ -909,7 +909,7 @@ func TestReportsAFailedConnection(t *testing.T) {
 		mu.Unlock()
 	})
 
-	r := runPipeline(t, b)
+	r := runPipeline(t, b.Base)
 	defer r.stop()
 	ttsWaitUntil(t, "the refused connection was never reported", func() bool {
 		mu.Lock()

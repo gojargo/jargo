@@ -16,7 +16,7 @@ import (
 // traceSetup records the session being configured, once the server reports it
 // created. What it records is the conversation's own toolset, when there is a
 // conversation advertising one; the session's properties are not recorded.
-func (s *Service) traceSetup(ctx context.Context) {
+func (s *LLMService) traceSetup(ctx context.Context) {
 	_, span := s.StartSpan(ctx, "llm_setup")
 	defer span.End()
 	attrs := tracing.OpenAIRealtimeAttributes{Service: s.TypeName(), Model: s.model(), Operation: "llm_setup"}

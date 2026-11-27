@@ -54,9 +54,9 @@ type operation struct {
 	answersContent bool
 }
 
-// Service is the Rime Prism speech-to-speech processor: one Prism conversation
+// LLMService is the Rime Prism speech-to-speech processor: one Prism conversation
 // driven by the standard conversation aggregators and transports.
-type Service struct {
+type LLMService struct {
 	*llm.Base
 	cfg     Config
 	adapter prismAdapter
@@ -142,19 +142,19 @@ type Service struct {
 }
 
 var (
-	_ llm.SettingsHolder         = (*Service)(nil)
-	_ llm.SettingsUpdateDeferrer = (*Service)(nil)
-	_ llm.ServiceToolsHolder     = (*Service)(nil)
-	_ llm.AdapterHolder          = (*Service)(nil)
+	_ llm.SettingsHolder         = (*LLMService)(nil)
+	_ llm.SettingsUpdateDeferrer = (*LLMService)(nil)
+	_ llm.ServiceToolsHolder     = (*LLMService)(nil)
+	_ llm.AdapterHolder          = (*LLMService)(nil)
 )
 
 // New builds a Prism service. A configuration Validate refuses is reported as
 // an error when the conversation would open, and leaves the service unusable.
-func New(cfg Config) *Service {
+func New(cfg Config) *LLMService {
 	if cfg.Playback == "" {
 		cfg.Playback = PlaybackEstimated
 	}
-	s := &Service{
+	s := &LLMService{
 		cfg:                cfg,
 		playbackMode:       cfg.Playback,
 		timeouts:           cfg.Timeouts.withDefaults(),
@@ -190,16 +190,16 @@ func New(cfg Config) *Service {
 // it is sent, and says so with llm.WithContinuousGeneration. It exists because
 // the base identifies the service it belongs to by the generator it was built
 // with.
-func (s *Service) Generate(context.Context, *frames.LLMContext, llm.Emit) error {
+func (s *LLMService) Generate(context.Context, *frames.LLMContext, llm.Emit) error {
 	return errNotGenerator
 }
 
 // Settings returns the store a settings update is merged into.
-func (s *Service) Settings() any { return s.live }
+func (s *LLMService) Settings() any { return s.live }
 
 // ServiceTools returns the tools the settings hold, which the base registers
 // the handlers of while the conversation advertises none.
-func (s *Service) ServiceTools() frames.ToolsSchema {
+func (s *LLMService) ServiceTools() frames.ToolsSchema {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.serviceTools
@@ -207,12 +207,12 @@ func (s *Service) ServiceTools() frames.ToolsSchema {
 
 // LLMAdapter returns the adapter the service converts through, so the base can
 // add the tools the service implements itself to it.
-func (s *Service) LLMAdapter() llm.BuiltinToolHolder { return &s.adapter }
+func (s *LLMService) LLMAdapter() llm.BuiltinToolHolder { return &s.adapter }
 
 // SessionInfo returns the session information Prism acknowledged, the
 // provider's request id included. It reports false before the conversation
 // opens.
-func (s *Service) SessionInfo() (SessionInfo, bool) {
+func (s *LLMService) SessionInfo() (SessionInfo, bool) {
 	s.mu.Lock()
 	sess := s.session
 	s.mu.Unlock()
@@ -226,16 +226,16 @@ func (s *Service) SessionInfo() (SessionInfo, bool) {
 // AcceptsIntermediateFunctionCallResults reports that intermediate results
 // reach Prism, as history messages beside the open call. Prism keeps one
 // result per call, so only the final result answers it.
-func (s *Service) AcceptsIntermediateFunctionCallResults() bool { return true }
+func (s *LLMService) AcceptsIntermediateFunctionCallResults() bool { return true }
 
 // CanGenerateMetrics reports that the service times the turn to its first
 // output and counts its tokens.
-func (s *Service) CanGenerateMetrics() bool { return true }
+func (s *LLMService) CanGenerateMetrics() bool { return true }
 
 // ServiceMetadataFrame describes the service to the pipeline as a realtime one,
 // and recommends the external turn strategies that resolve the turn boundaries
 // Prism proposes.
-func (s *Service) ServiceMetadataFrame() frames.ServiceMetadata {
+func (s *LLMService) ServiceMetadataFrame() frames.ServiceMetadata {
 	f := frames.NewLLMServiceMetadataFrame(s.Name())
 	f.Realtime = true
 	f.UserTurnStrategies = turns.ExternalStrategies(turns.ExternalStrategiesConfig{})
@@ -243,17 +243,17 @@ func (s *Service) ServiceMetadataFrame() frames.ServiceMetadata {
 }
 
 // usable reports whether the service can still be given work.
-func (s *Service) usable() bool { return !s.closing.Load() && s.Usable() }
+func (s *LLMService) usable() bool { return !s.closing.Load() && s.Usable() }
 
 // start starts the loops that do the session's work, apart from one another so
 // audio and control never hold each other up.
-func (s *Service) start() {
+func (s *LLMService) start() {
 	s.tasks.Go(s.controlLoop)
 	s.tasks.Go(s.audioLoop)
 }
 
 // enqueue queues an operation behind the earlier ones.
-func (s *Service) enqueue(op operation) {
+func (s *LLMService) enqueue(op operation) {
 	if !s.usable() {
 		return
 	}
@@ -271,7 +271,7 @@ func (s *Service) enqueue(op operation) {
 //
 // Every frame but an image is forwarded by the LLM base, which handles it
 // first, so the work done here is the session's side of it.
-func (s *Service) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
+func (s *LLMService) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
 	switch f.(type) {
 	case *frames.InputImageRawFrame:
 		if err := s.Base.Base.ProcessFrame(ctx, f, dir); err != nil {
@@ -295,7 +295,7 @@ func (s *Service) ProcessFrame(ctx context.Context, f frames.Frame, dir processo
 }
 
 // handleFrame does the session's side of a frame.
-func (s *Service) handleFrame(f frames.Frame, dir processor.Direction) error {
+func (s *LLMService) handleFrame(f frames.Frame, dir processor.Direction) error {
 	switch fr := f.(type) {
 	case *frames.StartFrame:
 		s.start()
@@ -332,11 +332,11 @@ func toolsDelta(tools frames.ToolsSchema) *frames.LLMUpdateSettingsFrame {
 // DeferSettingsUpdate queues a settings update behind the earlier operations.
 // It is applied once they have been written, and nothing has changed until
 // then.
-func (s *Service) DeferSettingsUpdate(_ context.Context, f *frames.LLMUpdateSettingsFrame) {
+func (s *LLMService) DeferSettingsUpdate(_ context.Context, f *frames.LLMUpdateSettingsFrame) {
 	s.enqueue(operation{delta: f})
 }
 
-func (s *Service) handleMessagesAppend(f *frames.LLMMessagesAppendFrame) {
+func (s *LLMService) handleMessagesAppend(f *frames.LLMMessagesAppendFrame) {
 	s.mu.Lock()
 	if s.convo == nil {
 		// The assistant aggregator adds these to the conversation, which may
@@ -355,7 +355,7 @@ func (s *Service) handleMessagesAppend(f *frames.LLMMessagesAppendFrame) {
 	s.enqueue(operation{messages: slices.Clone(f.Messages), answerable: true})
 }
 
-func (s *Service) handleInputAudio(audio frames.AudioRawData) {
+func (s *LLMService) handleInputAudio(audio frames.AudioRawData) {
 	if !s.usable() {
 		return
 	}
@@ -378,7 +378,7 @@ func (s *Service) handleInputAudio(audio frames.AudioRawData) {
 // handleBotStoppedSpeaking takes a stop of the bot's speech. Stops name no
 // output but arrive in playback order, one to an output. A stop while the
 // oldest output still streams is a pause in it.
-func (s *Service) handleBotStoppedSpeaking() {
+func (s *LLMService) handleBotStoppedSpeaking() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if len(s.playing) > 0 && s.playing[0].closed {
@@ -389,7 +389,7 @@ func (s *Service) handleBotStoppedSpeaking() {
 	}
 }
 
-func (s *Service) handleInterruption() {
+func (s *LLMService) handleInterruption() {
 	s.mu.Lock()
 	s.interruptEpoch++
 	// The assistant aggregator drops a held reply request on interruption.
@@ -407,7 +407,7 @@ func (s *Service) handleInterruption() {
 
 // bindContext ties the service to the one conversation it runs, and opens the
 // Prism conversation the first time.
-func (s *Service) bindContext(convo *frames.LLMContext) (bool, error) {
+func (s *LLMService) bindContext(convo *frames.LLMContext) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.convo != nil && s.convo != convo {
@@ -444,7 +444,7 @@ func missingAppends(present []frames.Message, early [][]frames.Message) []frames
 // handleContext takes a conversation frame. The first one opens the Prism
 // conversation; a later one traveling upstream is the assistant aggregator
 // asking for a reply.
-func (s *Service) handleContext(convo *frames.LLMContext, dir processor.Direction) error {
+func (s *LLMService) handleContext(convo *frames.LLMContext, dir processor.Direction) error {
 	initial, err := s.bindContext(convo)
 	if err != nil {
 		return err
@@ -482,7 +482,7 @@ func (s *Service) handleContext(convo *frames.LLMContext, dir processor.Directio
 
 // sdkTools is the tools the settings advertise as the session takes them, with
 // their fillers.
-func (s *Service) sdkTools(live *Settings) ([]toolDefinition, error) {
+func (s *LLMService) sdkTools(live *Settings) ([]toolDefinition, error) {
 	schema, _ := live.Tools.Value()
 	tools, err := s.adapter.tools(schema)
 	if err != nil {
@@ -501,7 +501,7 @@ func (s *Service) sdkTools(live *Settings) ([]toolDefinition, error) {
 }
 
 // snapshot copies the settings store.
-func (s *Service) snapshot() *Settings {
+func (s *LLMService) snapshot() *Settings {
 	var live Settings
 	s.ReadSettings(func() { live = *s.live })
 	return &live
@@ -511,7 +511,7 @@ func (s *Service) snapshot() *Settings {
 // instructions are the whole system instruction the base composes, nil when
 // there is none and none was given, and the tools include the ones the service
 // implements itself, such as cancel tools.
-func (s *Service) prismView() (*string, []toolDefinition, error) {
+func (s *LLMService) prismView() (*string, []toolDefinition, error) {
 	live := s.snapshot()
 	tools, err := s.sdkTools(live)
 	instructions := s.SystemInstruction()
@@ -532,7 +532,7 @@ func sameInstructions(a, b *string) bool {
 
 // openingTurnDetection is the turn settings the conversation opens with: the
 // ones configured, with the interruption rules the settings hold.
-func (s *Service) openingTurnDetection(live *Settings) (*TurnDetection, error) {
+func (s *LLMService) openingTurnDetection(live *Settings) (*TurnDetection, error) {
 	rules, err := interruptionRulesOf(live, interruptionRules)
 	if err != nil {
 		return nil, err
@@ -557,7 +557,7 @@ func (s *Service) openingTurnDetection(live *Settings) (*TurnDetection, error) {
 }
 
 // connectOptions is what the conversation opens with.
-func (s *Service) connectOptions() (connectOptions, error) {
+func (s *LLMService) connectOptions() (connectOptions, error) {
 	live := s.snapshot()
 	schema, _ := live.Tools.Value()
 	s.SyncToolHandlers(s.lifeCtx, schema)
@@ -589,7 +589,7 @@ func (s *Service) connectOptions() (connectOptions, error) {
 }
 
 // open opens the Prism conversation.
-func (s *Service) open() {
+func (s *LLMService) open() {
 	defer s.readyOnce.Do(func() { close(s.ready) })
 	if s.cfgErr != nil {
 		s.fail(s.cfgErr)
@@ -622,7 +622,7 @@ func (s *Service) open() {
 }
 
 // sess is the open session.
-func (s *Service) sess() (*session, error) {
+func (s *LLMService) sess() (*session, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.session == nil {
@@ -632,7 +632,7 @@ func (s *Service) sess() (*session, error) {
 }
 
 // controlLoop does the operations queued, one at a time and in order.
-func (s *Service) controlLoop() {
+func (s *LLMService) controlLoop() {
 	for {
 		select {
 		case op := <-s.controls:
@@ -645,7 +645,7 @@ func (s *Service) controlLoop() {
 }
 
 // runOperation does one operation, once the conversation has opened.
-func (s *Service) runOperation(op operation) {
+func (s *LLMService) runOperation(op operation) {
 	unwritten := op.answerable
 	written := func() {
 		if unwritten {
@@ -671,7 +671,7 @@ func (s *Service) runOperation(op operation) {
 
 // operate carries an operation out: the tool selection, the write, the
 // settings and the reply, in that order.
-func (s *Service) operate(op operation, written func()) error {
+func (s *LLMService) operate(op operation, written func()) error {
 	if op.toolChoice != nil {
 		if err := s.selectTools(*op.toolChoice); err != nil {
 			return err
@@ -710,7 +710,7 @@ func (s *Service) operate(op operation, written func()) error {
 
 // selectTools takes the tool selection: automatic or disabled, empty meaning
 // automatic.
-func (s *Service) selectTools(choice frames.ToolChoice) error {
+func (s *LLMService) selectTools(choice frames.ToolChoice) error {
 	if choice != frames.ToolChoiceAuto && choice != frames.ToolChoiceNone && choice != "" {
 		return settingsError("Prism supports automatic or disabled tool selection")
 	}
@@ -724,7 +724,7 @@ func (s *Service) selectTools(choice frames.ToolChoice) error {
 }
 
 // write writes an operation's content to the history.
-func (s *Service) write(op operation) error {
+func (s *LLMService) write(op operation) error {
 	if op.tool != nil {
 		return s.writeToolUpdate(op.tool, op.toolOutput, op.toolFinal, op.toolMessage)
 	}
@@ -732,7 +732,7 @@ func (s *Service) write(op operation) error {
 }
 
 // appendHistory writes items to the end of the history.
-func (s *Service) appendHistory(items func() ([]historyItem, error)) error {
+func (s *LLMService) appendHistory(items func() ([]historyItem, error)) error {
 	s.mu.Lock()
 	history := s.history
 	s.mu.Unlock()
@@ -744,7 +744,7 @@ func (s *Service) appendHistory(items func() ([]historyItem, error)) error {
 
 // startReply asks for the reply an operation runs, unless it answers content
 // and none was written since the last reply.
-func (s *Service) startReply(op operation) {
+func (s *LLMService) startReply(op operation) {
 	s.mu.Lock()
 	if op.answersContent && !s.contentWritten {
 		s.mu.Unlock()
@@ -771,7 +771,7 @@ func (s *Service) startReply(op operation) {
 // toolReplyTargetLocked chooses how a reply answers the tool results written
 // since the last one. It returns the tool round to continue and the call to
 // report, or reports that a continuation already asked for covers them.
-func (s *Service) toolReplyTargetLocked() (parent *ResponseRef, call *ToolCallRef, covered bool) {
+func (s *LLMService) toolReplyTargetLocked() (parent *ResponseRef, call *ToolCallRef, covered bool) {
 	calls := slices.Clone(s.owedCalls)
 	if len(calls) == 0 {
 		return nil, nil, false
@@ -811,7 +811,7 @@ func (s *Service) toolReplyTargetLocked() (parent *ResponseRef, call *ToolCallRe
 
 // settleOwedCallsLocked lets go of the references held for results that need
 // no reply of their own.
-func (s *Service) settleOwedCallsLocked() {
+func (s *LLMService) settleOwedCallsLocked() {
 	calls := s.owedCalls
 	s.owedCalls = nil
 	for _, t := range calls {
@@ -823,7 +823,7 @@ func (s *Service) settleOwedCallsLocked() {
 }
 
 // spawnRequest runs a request to Prism in the background, bounded in number.
-func (s *Service) spawnRequest(work func(ctx context.Context) error) {
+func (s *LLMService) spawnRequest(work func(ctx context.Context) error) {
 	if !s.usable() {
 		return
 	}
@@ -849,7 +849,7 @@ func (s *Service) spawnRequest(work func(ctx context.Context) error) {
 
 // reply asks Prism for a reply, and lets go of the response it answers once
 // the request has settled.
-func (s *Service) reply(
+func (s *LLMService) reply(
 	ctx context.Context, audioResponse bool, call *ToolCallRef, instruction *string, disableTools bool,
 	parent *ResponseRef,
 ) error {
@@ -873,7 +873,7 @@ func (s *Service) reply(
 }
 
 // interrupted reports whether the user interrupted since epoch.
-func (s *Service) interrupted(epoch int) bool {
+func (s *LLMService) interrupted(epoch int) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return epoch != s.interruptEpoch
@@ -881,7 +881,7 @@ func (s *Service) interrupted(epoch int) bool {
 
 // lockedReply asks for one reply at a time. A reply the user interrupted
 // before it was asked for is dropped, unless it reports a late tool result.
-func (s *Service) lockedReply(
+func (s *LLMService) lockedReply(
 	ctx context.Context, audioResponse bool, call *ToolCallRef, instruction *string, disableTools bool,
 	parent *ResponseRef, report bool,
 ) error {
@@ -913,7 +913,7 @@ func (s *Service) lockedReply(
 
 // replyWithoutTools asks for a reply with the tools withdrawn for its length,
 // and puts them back.
-func (s *Service) replyWithoutTools(
+func (s *LLMService) replyWithoutTools(
 	ctx context.Context, call *ToolCallRef, instruction *string, parent *ResponseRef,
 ) (err error) {
 	sess, err := s.sess()
@@ -951,7 +951,7 @@ func (s *Service) replyWithoutTools(
 
 // restoreTools puts the tools back after a reply that ran without them. A
 // session left without its tools cannot go on.
-func (s *Service) restoreTools(sess *session) {
+func (s *LLMService) restoreTools(sess *session) {
 	tools, err := s.sdkTools(s.snapshot())
 	if err == nil {
 		_, err = sess.update(context.WithoutCancel(s.lifeCtx), sessionPatch{tools: &tools})
@@ -967,7 +967,7 @@ func (s *Service) restoreTools(sess *session) {
 
 // requestReply asks for a reply and lets go of the response Prism admitted for
 // the request once it has settled.
-func (s *Service) requestReply(
+func (s *LLMService) requestReply(
 	ctx context.Context, call *ToolCallRef, instruction *string, parent *ResponseRef,
 ) error {
 	s.mu.Lock()
@@ -1000,7 +1000,7 @@ func continuationUnavailable(err error) bool {
 
 // createReply continues the tool round when there is one to continue, and
 // otherwise asks for a reply, reporting the call's result when one is named.
-func (s *Service) createReply(
+func (s *LLMService) createReply(
 	ctx context.Context, call *ToolCallRef, instruction *string, parent *ResponseRef,
 ) error {
 	sess, err := s.sess()
@@ -1029,7 +1029,7 @@ func (s *Service) createReply(
 
 // createdReply waits for the reply's start to be handled, and cancels a reply
 // that was stopped before it started.
-func (s *Service) createdReply(ctx context.Context, sess *session, ref ResponseRef) error {
+func (s *LLMService) createdReply(ctx context.Context, sess *session, ref ResponseRef) error {
 	for {
 		s.mu.Lock()
 		value, ok := s.conversation.responses[ref.ResponseID]
@@ -1053,7 +1053,7 @@ func (s *Service) createdReply(ctx context.Context, sess *session, ref ResponseR
 }
 
 // settingsOperation applies a settings update, one at a time.
-func (s *Service) settingsOperation(delta *frames.LLMUpdateSettingsFrame) error {
+func (s *LLMService) settingsOperation(delta *frames.LLMUpdateSettingsFrame) error {
 	if err := s.conversation.settingsLock.acquire(s.lifeCtx); err != nil {
 		return err
 	}
@@ -1069,7 +1069,7 @@ func requiredSettings() []string {
 
 // proposal validates an update against the settings it would produce, and
 // returns it as a delta of the service's own kind with what it gives.
-func (s *Service) proposal(f *frames.LLMUpdateSettingsFrame) (*Settings, map[string]any, error) {
+func (s *LLMService) proposal(f *frames.LLMUpdateSettingsFrame) (*Settings, map[string]any, error) {
 	live := s.snapshot()
 	given, ok, err := settings.Resolve(&f.ServiceUpdateSettingsFrame, live)
 	if err != nil || !ok {
@@ -1107,7 +1107,7 @@ func (s *Service) proposal(f *frames.LLMUpdateSettingsFrame) (*Settings, map[str
 // The base applies the update and recomposes the system instruction and the
 // tools, and Prism is sent whatever then differs from what it holds. Prism can
 // refuse an update, so a refusal restores the previous settings.
-func (s *Service) applySettings(f *frames.LLMUpdateSettingsFrame) error {
+func (s *LLMService) applySettings(f *frames.LLMUpdateSettingsFrame) error {
 	delta, supplied, err := s.proposal(f)
 	if err != nil || delta == nil {
 		return err
@@ -1148,7 +1148,7 @@ func (s *Service) applySettings(f *frames.LLMUpdateSettingsFrame) error {
 	return nil
 }
 
-func (s *Service) sessionUpdated(sess *session) {
+func (s *LLMService) sessionUpdated(sess *session) {
 	if info, err := sess.sessionInfo(); err == nil {
 		s.Events().Call(s.lifeCtx, EventSessionUpdated, s, info)
 	}
@@ -1156,7 +1156,7 @@ func (s *Service) sessionUpdated(sess *session) {
 
 // syncTools brings the handlers, and the conversation when the tools changed,
 // into line with the tools the settings hold.
-func (s *Service) syncTools(toolsChanged bool) {
+func (s *LLMService) syncTools(toolsChanged bool) {
 	schema, _ := s.snapshot().Tools.Value()
 	s.mu.Lock()
 	s.serviceTools = schema
@@ -1173,7 +1173,7 @@ func (s *Service) syncTools(toolsChanged bool) {
 // updateSession applies a settings update locally and sends Prism what then
 // differs from what it holds. It reports what changed, what Prism should now
 // hold, and whether anything was sent.
-func (s *Service) updateSession(sess *session, delta *Settings) (
+func (s *LLMService) updateSession(sess *session, delta *Settings) (
 	changed settings.Changed, instructions *string, tools []toolDefinition, updated bool, err error,
 ) {
 	changed, err = s.ApplySettingsUpdate(s.lifeCtx, frames.NewLLMUpdateSettingsFrame(delta))
@@ -1228,7 +1228,7 @@ func (s *Service) updateSession(sess *session, delta *Settings) (
 }
 
 // audioLoop sends the audio queued, in order.
-func (s *Service) audioLoop() {
+func (s *LLMService) audioLoop() {
 	for {
 		s.audioMu.Lock()
 		if len(s.audioQueue) == 0 {
@@ -1251,7 +1251,7 @@ func (s *Service) audioLoop() {
 	}
 }
 
-func (s *Service) sendQueuedAudio(audio frames.AudioRawData) {
+func (s *LLMService) sendQueuedAudio(audio frames.AudioRawData) {
 	select {
 	case <-s.ready:
 	case <-s.lifeCtx.Done():
@@ -1287,7 +1287,7 @@ func standardRate(rate int) bool {
 // sendAudio sends one frame of input audio. Audio with more than two channels
 // is mixed down, and audio at a rate Prism does not take is resampled to
 // 16 kHz mono.
-func (s *Service) sendAudio(audio frames.AudioRawData) error {
+func (s *LLMService) sendAudio(audio frames.AudioRawData) error {
 	sess, err := s.sess()
 	if err != nil {
 		return err
@@ -1319,7 +1319,7 @@ func (s *Service) sendAudio(audio frames.AudioRawData) error {
 // convertRate resamples mono audio at a rate Prism does not take to 16 kHz,
 // sending what the resampler held at the previous rate first when the rate
 // changed. It returns the audio and its rate.
-func (s *Service) convertRate(sess *session, pcm []byte, rate int) ([]byte, int, error) {
+func (s *LLMService) convertRate(sess *session, pcm []byte, rate int) ([]byte, int, error) {
 	if s.convertedInputRate != 0 && rate != s.convertedInputRate {
 		if err := s.flushResampler(sess); err != nil {
 			return nil, 0, err
@@ -1340,7 +1340,7 @@ func (s *Service) convertRate(sess *session, pcm []byte, rate int) ([]byte, int,
 }
 
 // flushResampler sends the audio the resampler still holds, and lets it go.
-func (s *Service) flushResampler(sess *session) error {
+func (s *LLMService) flushResampler(sess *session) error {
 	resampler := s.inputResampler
 	s.inputResampler, s.convertedInputRate = nil, 0
 	if resampler == nil {
@@ -1353,7 +1353,7 @@ func (s *Service) flushResampler(sess *session) error {
 }
 
 // eventLoop handles the session's events until it ends.
-func (s *Service) eventLoop(sess *session) {
+func (s *LLMService) eventLoop(sess *session) {
 	var err error
 	for err == nil {
 		var event *Event
@@ -1384,12 +1384,12 @@ func (s *Service) eventLoop(sess *session) {
 	s.fail(err)
 }
 
-func (s *Service) push(f frames.Frame) {
+func (s *LLMService) push(f frames.Frame) {
 	_ = s.PushFrame(s.lifeCtx, f, processor.Downstream)
 }
 
 // handleEvent maps one session event onto pipeline frames.
-func (s *Service) handleEvent(sess *session, event *Event) error {
+func (s *LLMService) handleEvent(sess *session, event *Event) error {
 	s.Events().Call(s.lifeCtx, EventRimeEvent, s, event)
 	switch payload := event.Payload.(type) {
 	case SpeechStarted:
@@ -1439,7 +1439,7 @@ func unknownResponse() error {
 }
 
 // handleTranscript pushes what Prism heard the user say, in both directions.
-func (s *Service) handleTranscript(itemID, text string, full *string, final bool) error {
+func (s *LLMService) handleTranscript(itemID, text string, full *string, final bool) error {
 	s.mu.Lock()
 	switch {
 	case final:
@@ -1470,7 +1470,7 @@ func (s *Service) handleTranscript(itemID, text string, full *string, final bool
 
 // supersedeOpenCallsLocked closes the round of every call still running that
 // another reply made.
-func (s *Service) supersedeOpenCallsLocked(responseID string) {
+func (s *LLMService) supersedeOpenCallsLocked(responseID string) {
 	for _, t := range s.conversation.calls {
 		if !t.final && t.event.Call.ResponseID != responseID {
 			t.superseded = true
@@ -1479,7 +1479,7 @@ func (s *Service) supersedeOpenCallsLocked(responseID string) {
 }
 
 // startResponseLocked takes a reply that started into the conversation.
-func (s *Service) startResponseLocked(sess *session, payload ResponseStarted) (*response, error) {
+func (s *LLMService) startResponseLocked(sess *session, payload ResponseStarted) (*response, error) {
 	value, err := s.conversation.start(sess, payload)
 	if err != nil {
 		return nil, err
@@ -1521,7 +1521,7 @@ func (s *Service) startResponseLocked(sess *session, payload ResponseStarted) (*
 	return value, nil
 }
 
-func (s *Service) handleResponseStarted(sess *session, payload ResponseStarted) error {
+func (s *LLMService) handleResponseStarted(sess *session, payload ResponseStarted) error {
 	s.mu.Lock()
 	value, err := s.startResponseLocked(sess, payload)
 	if err != nil {
@@ -1552,7 +1552,7 @@ func (s *Service) handleResponseStarted(sess *session, payload ResponseStarted) 
 	return nil
 }
 
-func (s *Service) handleMessageStarted(payload MessageStarted) error {
+func (s *LLMService) handleMessageStarted(payload MessageStarted) error {
 	s.mu.Lock()
 	value, ok := s.conversation.responses[payload.Output.Response.ResponseID]
 	if !ok {
@@ -1578,7 +1578,7 @@ func (s *Service) handleMessageStarted(payload MessageStarted) error {
 
 // outputOf is the output an output event is about, and the reply it belongs
 // to.
-func (s *Service) outputLocked(ref OutputRef) (*response, *output, error) {
+func (s *LLMService) outputLocked(ref OutputRef) (*response, *output, error) {
 	value, ok := s.conversation.responses[ref.Response.ResponseID]
 	if !ok {
 		return nil, nil, unknownResponse()
@@ -1606,7 +1606,7 @@ func outputRef(payload EventPayload) OutputRef {
 }
 
 // handleOutput takes the text and the audio of a message.
-func (s *Service) handleOutput(payload EventPayload) error {
+func (s *LLMService) handleOutput(payload EventPayload) error {
 	s.mu.Lock()
 	value, out, err := s.outputLocked(outputRef(payload))
 	if err != nil || value.stopped || out.closed {
@@ -1640,7 +1640,7 @@ func (s *Service) handleOutput(payload EventPayload) error {
 
 // handleAudioLocked pushes a chunk of a message's audio, and counts it toward
 // the estimate of how far the message has played. It lets go of the lock.
-func (s *Service) handleAudioLocked(value *response, out *output, payload AudioDelta) {
+func (s *LLMService) handleAudioLocked(value *response, out *output, payload AudioDelta) {
 	if !value.audioResponse {
 		s.mu.Unlock()
 		return
@@ -1661,7 +1661,7 @@ func (s *Service) handleAudioLocked(value *response, out *output, payload AudioD
 }
 
 // endOutput closes a message's speech, once.
-func (s *Service) endOutput(out *output) {
+func (s *LLMService) endOutput(out *output) {
 	s.mu.Lock()
 	closed := out.closed
 	out.closed = true
@@ -1673,7 +1673,7 @@ func (s *Service) endOutput(out *output) {
 	}
 }
 
-func (s *Service) handleToolCall(payload ToolCall) error {
+func (s *LLMService) handleToolCall(payload ToolCall) error {
 	s.mu.Lock()
 	callID := payload.Call.CallID
 	if _, ok := s.conversation.calls[callID]; ok {
@@ -1704,7 +1704,7 @@ func (s *Service) handleToolCall(payload ToolCall) error {
 	return s.RunFunctionCalls(s.lifeCtx, convo, []frames.ToolCall{call})
 }
 
-func (s *Service) handleResponseEnded(payload ResponseEnded) error {
+func (s *LLMService) handleResponseEnded(payload ResponseEnded) error {
 	s.mu.Lock()
 	value, ok := s.conversation.responses[payload.Response.ResponseID]
 	if !ok {
@@ -1742,7 +1742,7 @@ func (s *Service) handleResponseEnded(payload ResponseEnded) error {
 }
 
 // handleFault takes a failure Prism reported that answers no request.
-func (s *Service) handleFault(fault Fault) {
+func (s *LLMService) handleFault(fault Fault) {
 	if fault.RequestID != "" {
 		return
 	}
@@ -1763,7 +1763,7 @@ func (s *Service) handleFault(fault Fault) {
 
 // supersedeRunningLocked closes the round of the calls named when one of them
 // is still running, and reports whether one is. It takes the lock itself.
-func (s *Service) supersedeRunningLocked(callIDs []string) bool {
+func (s *LLMService) supersedeRunningLocked(callIDs []string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	running := slices.ContainsFunc(callIDs, func(id string) bool {
@@ -1783,7 +1783,7 @@ func (s *Service) supersedeRunningLocked(callIDs []string) bool {
 
 // interrupt stops what Prism is saying, and tells it how much of the output
 // playing was heard.
-func (s *Service) interrupt(ctx context.Context, playing *output) error {
+func (s *LLMService) interrupt(ctx context.Context, playing *output) error {
 	s.mu.Lock()
 	sess := s.session
 	var stopping []*response
@@ -1823,7 +1823,7 @@ func (s *Service) interrupt(ctx context.Context, playing *output) error {
 
 // stopResponse stops a reply: it is canceled unless it has ended, and its
 // speech is closed.
-func (s *Service) stopResponse(ctx context.Context, sess *session, value *response) error {
+func (s *LLMService) stopResponse(ctx context.Context, sess *session, value *response) error {
 	s.mu.Lock()
 	value.stopped = true
 	ended := value.ended
@@ -1845,7 +1845,7 @@ func (s *Service) stopResponse(ctx context.Context, sess *session, value *respon
 
 // settlePlayback sends the receipts of the discarded replies that have ended,
 // in the order the replies were created.
-func (s *Service) settlePlayback(ctx context.Context) error {
+func (s *LLMService) settlePlayback(ctx context.Context) error {
 	s.mu.Lock()
 	playback := s.playback
 	s.mu.Unlock()
@@ -1889,7 +1889,7 @@ func (s *Service) settlePlayback(ctx context.Context) error {
 //
 // The frames travel on to the assistant aggregator, which records them in the
 // conversation and decides when Prism should reply.
-func (s *Service) PushFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
+func (s *LLMService) PushFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
 	if dir == processor.Downstream {
 		switch fr := f.(type) {
 		case *frames.FunctionCallResultFrame:
@@ -1903,7 +1903,7 @@ func (s *Service) PushFrame(ctx context.Context, f frames.Frame, dir processor.D
 
 // handleFunctionCallOutcome queues the write of a tool's result, or of its
 // cancellation.
-func (s *Service) handleFunctionCallOutcome(
+func (s *LLMService) handleFunctionCallOutcome(
 	callID string, result *frames.FunctionCallResultFrame, canceled *frames.FunctionCallCancelFrame,
 ) {
 	s.mu.Lock()
@@ -1981,7 +1981,7 @@ func settlingMessage(callID string, result *frames.FunctionCallResultFrame) stri
 // passes. Prism keeps a result that arrives after that in its history but
 // mentions it only when asked, and the assistant aggregator drops the reply it
 // holds for the result when the user interrupts.
-func (s *Service) reportsLateResult(t *tool, result *frames.FunctionCallResultFrame) bool {
+func (s *LLMService) reportsLateResult(t *tool, result *frames.FunctionCallResultFrame) bool {
 	if result == nil || result.Result == "" {
 		return false
 	}
@@ -1999,7 +1999,7 @@ func (s *Service) reportsLateResult(t *tool, result *frames.FunctionCallResultFr
 }
 
 // writeToolUpdate writes a tool's progress or its final result.
-func (s *Service) writeToolUpdate(t *tool, output string, final bool, message string) error {
+func (s *LLMService) writeToolUpdate(t *tool, output string, final bool, message string) error {
 	developer := func(text string) func() ([]historyItem, error) {
 		return func() ([]historyItem, error) {
 			return []historyItem{{kind: itemMessage, role: string(frames.RoleSystem), text: text}}, nil
@@ -2045,7 +2045,7 @@ func (s *Service) writeToolUpdate(t *tool, output string, final bool, message st
 
 // submitToolResult records a tool's result, serialized with the history
 // writes.
-func (s *Service) submitToolResult(t *tool, output string) error {
+func (s *LLMService) submitToolResult(t *tool, output string) error {
 	s.mu.Lock()
 	history, sess := s.history, s.session
 	s.mu.Unlock()
@@ -2071,7 +2071,7 @@ func retryableReport(err error) bool {
 
 // reportLateResult asks for a reply that reports the result of a call whose
 // round had closed. It waits for Prism to be idle again once.
-func (s *Service) reportLateResult(ctx context.Context, t *tool) error {
+func (s *LLMService) reportLateResult(ctx context.Context, t *tool) error {
 	call := t.event.Call
 	s.mu.Lock()
 	value, ok := s.conversation.responses[call.ResponseID]
@@ -2104,7 +2104,7 @@ func (s *Service) reportLateResult(ctx context.Context, t *tool) error {
 
 // operationError reports a failed operation. One the conversation survives is
 // reported as an error; any other ends the conversation.
-func (s *Service) operationError(err error) {
+func (s *LLMService) operationError(err error) {
 	if !recoverable(err) {
 		s.fail(err)
 		return
@@ -2136,7 +2136,7 @@ func recoverable(err error) bool {
 
 // fail ends the conversation: the bot is interrupted, and the service is left
 // unusable.
-func (s *Service) fail(err error) {
+func (s *LLMService) fail(err error) {
 	s.mu.Lock()
 	if s.failure != nil {
 		s.mu.Unlock()
@@ -2150,13 +2150,13 @@ func (s *Service) fail(err error) {
 
 // queuesDrained reports whether the operations and the audio queued have all
 // been done.
-func (s *Service) queuesDrained() bool {
+func (s *LLMService) queuesDrained() bool {
 	return s.controlsPending.Load() == 0 && s.audioPending.Load() == 0
 }
 
 // drained reports whether nothing is left for a graceful stop to wait for: the
 // requests asked for have settled and every reply has ended.
-func (s *Service) drained() bool {
+func (s *LLMService) drained() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.requests > 0 {
@@ -2172,7 +2172,7 @@ func (s *Service) drained() bool {
 
 // stop drains the requests queued, then closes the session, within the
 // shutdown timeout.
-func (s *Service) stop() {
+func (s *LLMService) stop() {
 	s.mu.Lock()
 	opened := s.opening
 	s.mu.Unlock()
@@ -2185,7 +2185,7 @@ func (s *Service) stop() {
 // drain waits until deadline for the operations and the audio queued to be
 // done, sends the audio the resampler still holds, then waits for the requests
 // to settle and every reply to end. It reports whether everything drained.
-func (s *Service) drain(deadline time.Time) bool {
+func (s *LLMService) drain(deadline time.Time) bool {
 	wait := func(done func() bool) bool {
 		for !done() {
 			if time.Now().After(deadline) {
@@ -2213,7 +2213,7 @@ func (s *Service) drain(deadline time.Time) bool {
 
 // close cancels the work the service owns, without waiting for playback to
 // complete, and closes the session.
-func (s *Service) close() {
+func (s *LLMService) close() {
 	s.closeOnce.Do(func() {
 		s.closing.Store(true)
 		s.cancel()
@@ -2236,7 +2236,7 @@ func (s *Service) close() {
 
 // Cleanup closes the session after a startup that failed or when the pipeline
 // is torn down.
-func (s *Service) Cleanup(ctx context.Context) error {
+func (s *LLMService) Cleanup(ctx context.Context) error {
 	s.close()
 	return s.Base.Cleanup(ctx)
 }

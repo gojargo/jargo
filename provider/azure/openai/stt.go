@@ -45,8 +45,21 @@ func (sttShaper) Authorize(req *http.Request, apiKey string) {
 	req.Header.Set("api-key", apiKey)
 }
 
+// STTService is the Azure OpenAI speech-to-text service NewSTT builds.
+type STTService struct {
+	*stt.SegmentService
+}
+
 // NewSTT builds an Azure OpenAI transcription service.
-func NewSTT(cfg STTConfig) *stt.SegmentService {
+func NewSTT(cfg STTConfig) *STTService {
+	s := &STTService{}
+	s.SegmentService = buildSTT(cfg, stt.WithSelf(s))
+	return s
+}
+
+// buildSTT builds the service NewSTT returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildSTT(cfg STTConfig, opts ...stt.Option) *stt.SegmentService {
 	apiVersion := cfg.APIVersion
 	if apiVersion == "" {
 		apiVersion = defaultSTTAPIVersion
@@ -56,5 +69,5 @@ func NewSTT(cfg STTConfig) *stt.SegmentService {
 	sttCfg := cfg.STTConfig
 	sttCfg.BaseURL = "" // built from Endpoint/Deployment, not BaseURL
 	sttCfg.Model = ""   // the deployment in the URL selects the model
-	return chat.NewShapedSTT("AzureOpenAISTT", base, "", sttShaper{apiVersion: apiVersion}, sttCfg)
+	return chat.NewShapedSTT("AzureOpenAISTT", base, "", sttShaper{apiVersion: apiVersion}, sttCfg, opts...)
 }

@@ -36,15 +36,28 @@ type HTTPConfig struct {
 // Validate reports whether the configuration is usable.
 func (c HTTPConfig) Validate() error { return validate.Struct(c) }
 
+// HTTPTTSService is the Kokoro text-to-speech service NewHTTPTTS builds.
+type HTTPTTSService struct {
+	*tts.Base
+}
+
 // NewHTTPTTS builds a TTS service speaking through a Kokoro-FastAPI server.
 // Kokoro-FastAPI returns 24 kHz PCM, which matches the OpenAI "pcm" response
 // format this wrapper requests. NewTTS runs the model in process instead.
-func NewHTTPTTS(cfg HTTPConfig) *tts.Base {
+func NewHTTPTTS(cfg HTTPConfig) *HTTPTTSService {
+	s := &HTTPTTSService{}
+	s.Base = buildHTTPTTS(cfg, tts.WithSelf(s))
+	return s
+}
+
+// buildHTTPTTS builds the service NewHTTPTTS returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildHTTPTTS(cfg HTTPConfig, opts ...tts.Option) *tts.Base {
 	return chat.NewCompatTTS("KokoroHTTPTTS", cfg.BaseURL, defaultHTTPModel, defaultHTTPVoice, chat.TTSConfig{
 		APIKey:  cfg.APIKey,
 		BaseURL: cfg.BaseURL,
 		Model:   cfg.Model,
 		Voice:   cfg.Voice,
 		Speed:   cfg.Speed,
-	})
+	}, opts...)
 }

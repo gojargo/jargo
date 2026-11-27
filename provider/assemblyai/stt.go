@@ -19,11 +19,24 @@ import (
 	"github.com/gojargo/jargo/service/wsutil"
 )
 
+// STTService is the AssemblyAI speech-to-text service NewSTT builds.
+type STTService struct {
+	*stt.StreamService
+}
+
 // NewSTT builds an AssemblyAI streaming STT service.
-func NewSTT(cfg Config) *stt.StreamService {
+func NewSTT(cfg Config) *STTService {
+	s := &STTService{}
+	s.StreamService = buildSTT(cfg, stt.WithSelf(s))
+	return s
+}
+
+// buildSTT builds the service NewSTT returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildSTT(cfg Config, opts ...stt.Option) *stt.StreamService {
 	cfg = cfg.withDefaults()
 	cfg.warnLanguageSettings()
-	return stt.NewStream("AssemblyAISTT", &connector{cfg: cfg}, cfg.SampleRate)
+	return stt.NewStream("AssemblyAISTT", &connector{cfg: cfg}, cfg.SampleRate, opts...)
 }
 
 // withDefaults fills the unset fields that have a default.

@@ -117,7 +117,7 @@ func TestFluxTurnEventsReachTheService(t *testing.T) {
 	// A connector driving the service NewFluxSTT built, as the one inside it
 	// does: the events it raises are the ones the service declared.
 	c := newFluxConnector(FluxConfig{APIKey: "k"})
-	c.svc = svc
+	c.svc = svc.StreamService
 
 	var (
 		mu  sync.Mutex

@@ -82,6 +82,11 @@ func (c RealtimeTTSConfig) withDefaults() RealtimeTTSConfig {
 	return c
 }
 
+// RealtimeTTSService is the Azure text-to-speech service NewRealtimeTTS builds.
+type RealtimeTTSService struct {
+	*tts.Base
+}
+
 // NewRealtimeTTS builds an Azure AI Speech streaming TTS service. It speaks
 // Azure's synthesis WebSocket protocol over a connection reused across
 // sentences: each sentence is sent as an SSML document, and its audio and word
@@ -89,13 +94,21 @@ func (c RealtimeTTSConfig) withDefaults() RealtimeTTSConfig {
 // sentence is synthesized and the words are reported as they are spoken.
 // Unlike NewTTS, which posts each sentence over HTTP, it reports the words, so
 // the conversation keeps only what was heard before an interruption.
-func NewRealtimeTTS(cfg RealtimeTTSConfig) *tts.Base {
-	b, _ := newRealtimeTTS(cfg)
+func NewRealtimeTTS(cfg RealtimeTTSConfig) *RealtimeTTSService {
+	s := &RealtimeTTSService{}
+	s.Base = buildRealtimeTTS(cfg, tts.WithSelf(s))
+	return s
+}
+
+// buildRealtimeTTS builds the service NewRealtimeTTS returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildRealtimeTTS(cfg RealtimeTTSConfig, opts ...tts.Option) *tts.Base {
+	b, _ := newRealtimeTTS(cfg, opts...)
 	return b
 }
 
 // newRealtimeTTS builds the service and returns its synthesizer alongside it.
-func newRealtimeTTS(cfg RealtimeTTSConfig) (*tts.Base, *realtimeSynthesizer) {
+func newRealtimeTTS(cfg RealtimeTTSConfig, opts ...tts.Option) (*tts.Base, *realtimeSynthesizer) {
 	cfg = cfg.withDefaults()
 	if cfg.Region != "" && cfg.PrivateEndpoint != "" {
 		slog.Warn("azurespeech: both a region and a private endpoint were given; the region is ignored")
@@ -122,7 +135,7 @@ func newRealtimeTTS(cfg RealtimeTTSConfig) (*tts.Base, *realtimeSynthesizer) {
 			canceled:     s.handleCanceled,
 		},
 	}
-	b := tts.New("AzureRealtimeTTS", s)
+	b := tts.New("AzureRealtimeTTS", s, opts...)
 	s.base = b
 	if cfg.TextAggregation == frames.TextTypeToken {
 		b.SetTextAggregator(ttstext.NewTokenAggregator())

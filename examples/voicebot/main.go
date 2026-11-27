@@ -275,7 +275,7 @@ func buildStack(v *viper.Viper) (stt, llm, tts processor.Processor, err error) {
 
 // buildMemory enables mem0 long-term memory when mem0_host is set, scoping
 // memories with mem0_user. It returns nil when memory is off or misconfigured.
-func buildMemory(v *viper.Viper) *mem0.Service {
+func buildMemory(v *viper.Viper) *mem0.MemoryService {
 	host := v.GetString("mem0_host")
 	if host == "" {
 		return nil

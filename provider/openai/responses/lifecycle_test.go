@@ -72,7 +72,7 @@ func (f *refusingWS) dialed() int {
 
 // quickService is a WebSocket service on url whose reconnect backoff costs no
 // real time.
-func quickService(t *testing.T, url string) *Service {
+func quickService(t *testing.T, url string) *LLMService {
 	t.Helper()
 	svc := NewLLM(Config{APIKey: "k", WSURL: url})
 	svc.ws = llm.NewWebsocket(svc.Base, svc, wsservice.Config{

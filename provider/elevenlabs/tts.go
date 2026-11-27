@@ -151,8 +151,21 @@ type PronunciationDictionaryLocator struct {
 	VersionID    string `json:"version_id,omitempty"`
 }
 
+// TTSService is the ElevenLabs text-to-speech service NewTTS builds.
+type TTSService struct {
+	*tts.Base
+}
+
 // NewTTS builds an ElevenLabs TTS service.
-func NewTTS(cfg Config) *tts.Base {
+func NewTTS(cfg Config) *TTSService {
+	s := &TTSService{}
+	s.Base = buildTTS(cfg, tts.WithSelf(s))
+	return s
+}
+
+// buildTTS builds the service NewTTS returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildTTS(cfg Config, opts ...tts.Option) *tts.Base {
 	if cfg.BaseURL == "" {
 		cfg.BaseURL = defaultBaseURL
 	}
@@ -166,7 +179,7 @@ func NewTTS(cfg Config) *tts.Base {
 		cfg.SampleRate = defaultSampleRate
 	}
 	s := &synthesizer{cfg: cfg, http: &http.Client{}}
-	b := tts.New("ElevenLabsTTS", s)
+	b := tts.New("ElevenLabsTTS", s, opts...)
 	s.expressive = b.ExpressiveConversation
 	return b
 }

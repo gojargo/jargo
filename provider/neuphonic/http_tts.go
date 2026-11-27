@@ -62,16 +62,29 @@ type HTTPTTSConfig struct {
 // Validate reports whether the configuration is usable.
 func (c HTTPTTSConfig) Validate() error { return validate.Struct(c) }
 
+// HTTPTTSService is the Neuphonic text-to-speech service NewHTTPTTS builds.
+type HTTPTTSService struct {
+	*tts.Base
+}
+
 // NewHTTPTTS builds a Neuphonic TTS service over the HTTP API. Each sentence is
 // one request, whose audio streams back as server-sent events. Prefer NewTTS on
 // a call, where a connection held open spares each sentence the request.
-func NewHTTPTTS(cfg HTTPTTSConfig) *tts.Base {
-	b, _ := newHTTPTTS(cfg)
+func NewHTTPTTS(cfg HTTPTTSConfig) *HTTPTTSService {
+	s := &HTTPTTSService{}
+	s.Base = buildHTTPTTS(cfg, tts.WithSelf(s))
+	return s
+}
+
+// buildHTTPTTS builds the service NewHTTPTTS returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildHTTPTTS(cfg HTTPTTSConfig, opts ...tts.Option) *tts.Base {
+	b, _ := newHTTPTTS(cfg, opts...)
 	return b
 }
 
 // newHTTPTTS builds the service and returns its synthesizer alongside it.
-func newHTTPTTS(cfg HTTPTTSConfig) (*tts.Base, *httpSynthesizer) {
+func newHTTPTTS(cfg HTTPTTSConfig, opts ...tts.Option) (*tts.Base, *httpSynthesizer) {
 	if cfg.URL == "" {
 		cfg.URL = defaultHTTPURL
 	}
@@ -95,7 +108,7 @@ func newHTTPTTS(cfg HTTPTTSConfig) (*tts.Base, *httpSynthesizer) {
 		Temperature: cfg.Temperature,
 		IPAKey:      cfg.IPAKey,
 	})}
-	return tts.New("NeuphonicHTTPTTS", s), s
+	return tts.New("NeuphonicHTTPTTS", s, opts...), s
 }
 
 // httpSynthesizer speaks each sentence with one request to the HTTP API.

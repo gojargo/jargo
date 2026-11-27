@@ -163,20 +163,22 @@ func (s *SegmentService) StopAllMetrics(ctx context.Context) { s.ttfb.reportNow(
 
 // NewSegment builds a segmented STT service named name driven by tr. A non-zero
 // sampleRate overrides the transport's input rate.
-func NewSegment(name string, tr Transcriber, sampleRate int) *SegmentService {
-	return newSegment(name, tr, tr, nil, sampleRate)
+func NewSegment(name string, tr Transcriber, sampleRate int, opts ...Option) *SegmentService {
+	return newSegment(name, tr, tr, nil, sampleRate, opts)
 }
 
 // NewSegmentRunner builds a segmented STT service named name whose segments are
 // transcribed by r's RunSTT. A non-zero sampleRate overrides the transport's
 // input rate.
-func NewSegmentRunner(name string, r SegmentRunner, sampleRate int) *SegmentService {
-	return newSegment(name, r, nil, r, sampleRate)
+func NewSegmentRunner(name string, r SegmentRunner, sampleRate int, opts ...Option) *SegmentService {
+	return newSegment(name, r, nil, r, sampleRate, opts)
 }
 
 // newSegment builds a segmented STT service for provider, which is tr or
 // runner.
-func newSegment(name string, provider any, tr Transcriber, runner SegmentRunner, sampleRate int) *SegmentService {
+func newSegment(
+	name string, provider any, tr Transcriber, runner SegmentRunner, sampleRate int, opts []Option,
+) *SegmentService {
 	s := &SegmentService{
 		provider: provider, tr: tr, runner: runner,
 		cfgRate: sampleRate, trailingSilence: DefaultTrailingSilence,
@@ -186,7 +188,7 @@ func newSegment(name string, provider any, tr Transcriber, runner SegmentRunner,
 	if d, ok := provider.(Describer); ok {
 		s.model = d.Metadata().Model
 	}
-	s.Base = service.New(name, s)
+	s.Base = service.New(name, selfOr(s, opts))
 	s.set = &providerSettings{provider: provider, name: s.Name, onModel: s.setModel, onChanged: s.SettingsUpdated}
 	s.diarization = diarization{set: s.set, name: s.Name}
 	s.ttfb = newTTFBTracker(s.Base.Base, s.modelName)

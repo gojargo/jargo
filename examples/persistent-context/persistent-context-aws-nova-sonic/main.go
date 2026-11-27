@@ -121,7 +121,7 @@ func saveConversation(ctx context.Context, params llm.FunctionCallParams) error 
 
 // loadConversation loads a conversation history into the current session of
 // the Nova Sonic service s2s.
-func loadConversation(s2s *novasonic.Service) llm.FunctionCallHandler {
+func loadConversation(s2s *novasonic.LLMService) llm.FunctionCallHandler {
 	return func(ctx context.Context, params llm.FunctionCallParams) error {
 		var args struct {
 			Filename string `json:"filename"`
@@ -162,7 +162,7 @@ func loadConversation(s2s *novasonic.Service) llm.FunctionCallHandler {
 
 // tools describes the functions to the model, each carrying its own handler.
 // load_conversation resets the session of s2s.
-func tools(s2s *novasonic.Service) []frames.Tool {
+func tools(s2s *novasonic.LLMService) []frames.Tool {
 	return []frames.Tool{
 		{
 			Name:        "get_current_weather",

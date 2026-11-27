@@ -131,10 +131,10 @@ observers.NewDebugLog(observers.DebugLogConfig{
     Frames: []observers.DebugFrameFilter{
         // Every LLM token, wherever it travels.
         {Frame: &frames.LLMTextFrame{}},
-        // User speech, but only where it reaches a streaming transcriber.
+        // User speech, but only where it reaches the Deepgram transcriber.
         {
             Frame:    &frames.UserStartedSpeakingFrame{},
-            Match:    func(p processor.Processor) bool { _, ok := p.(*stt.StreamService); return ok },
+            Match:    func(p processor.Processor) bool { _, ok := p.(*deepgram.STTService); return ok },
             Endpoint: observers.DestinationEndpoint,
         },
     },

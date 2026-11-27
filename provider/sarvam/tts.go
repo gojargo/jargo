@@ -169,6 +169,11 @@ type TTSConfig struct {
 // Validate reports whether the configuration is usable.
 func (c TTSConfig) Validate() error { return validate.Struct(c) }
 
+// TTSService is the Sarvam text-to-speech service NewTTS builds.
+type TTSService struct {
+	*tts.Base
+}
+
 // NewTTS builds a Sarvam WebSocket TTS service.
 //
 // It holds one connection open for the call, opened when the pipeline starts.
@@ -177,15 +182,23 @@ func (c TTSConfig) Validate() error { return validate.Struct(c) }
 // no request, so an interruption while the bot speaks resets the connection,
 // and the next request's frames are held until this one's audio has played.
 // See tts.NewInterruptibleWebsocket.
-func NewTTS(cfg TTSConfig) *tts.Base {
-	b, _ := newTTS(cfg)
+func NewTTS(cfg TTSConfig) *TTSService {
+	s := &TTSService{}
+	s.Base = buildTTS(cfg, tts.WithSelf(s))
+	return s
+}
+
+// buildTTS builds the service NewTTS returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildTTS(cfg TTSConfig, opts ...tts.Option) *tts.Base {
+	b, _ := newTTS(cfg, opts...)
 	return b
 }
 
 // newTTS builds the service and returns its synthesizer alongside it.
-func newTTS(cfg TTSConfig) (*tts.Base, *synthesizer) {
+func newTTS(cfg TTSConfig, opts ...tts.Option) (*tts.Base, *synthesizer) {
 	s := newSynthesizer(cfg)
-	b := tts.New("SarvamTTS", s)
+	b := tts.New("SarvamTTS", s, opts...)
 	b.SetPauseFrameProcessing(tts.PauseOptions{Enabled: true})
 	s.svc = b
 	s.ws = tts.NewInterruptibleWebsocket(b, s, cfg.Websocket)

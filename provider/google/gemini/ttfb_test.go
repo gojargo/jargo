@@ -9,7 +9,7 @@ import (
 )
 
 // ttfbService points an LLM service at a stub streaming the given SSE body.
-func ttfbService(t *testing.T, body string) *Service {
+func ttfbService(t *testing.T, body string) *LLMService {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")

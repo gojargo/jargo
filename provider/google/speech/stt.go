@@ -244,20 +244,35 @@ func newSTTSettings(cfg STTConfig) *STTSettings {
 	return s
 }
 
+// STTService is the Google Cloud speech-to-text service NewSTT builds.
+type STTService struct {
+	*stt.StreamService
+}
+
 // NewSTT builds a Google Cloud Speech-to-Text V2 streaming service.
 //
 // Audio is streamed to Google over one streaming recognition call, which is
 // replaced before Google's limit on a call's length (see StreamingLimit). A
 // call that fails is reported and replaced a second later. A final result
 // marks the end of the user's turn.
-func NewSTT(cfg STTConfig) *stt.StreamService {
-	svc, _ := newSTT(cfg, nil)
+func NewSTT(cfg STTConfig) *STTService {
+	s := &STTService{}
+	s.StreamService = buildSTT(cfg, stt.WithSelf(s))
+	return s
+}
+
+// buildSTT builds the service NewSTT returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildSTT(cfg STTConfig, opts ...stt.Option) *stt.StreamService {
+	svc, _ := newSTT(cfg, nil, opts...)
 	return svc
 }
 
 // newSTT builds the service and the connector driving it, its clients built
 // with clientOptions when that is not nil.
-func newSTT(cfg STTConfig, clientOptions func() []option.ClientOption) (*stt.StreamService, *sttConnector) {
+func newSTT(
+	cfg STTConfig, clientOptions func() []option.ClientOption, opts ...stt.Option,
+) (*stt.StreamService, *sttConnector) {
 	if cfg.Location == "" {
 		cfg.Location = defaultLocation
 	}
@@ -270,7 +285,7 @@ func newSTT(cfg STTConfig, clientOptions func() []option.ClientOption) (*stt.Str
 		streamingLimit: StreamingLimit,
 		clientOptions:  clientOptions,
 	}
-	svc := stt.NewStream("GoogleSTT", c, cfg.SampleRate)
+	svc := stt.NewStream("GoogleSTT", c, cfg.SampleRate, opts...)
 	c.svc = svc
 	return svc, c
 }

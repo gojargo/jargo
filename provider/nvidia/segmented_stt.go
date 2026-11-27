@@ -82,13 +82,26 @@ func (c SegmentedSTTConfig) withSegmentedDefaults() SegmentedSTTConfig {
 	return c
 }
 
+// SegmentedSTTService is the NVIDIA Riva speech-to-text service NewSegmentedSTT builds.
+type SegmentedSTTService struct {
+	*stt.SegmentService
+}
+
 // NewSegmentedSTT builds an NVIDIA Riva batch speech-to-text service. It
 // transcribes each utterance in one call once a turn detector upstream has
 // delimited it, unlike NewSTT which streams continuously. Use it with Riva's
 // offline models, which are more accurate but produce no interim transcripts.
-func NewSegmentedSTT(cfg SegmentedSTTConfig) *stt.SegmentService {
+func NewSegmentedSTT(cfg SegmentedSTTConfig) *SegmentedSTTService {
+	s := &SegmentedSTTService{}
+	s.SegmentService = buildSegmentedSTT(cfg, stt.WithSelf(s))
+	return s
+}
+
+// buildSegmentedSTT builds the service NewSegmentedSTT returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildSegmentedSTT(cfg SegmentedSTTConfig, opts ...stt.Option) *stt.SegmentService {
 	cfg = cfg.withSegmentedDefaults()
-	return stt.NewSegment("NvidiaSegmentedSTT", &segmentedTranscriber{cfg: cfg}, cfg.SampleRate)
+	return stt.NewSegment("NvidiaSegmentedSTT", &segmentedTranscriber{cfg: cfg}, cfg.SampleRate, opts...)
 }
 
 type segmentedTranscriber struct {

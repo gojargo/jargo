@@ -33,9 +33,22 @@ func (c Config) loadOptions() []func(*awsconfig.LoadOptions) error {
 	return opts
 }
 
+// STTService is the Amazon Transcribe speech-to-text service NewSTT builds.
+type STTService struct {
+	*stt.StreamService
+}
+
 // NewSTT builds an Amazon Transcribe streaming STT service.
-func NewSTT(cfg Config) *stt.StreamService {
-	return stt.NewStream("TranscribeSTT", newConnector(cfg), cfg.SampleRate)
+func NewSTT(cfg Config) *STTService {
+	s := &STTService{}
+	s.StreamService = buildSTT(cfg, stt.WithSelf(s))
+	return s
+}
+
+// buildSTT builds the service NewSTT returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildSTT(cfg Config, opts ...stt.Option) *stt.StreamService {
+	return stt.NewStream("TranscribeSTT", newConnector(cfg), cfg.SampleRate, opts...)
 }
 
 // newConnector builds the connector a service opens its sessions with, its

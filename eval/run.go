@@ -11,8 +11,6 @@ import (
 	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/pipeline"
 	"github.com/gojargo/jargo/processor"
-	"github.com/gojargo/jargo/service/stt"
-	"github.com/gojargo/jargo/service/tts"
 	"github.com/gojargo/jargo/transport/wsserver"
 	"github.com/gojargo/jargo/transport/wsserver/evalws"
 )
@@ -37,11 +35,11 @@ type Options struct {
 	// send-text. Nil builds one from the scenario's user: block's speech, if
 	// any. A local or HTTP service works, e.g. a Kokoro or an OpenAI TTS; a
 	// WebSocket-streaming one does not.
-	UserTTS *tts.Base
+	UserTTS TTSService
 	// BotSTT transcribes the bot's audio for a scenario asserting response in
 	// audio mode. Nil builds one from the scenario's judge: block's
 	// transcription.
-	BotSTT *stt.SegmentService
+	BotSTT SegmentedSTT
 	// OnProgress, when set, is called as each turn and expectation resolves, in
 	// order, for a caller reporting a long run as it happens rather than at the
 	// end (see EventProgress). Keep it quick: the records queue behind it.

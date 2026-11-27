@@ -382,7 +382,7 @@ func TestServerPlaybackAdmissionWaitDoesNotBlockMicrophoneFrames(t *testing.T) {
 
 // runService runs the service alone in a pipeline with frames, as a test of a
 // processor does, and returns the frames that traveled upstream.
-func runService(t *testing.T, svc *Service, wait time.Duration, fs ...frames.Frame) []frames.Frame {
+func runService(t *testing.T, svc *LLMService, wait time.Duration, fs ...frames.Frame) []frames.Frame {
 	t.Helper()
 	up := newCapture(processor.Upstream)
 	w := pipeline.NewWorker(pipeline.New(up, svc), pipeline.WorkerConfig{})

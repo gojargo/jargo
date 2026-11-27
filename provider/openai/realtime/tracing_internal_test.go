@@ -31,7 +31,7 @@ func tracedSetup() processor.Setup {
 
 // tracedService is an offline service with tracing on, and the recorder its
 // spans end in.
-func tracedService(t *testing.T) (*Service, *tracetest.SpanRecorder) {
+func tracedService(t *testing.T) (*LLMService, *tracetest.SpanRecorder) {
 	t.Helper()
 	rec := spanRecorder(t)
 	s, _ := offlineServiceWith(t, Config{Model: "gpt-realtime"}, tracedSetup())
@@ -78,7 +78,7 @@ func responseDoneWithUsage() map[string]any {
 
 // midReply puts the service in the middle of a reply: a response it has
 // started and not yet closed.
-func midReply(t *testing.T, s *Service) {
+func midReply(t *testing.T, s *LLMService) {
 	t.Helper()
 	if err := s.PushFrame(context.Background(), frames.NewLLMFullResponseStartFrame(),
 		processor.Downstream); err != nil {

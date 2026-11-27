@@ -66,7 +66,7 @@ func TestRunPiperTTSSuccess(t *testing.T) {
 	// The fake listens on "/", which is posted to with the slash removed.
 	b := NewHTTPTTS(HTTPConfig{BaseURL: strings.TrimSuffix(srv.url, "/"), SampleRate: 24000})
 
-	down, _ := runTest(t, b, speakFrame("Hello world.", true))
+	down, _ := runTest(t, b.Base, speakFrame("Hello world.", true))
 
 	for _, name := range []string{"AggregatedTextFrame", "TTSStartedFrame", "TTSStoppedFrame", "TTSTextFrame"} {
 		if !hasName(down, name) {
@@ -112,7 +112,7 @@ func TestRunPiperTTSError(t *testing.T) {
 	})
 	b := NewHTTPTTS(HTTPConfig{BaseURL: strings.TrimSuffix(srv.url, "/"), SampleRate: 24000})
 
-	down, up := runTest(t, b, speakFrame("Error case.", false))
+	down, up := runTest(t, b.Base, speakFrame("Error case.", false))
 
 	var downNames []string
 	for _, f := range down {
@@ -158,7 +158,7 @@ func TestHTTPPiperSendsSynthesisSettingsOnlyWhenSet(t *testing.T) {
 			cfg := tc.cfg
 			cfg.BaseURL, cfg.SampleRate, cfg.Voice = srv.url, 24000, "en_US-ryan-high"
 
-			runTest(t, NewHTTPTTS(cfg), speakFrame("Hello.", false))
+			runTest(t, NewHTTPTTS(cfg).Base, speakFrame("Hello.", false))
 
 			want := map[string]any{"text": "Hello.", "voice": "en_US-ryan-high"}
 			maps.Copy(want, tc.want)
@@ -175,7 +175,7 @@ func TestHTTPPiperSendsSynthesisSettingsOnlyWhenSet(t *testing.T) {
 // With no voice configured, the request leaves the choice to the server.
 func TestHTTPPiperSendsANullVoiceWhenNoneIsSet(t *testing.T) {
 	srv := newPiperServer(t, "/synthesize", func(w http.ResponseWriter) { _, _ = w.Write(make([]byte, 480)) })
-	runTest(t, NewHTTPTTS(HTTPConfig{BaseURL: srv.url}), speakFrame("Hi.", false))
+	runTest(t, NewHTTPTTS(HTTPConfig{BaseURL: srv.url}).Base, speakFrame("Hi.", false))
 
 	if len(srv.bodies) != 1 {
 		t.Fatalf("requests = %d, want 1", len(srv.bodies))
@@ -192,7 +192,7 @@ func TestHTTPPiperSendsAnUpdatedVoice(t *testing.T) {
 	delta := &HTTPTTSSettings{}
 	delta.Voice = settings.Set("en_US-lessac-medium")
 
-	runTest(t, b,
+	runTest(t, b.Base,
 		speakFrame("One.", false),
 		frames.NewTTSUpdateSettingsFrame(delta),
 		speakFrame("Two.", false),
@@ -215,7 +215,7 @@ func TestHTTPPiperStripsTheWAVHeader(t *testing.T) {
 		w.Header().Set("Content-Type", "audio/wav")
 		_, _ = w.Write(wav(pcm, 22050))
 	})
-	down, _ := runTest(t, NewHTTPTTS(HTTPConfig{BaseURL: srv.url, SampleRate: 22050}), speakFrame("Hi.", false))
+	down, _ := runTest(t, NewHTTPTTS(HTTPConfig{BaseURL: srv.url, SampleRate: 22050}).Base, speakFrame("Hi.", false))
 
 	var got []byte
 	for _, a := range audioFrames(down) {

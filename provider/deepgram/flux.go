@@ -327,11 +327,24 @@ type FluxConfig struct {
 // Validate reports whether the configuration is usable.
 func (cfg FluxConfig) Validate() error { return validate.Struct(cfg) }
 
+// FluxSTTService is the Deepgram speech-to-text service NewFluxSTT builds.
+type FluxSTTService struct {
+	*stt.StreamService
+}
+
 // NewFluxSTT builds a Deepgram Flux streaming turn-aware STT service. Flux
 // detects turn boundaries server-side, so the service recommends external user
 // turns downstream, unless VADForceTurnEndpoint hands the turns to the
 // pipeline's own strategies.
-func NewFluxSTT(cfg FluxConfig) *stt.StreamService {
+func NewFluxSTT(cfg FluxConfig) *FluxSTTService {
+	s := &FluxSTTService{}
+	s.StreamService = buildFluxSTT(cfg, stt.WithSelf(s))
+	return s
+}
+
+// buildFluxSTT builds the service NewFluxSTT returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildFluxSTT(cfg FluxConfig, opts ...stt.Option) *stt.StreamService {
 	if cfg.Model == "" {
 		cfg.Model = defaultFluxModel
 	}
@@ -343,7 +356,7 @@ func NewFluxSTT(cfg FluxConfig) *stt.StreamService {
 			"configure interruptions on the user turn start strategy instead", "service", "DeepgramFluxSTT")
 	}
 	c := newFluxConnector(cfg)
-	svc := stt.NewStream("DeepgramFluxSTT", c, cfg.SampleRate)
+	svc := stt.NewStream("DeepgramFluxSTT", c, cfg.SampleRate, opts...)
 	for _, name := range fluxEvents {
 		svc.Events().Register(name, false)
 	}

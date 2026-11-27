@@ -230,7 +230,7 @@ func TestTheSetupCarriesTheThinkingConfig(t *testing.T) {
 }
 
 // setupOf is the body of the setup message s would open a session with.
-func setupOf(t *testing.T, s *Service) map[string]any {
+func setupOf(t *testing.T, s *LLMService) map[string]any {
 	t.Helper()
 	msg, err := s.setup()
 	if err != nil {

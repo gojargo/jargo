@@ -166,7 +166,7 @@ func (testShaper) Authorize(_ context.Context, req *http.Request) error {
 	return nil
 }
 
-func makeService(api *fakeAPI, cfg Config) *Service {
+func makeService(api *fakeAPI, cfg Config) *LLMService {
 	cfg.APIKey = "test-key"
 	return NewShapedLLM("GoogleInteractionsLLM", testShaper{url: api.URL}, cfg)
 }
@@ -181,7 +181,7 @@ func userContext(text string) *frames.LLMContext {
 // out of it downstream and upstream. wait, when set, is waited on before the
 // pipeline is stopped.
 func runContext(
-	t *testing.T, svc *Service, convo *frames.LLMContext, params pipeline.Params, wait <-chan struct{},
+	t *testing.T, svc *LLMService, convo *frames.LLMContext, params pipeline.Params, wait <-chan struct{},
 ) (down, up []frames.Frame) {
 	t.Helper()
 	var mu sync.Mutex
@@ -563,7 +563,7 @@ func TestStreamErrorEventReported(t *testing.T) {
 }
 
 // requestFor runs one plain turn and returns the request it sent.
-func requestFor(t *testing.T, cfg Config, convo *frames.LLMContext, setup func(*Service)) map[string]any {
+func requestFor(t *testing.T, cfg Config, convo *frames.LLMContext, setup func(*LLMService)) map[string]any {
 	t.Helper()
 	api := newFakeAPI(t, reply{body: sse(eventsOf(textReply("Hi.", 1), []string{completed("completed", nil)}))})
 	svc := makeService(api, cfg)
@@ -604,7 +604,7 @@ func TestStatelessStreamedRequest(t *testing.T) {
 func TestGenerationSettings(t *testing.T) {
 	temperature, seed := 0.2, 7
 	request := requestFor(t, Config{Temperature: &temperature, MaxTokens: 100, Seed: &seed}, nil,
-		func(s *Service) { s.SetSystemInstruction("Be brief.") })
+		func(s *LLMService) { s.SetSystemInstruction("Be brief.") })
 	g := genConfig(request)
 	if request["system_instruction"] != "Be brief." || g["temperature"] != 0.2 ||
 		g["max_output_tokens"] != float64(100) || g["seed"] != float64(7) {
@@ -669,7 +669,7 @@ func TestThinkingSettings(t *testing.T) {
 // TestProviderThinkingDefault checks use_provider_thinking_default leaves
 // thinking to Google.
 func TestProviderThinkingDefault(t *testing.T) {
-	g := genConfig(requestFor(t, Config{}, nil, func(s *Service) { s.SetUseProviderThinkingDefault(true) }))
+	g := genConfig(requestFor(t, Config{}, nil, func(s *LLMService) { s.SetUseProviderThinkingDefault(true) }))
 	if _, ok := g["thinking_level"]; ok {
 		t.Errorf("generation_config = %v, want no thinking level", g)
 	}

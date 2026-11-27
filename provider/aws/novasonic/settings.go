@@ -73,19 +73,19 @@ func endpointingSensitivitySupported(model string) bool { return !isFirstGenerat
 func assistantResponseTriggerNeeded(model string) bool { return isFirstGenerationModel(model) }
 
 // Settings returns the store a settings update is merged into.
-func (s *Service) Settings() any { return s.live }
+func (s *LLMService) Settings() any { return s.live }
 
 // UpdateSettings reports every setting an update changed as not applied: Nova
 // Sonic takes them all when a session opens, so they reach the session only
 // when the next one opens.
-func (s *Service) UpdateSettings(ctx context.Context, changed settings.Changed) error {
+func (s *LLMService) UpdateSettings(ctx context.Context, changed settings.Changed) error {
 	s.WarnUnhandledUpdatedSettings(ctx, changed.Names())
 	return nil
 }
 
 // ServiceTools returns the tools the service was built with, which the base
 // registers the handlers of while the conversation advertises none.
-func (s *Service) ServiceTools() frames.ToolsSchema { return s.tools }
+func (s *LLMService) ServiceTools() frames.ToolsSchema { return s.tools }
 
 // model is the model the session runs.
-func (s *Service) model() string { return s.live.Model.Or("") }
+func (s *LLMService) model() string { return s.live.Model.Or("") }

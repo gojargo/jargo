@@ -87,8 +87,21 @@ type HTTPTTSConfig struct {
 // Validate reports whether the configuration is usable.
 func (c HTTPTTSConfig) Validate() error { return validate.Struct(c) }
 
+// HTTPTTSService is the Cartesia text-to-speech service NewHTTPTTS builds.
+type HTTPTTSService struct {
+	*tts.Base
+}
+
 // NewHTTPTTS builds a Cartesia TTS service over the HTTP API.
-func NewHTTPTTS(cfg HTTPTTSConfig) *tts.Base {
+func NewHTTPTTS(cfg HTTPTTSConfig) *HTTPTTSService {
+	s := &HTTPTTSService{}
+	s.Base = buildHTTPTTS(cfg, tts.WithSelf(s))
+	return s
+}
+
+// buildHTTPTTS builds the service NewHTTPTTS returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildHTTPTTS(cfg HTTPTTSConfig, opts ...tts.Option) *tts.Base {
 	if cfg.BaseURL == "" {
 		cfg.BaseURL = defaultHTTPTTSBaseURL
 	}
@@ -111,7 +124,7 @@ func NewHTTPTTS(cfg HTTPTTSConfig) *tts.Base {
 		cfg.Client = &http.Client{}
 	}
 	s := newHTTPSynthesizer(cfg)
-	b := tts.New("CartesiaHTTPTTS", s)
+	b := tts.New("CartesiaHTTPTTS", s, opts...)
 	s.expressionSettings = b.ExpressionSettings
 	return b
 }

@@ -112,6 +112,11 @@ type loadFunc func(modelPath, voicesPath string, espeak EspeakConfig) (kokoroMod
 // ensureFunc downloads the model and voices files that do not exist.
 type ensureFunc func(ctx context.Context, cfg Config, modelPath, voicesPath string) error
 
+// TTSService is the Kokoro text-to-speech service NewTTS builds.
+type TTSService struct {
+	*tts.Base
+}
+
 // NewTTS builds a Kokoro TTS service, which synthesizes each sentence locally
 // and streams its audio a batch at a time as it is synthesized.
 //
@@ -119,8 +124,20 @@ type ensureFunc func(ctx context.Context, cfg Config, modelPath, voicesPath stri
 // along with espeak-ng, so a missing library, a missing voice or a model that
 // fails to load is reported now rather than on the first sentence. A missing
 // espeak-ng is ErrEspeakNotAvailable.
-func NewTTS(cfg Config) (*tts.Base, error) {
-	b, _, err := newTTS(cfg, downloadModelFiles, loadKokoro)
+func NewTTS(cfg Config) (*TTSService, error) {
+	s := &TTSService{}
+	svc, err := buildTTS(cfg, tts.WithSelf(s))
+	if err != nil {
+		return nil, err
+	}
+	s.Base = svc
+	return s, nil
+}
+
+// buildTTS builds the service NewTTS returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildTTS(cfg Config, opts ...tts.Option) (*tts.Base, error) {
+	b, _, err := newTTS(cfg, downloadModelFiles, loadKokoro, opts...)
 	return b, err
 }
 
@@ -136,7 +153,7 @@ func loadKokoro(modelPath, voicesPath string, espeak EspeakConfig) (kokoroModel,
 
 // newTTS builds the service over ensure and load, returning its synthesizer
 // alongside it.
-func newTTS(cfg Config, ensure ensureFunc, load loadFunc) (*tts.Base, *synthesizer, error) {
+func newTTS(cfg Config, ensure ensureFunc, load loadFunc, opts ...tts.Option) (*tts.Base, *synthesizer, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, nil, err
 	}
@@ -167,7 +184,7 @@ func newTTS(cfg Config, ensure ensureFunc, load loadFunc) (*tts.Base, *synthesiz
 		_ = model.close()
 		return nil, nil, fmt.Errorf("Kokoro TTS voice '%s' %w", voice, errVoiceNotInFile) //nolint:staticcheck // as above
 	}
-	return tts.New("KokoroTTS", s), s, nil
+	return tts.New("KokoroTTS", s, opts...), s, nil
 }
 
 // filePaths is the model and voices files the configuration names, or their

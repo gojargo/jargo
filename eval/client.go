@@ -34,7 +34,6 @@ import (
 	"github.com/gojargo/jargo/processor/turns"
 	"github.com/gojargo/jargo/service/llm"
 	"github.com/gojargo/jargo/service/settings"
-	"github.com/gojargo/jargo/service/stt"
 	"github.com/gojargo/jargo/transport/wsclient"
 	"github.com/gojargo/jargo/transport/wsserver/evalws"
 )
@@ -153,7 +152,7 @@ func (q *segmentStarts) len() int {
 // A tagged transcription stays a *frames.TranscriptionFrame, every field it was
 // built with kept, so the turn aggregator takes it in as one; the start rides in
 // its metadata (see segmentStartedAt).
-func tagBotSegments(service *stt.SegmentService, starts *segmentStarts) {
+func tagBotSegments(service SegmentedSTT, starts *segmentStarts) {
 	run := service.RunSTT()
 	service.SetRunSTT(func(ctx context.Context, audio []byte, sampleRate int) iter.Seq[frames.Frame] {
 		return func(yield func(frames.Frame) bool) {
@@ -569,7 +568,7 @@ type Client struct {
 	params        ClientParams
 	sessionParams SessionParams
 	userTTS       *CachingTTSService
-	botSTT        *stt.SegmentService
+	botSTT        SegmentedSTT
 	// persona is a simulation's simulated caller, or nil.
 	persona *Persona
 	// relay sends the persona's replies to the bot (built with the
@@ -631,7 +630,7 @@ type Client struct {
 // how the client tells the speech a send talked over from the bot's reply.
 func NewClient(
 	botURL string, params ClientParams, sessionParams SessionParams,
-	stream *EventStream, trace *Trace, userTTS *CachingTTSService, botSTT *stt.SegmentService, persona *Persona,
+	stream *EventStream, trace *Trace, userTTS *CachingTTSService, botSTT SegmentedSTT, persona *Persona,
 ) *Client {
 	c := &Client{
 		botURL:        botURL,

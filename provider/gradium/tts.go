@@ -87,16 +87,29 @@ func newTTSSettings(cfg TTSConfig) *TTSSettings {
 	return s
 }
 
+// TTSService is the Gradium text-to-speech service NewTTS builds.
+type TTSService struct {
+	*tts.Base
+}
+
 // NewTTS builds a Gradium TTS service. It holds one connection open for the
 // call, restoring it with backoff if it fails, and speaks each turn on a
 // request of its own on that connection.
-func NewTTS(cfg TTSConfig) *tts.Base {
-	b, _ := newTTS(cfg)
+func NewTTS(cfg TTSConfig) *TTSService {
+	s := &TTSService{}
+	s.Base = buildTTS(cfg, tts.WithSelf(s))
+	return s
+}
+
+// buildTTS builds the service NewTTS returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildTTS(cfg TTSConfig, opts ...tts.Option) *tts.Base {
+	b, _ := newTTS(cfg, opts...)
 	return b
 }
 
 // newTTS builds the service and the synthesizer behind it.
-func newTTS(cfg TTSConfig) (*tts.Base, *ttsSynthesizer) {
+func newTTS(cfg TTSConfig, opts ...tts.Option) (*tts.Base, *ttsSynthesizer) {
 	if cfg.URL == "" {
 		cfg.URL = defaultTTSURL
 	}
@@ -104,7 +117,7 @@ func newTTS(cfg TTSConfig) (*tts.Base, *ttsSynthesizer) {
 		cfg.VoiceID = defaultVoiceID
 	}
 	s := &ttsSynthesizer{cfg: cfg, live: newTTSSettings(cfg), setupContexts: map[string]bool{}}
-	b := tts.New("GradiumTTS", s)
+	b := tts.New("GradiumTTS", s, opts...)
 	s.base = b
 	s.ws = tts.NewWebsocket(b, s, cfg.Websocket)
 	// A reply waits until the one before it has all its audio.

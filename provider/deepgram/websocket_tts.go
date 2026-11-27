@@ -168,6 +168,11 @@ func (s *TTSSettings) ApplyUpdate(delta any) (settings.Changed, error) {
 	return changed, nil
 }
 
+// WebsocketTTSService is the Deepgram text-to-speech service NewWebsocketTTS builds.
+type WebsocketTTSService struct {
+	*tts.Base
+}
+
 // NewWebsocketTTS builds a Deepgram Aura TTS service over the WebSocket API.
 // Unlike NewTTS, which issues one HTTP request per sentence, it holds one
 // connection open for the call and streams each sentence on it, so no sentence
@@ -181,17 +186,25 @@ func (s *TTSSettings) ApplyUpdate(delta any) (settings.Changed, error) {
 // frame handling pauses while a turn's audio is generated so turns never
 // overlap. The text of a turn is generated once the turn has all been sent,
 // and an interruption tells Aura to clear what it holds.
-func NewWebsocketTTS(cfg WebsocketTTSConfig) *tts.Base {
-	b, _ := newWebsocketTTS(cfg)
+func NewWebsocketTTS(cfg WebsocketTTSConfig) *WebsocketTTSService {
+	s := &WebsocketTTSService{}
+	s.Base = buildWebsocketTTS(cfg, tts.WithSelf(s))
+	return s
+}
+
+// buildWebsocketTTS builds the service NewWebsocketTTS returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildWebsocketTTS(cfg WebsocketTTSConfig, opts ...tts.Option) *tts.Base {
+	b, _ := newWebsocketTTS(cfg, opts...)
 	return b
 }
 
 // newWebsocketTTS builds the service and returns its synthesizer alongside it.
-func newWebsocketTTS(cfg WebsocketTTSConfig) (*tts.Base, *wsSynth) {
+func newWebsocketTTS(cfg WebsocketTTSConfig, opts ...tts.Option) (*tts.Base, *wsSynth) {
 	cfg = cfg.withDefaults()
 	s := &wsSynth{cfg: cfg, live: newTTSSettings(cfg.Voice, cfg.Speed)}
 	s.refreshEndpoint()
-	b := tts.New("DeepgramWebsocketTTS", s)
+	b := tts.New("DeepgramWebsocketTTS", s, opts...)
 	s.base = b
 	s.ws = tts.NewWebsocket(b, s, cfg.Websocket)
 	b.SetPauseFrameProcessing(tts.PauseOptions{Enabled: true})

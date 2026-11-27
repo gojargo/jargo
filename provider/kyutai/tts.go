@@ -44,8 +44,21 @@ type TTSConfig struct {
 // Validate reports whether the configuration is usable.
 func (cfg TTSConfig) Validate() error { return validate.Struct(cfg) }
 
+// TTSService is the Kyutai text-to-speech service NewTTS builds.
+type TTSService struct {
+	*tts.Base
+}
+
 // NewTTS builds a Kyutai TTS service backed by moshi-server.
-func NewTTS(cfg TTSConfig) *tts.Base {
+func NewTTS(cfg TTSConfig) *TTSService {
+	s := &TTSService{}
+	s.Base = buildTTS(cfg, tts.WithSelf(s))
+	return s
+}
+
+// buildTTS builds the service NewTTS returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildTTS(cfg TTSConfig, opts ...tts.Option) *tts.Base {
 	if cfg.URL == "" {
 		cfg.URL = defaultTTSURL
 	}
@@ -55,7 +68,7 @@ func NewTTS(cfg TTSConfig) *tts.Base {
 	if cfg.SampleRate == 0 {
 		cfg.SampleRate = defaultSampleRate
 	}
-	return tts.New("KyutaiTTS", &synthesizer{cfg: cfg})
+	return tts.New("KyutaiTTS", &synthesizer{cfg: cfg}, opts...)
 }
 
 type synthesizer struct {

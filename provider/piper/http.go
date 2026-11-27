@@ -70,17 +70,30 @@ type HTTPConfig struct {
 // Validate reports whether the configuration is usable.
 func (c HTTPConfig) Validate() error { return validate.Struct(c) }
 
+// HTTPTTSService is the Piper text-to-speech service NewHTTPTTS builds.
+type HTTPTTSService struct {
+	*tts.Base
+}
+
 // NewHTTPTTS builds a TTS service speaking through a Piper HTTP server. Each
 // utterance is posted to the server with the voice and the synthesis controls
 // set, and the WAV it answers with is streamed downstream as it arrives, its
 // header removed. NewTTS runs the voice in process instead.
-func NewHTTPTTS(cfg HTTPConfig) *tts.Base {
-	b, _ := newHTTPTTS(cfg)
+func NewHTTPTTS(cfg HTTPConfig) *HTTPTTSService {
+	s := &HTTPTTSService{}
+	s.Base = buildHTTPTTS(cfg, tts.WithSelf(s))
+	return s
+}
+
+// buildHTTPTTS builds the service NewHTTPTTS returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildHTTPTTS(cfg HTTPConfig, opts ...tts.Option) *tts.Base {
+	b, _ := newHTTPTTS(cfg, opts...)
 	return b
 }
 
 // newHTTPTTS builds the service and returns its synthesizer alongside it.
-func newHTTPTTS(cfg HTTPConfig) (*tts.Base, *httpSynthesizer) {
+func newHTTPTTS(cfg HTTPConfig, opts ...tts.Option) (*tts.Base, *httpSynthesizer) {
 	if strings.HasSuffix(cfg.BaseURL, "/") {
 		slog.Warn("Base URL ends with a slash, this is not allowed.", "service", "PiperHTTPTTS")
 		cfg.BaseURL = strings.TrimSuffix(cfg.BaseURL, "/")
@@ -97,7 +110,7 @@ func newHTTPTTS(cfg HTTPConfig) (*tts.Base, *httpSynthesizer) {
 		noiseScale:  cfg.NoiseScale,
 		noiseWScale: cfg.NoiseWScale,
 	}))}
-	return tts.New("PiperHTTPTTS", s), s
+	return tts.New("PiperHTTPTTS", s, opts...), s
 }
 
 // httpSynthesizer speaks each utterance with one request to the server.

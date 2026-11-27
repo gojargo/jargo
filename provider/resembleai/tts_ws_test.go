@@ -895,7 +895,7 @@ func (r *run) wait() {
 func TestEachSentenceHasAContextOfItsOwn(t *testing.T) {
 	server := newFakeServer(t, speak(480))
 	b := NewTTS(Config{APIKey: "k", Voice: "v", URL: server.url})
-	r := runPipeline(t, b)
+	r := runPipeline(t, b.Base)
 	waitUntil(t, "the server saw no connection when the pipeline started", func() bool {
 		return server.connections() == 1
 	})
@@ -946,7 +946,7 @@ func TestReportsAFailedConnection(t *testing.T) {
 		mu.Unlock()
 	})
 
-	r := runPipeline(t, b)
+	r := runPipeline(t, b.Base)
 	defer r.stop()
 	waitUntil(t, "the refused connection was never reported", func() bool {
 		mu.Lock()

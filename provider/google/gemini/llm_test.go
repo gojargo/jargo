@@ -84,7 +84,7 @@ func (s *testShaper) Authorize(_ context.Context, req *http.Request) error {
 }
 
 // serviceFor builds a service that talks to srv through sh.
-func serviceFor(srv *genServer, sh RequestShaper, cfg Config) *Service {
+func serviceFor(srv *genServer, sh RequestShaper, cfg Config) *LLMService {
 	return NewShapedLLM("GoogleLLM", sh, cfg)
 }
 
@@ -513,7 +513,7 @@ func TestRunInferenceAnswersOnce(t *testing.T) {
 // TestServiceRunsOneShotInferences checks the service satisfies the interface a
 // summarizer or a judge asks for.
 func TestServiceRunsOneShotInferences(t *testing.T) {
-	var _ llm.Inferencer = (*Service)(nil)
+	var _ llm.Inferencer = (*LLMService)(nil)
 }
 
 // TestSupportsPrefill pins the frozen legacy set: the models that continue a

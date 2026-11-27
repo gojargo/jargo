@@ -67,13 +67,26 @@ var errNotConnected = errors.New("speechmatics stt: session is not connected")
 //nolint:gochecknoglobals // sentinel error
 var errNotSpeechmatics = errors.New("speechmatics stt: not a Speechmatics STT service")
 
+// STTService is the Speechmatics speech-to-text service NewSTT builds.
+type STTService struct {
+	*stt.StreamService
+}
+
 // NewSTT builds a Speechmatics streaming STT service on the Agent STT API.
-func NewSTT(cfg Config) *stt.StreamService {
+func NewSTT(cfg Config) *STTService {
+	s := &STTService{}
+	s.StreamService = buildSTT(cfg, stt.WithSelf(s))
+	return s
+}
+
+// buildSTT builds the service NewSTT returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildSTT(cfg Config, opts ...stt.Option) *stt.StreamService {
 	if cfg.URL == "" {
 		cfg.URL = defaultURL
 	}
 	c := &connector{cfg: cfg, live: newSTTSettings(cfg)}
-	svc := stt.NewStream("SpeechmaticsSTT", c, cfg.SampleRate)
+	svc := stt.NewStream("SpeechmaticsSTT", c, cfg.SampleRate, opts...)
 	c.svc = svc
 	// Registered whatever the configuration: diarization can be turned on at
 	// runtime, and a handler added while it was off would otherwise be dropped.

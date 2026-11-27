@@ -55,7 +55,7 @@ func TestRunInferenceLeavesTheSchemaOffALegacyModel(t *testing.T) {
 // Gemini takes a JSON schema from the 2.5 models on; a model id without a
 // version is assumed to support it.
 func TestModelSupportsResponseSchema(t *testing.T) {
-	svc := &Service{}
+	svc := &LLMService{}
 	if !svc.SupportsResponseSchema() {
 		t.Fatal("Gemini reports it cannot enforce a response schema")
 	}

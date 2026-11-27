@@ -27,7 +27,7 @@ func laneCompleted(lane, responseID string) string {
 
 // newLaneService builds a service talking to a fake endpoint that answers the
 // Nth request with the Nth script.
-func newLaneService(t *testing.T, scripts ...[]string) (*Service, *fakeResponsesWS) {
+func newLaneService(t *testing.T, scripts ...[]string) (*LLMService, *fakeResponsesWS) {
 	t.Helper()
 	srv := newFakeResponsesWS(t, scripts)
 	svc := NewLLM(Config{APIKey: "k", WSURL: srv.wsURL()})
@@ -36,7 +36,7 @@ func newLaneService(t *testing.T, scripts ...[]string) (*Service, *fakeResponses
 }
 
 // generate runs one turn over convo and returns the text it produced.
-func generate(t *testing.T, svc *Service, convo *frames.LLMContext) string {
+func generate(t *testing.T, svc *LLMService, convo *frames.LLMContext) string {
 	t.Helper()
 	var text strings.Builder
 	if err := svc.Generate(context.Background(), convo, func(s string) error {
@@ -50,7 +50,7 @@ func generate(t *testing.T, svc *Service, convo *frames.LLMContext) string {
 
 // generateInterrupted runs one turn over convo and interrupts it at its first
 // text.
-func generateInterrupted(t *testing.T, svc *Service, convo *frames.LLMContext) {
+func generateInterrupted(t *testing.T, svc *LLMService, convo *frames.LLMContext) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -64,7 +64,7 @@ func generateInterrupted(t *testing.T, svc *Service, convo *frames.LLMContext) {
 }
 
 // drainingLanes is the lanes the service holds as draining, sorted.
-func drainingLanes(svc *Service) []string {
+func drainingLanes(svc *LLMService) []string {
 	svc.mu.Lock()
 	defer svc.mu.Unlock()
 	return slices.Sorted(maps.Keys(svc.draining))

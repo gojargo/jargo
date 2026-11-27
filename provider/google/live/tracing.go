@@ -21,7 +21,7 @@ import (
 const instructionLimit = 500
 
 // baseAttrs are the attributes every span of the session carries.
-func (s *Service) baseAttrs(operation string) tracing.GeminiLiveAttributes {
+func (s *LLMService) baseAttrs(operation string) tracing.GeminiLiveAttributes {
 	return tracing.GeminiLiveAttributes{
 		Service:    s.TypeName(),
 		Model:      s.model(),
@@ -35,7 +35,7 @@ func (s *Service) baseAttrs(operation string) tracing.GeminiLiveAttributes {
 // server has acknowledged it, so a trace shows what the model was told before it
 // began answering. The instruction recorded is the effective one: the composed
 // instruction, else the conversation's own prompt.
-func (s *Service) traceSetup(ctx context.Context) {
+func (s *LLMService) traceSetup(ctx context.Context) {
 	_, span := s.StartSpan(ctx, "llm_setup")
 	defer span.End()
 	instruction := s.SystemInstruction()

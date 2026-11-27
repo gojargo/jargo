@@ -177,7 +177,7 @@ func runOnce(t *testing.T, svc *stt.SegmentService) segmentRun {
 // runSegmented builds a service against baseURL and transcribes one segment.
 func runSegmented(t *testing.T, cfg SegmentedSTTConfig) segmentRun {
 	t.Helper()
-	return runOnce(t, NewSegmentedSTT(cfg))
+	return runOnce(t, NewSegmentedSTT(cfg).SegmentService)
 }
 
 // runAndReport runs svc in a pipeline over one segment the VAD cut out, and
@@ -261,7 +261,7 @@ func updateSettings(t *testing.T, svc *stt.SegmentService, delta any) {
 
 func TestSegmentedDefaultsUseNova3AndEnglish(t *testing.T) {
 	t.Parallel()
-	s := currentSegmented(t, NewSegmentedSTT(SegmentedSTTConfig{APIKey: "k"}))
+	s := currentSegmented(t, NewSegmentedSTT(SegmentedSTTConfig{APIKey: "k"}).SegmentService)
 
 	if got := s.Model.Or(""); got != "nova-3-general" {
 		t.Errorf("model = %q, want nova-3-general", got)
@@ -438,9 +438,9 @@ func TestSegmentedAnExtraKeyNamingASettingSetsIt(t *testing.T) {
 	s := &SegmentedSTTSettings{}
 	s.Extra = map[string]any{"smart_format": true}
 	svc := NewSegmentedSTT(segmentedConfig(srv.URL, s))
-	runOnce(t, svc)
+	runOnce(t, svc.SegmentService)
 
-	store := currentSegmented(t, svc)
+	store := currentSegmented(t, svc.SegmentService)
 	if !store.SmartFormat.Or(false) {
 		t.Error("smart_format is off, want the extra key to have set it")
 	}
@@ -463,8 +463,8 @@ func TestSegmentedASettingsUpdateAppliesToTheNextRequest(t *testing.T) {
 
 	delta := &SegmentedSTTSettings{}
 	delta.SmartFormat = settings.Set(true)
-	updateSettings(t, svc, delta)
-	runOnce(t, svc)
+	updateSettings(t, svc.SegmentService, delta)
+	runOnce(t, svc.SegmentService)
 
 	if !slices.Contains(srv.request().query, [2]string{"smart_format", "true"}) {
 		t.Errorf("query = %v, want smart_format=true", srv.request().query)
@@ -478,10 +478,10 @@ func TestSegmentedAnExtraKeyNamingASettingUpdatesItAtRuntime(t *testing.T) {
 
 	delta := &SegmentedSTTSettings{}
 	delta.Extra = map[string]any{"smart_format": true}
-	updateSettings(t, svc, delta)
-	runOnce(t, svc)
+	updateSettings(t, svc.SegmentService, delta)
+	runOnce(t, svc.SegmentService)
 
-	store := currentSegmented(t, svc)
+	store := currentSegmented(t, svc.SegmentService)
 	if !store.SmartFormat.Or(false) {
 		t.Error("smart_format is off, want the extra key to have set it")
 	}
@@ -736,7 +736,7 @@ func TestSegmentedOnlyTheLastSpeakerRunOfASegmentIsFinalized(t *testing.T) {
 	srv := newPrerecordedServer(t, http.StatusOK, twoSpeakers())
 	svc := NewSegmentedSTT(segmentedConfig(srv.URL, diarized()))
 
-	got, _ := runAndReport(t, svc)
+	got, _ := runAndReport(t, svc.SegmentService)
 
 	type finalized struct {
 		text      string
@@ -839,7 +839,7 @@ func runTimedOut(t *testing.T, client *http.Client) (*frames.ErrorFrame, string)
 	cfg := segmentedConfig("http://127.0.0.1:9", s)
 	cfg.HTTPClient = client
 	svc := NewSegmentedSTT(cfg)
-	return onlyError(t, runOnce(t, svc)), svc.Name()
+	return onlyError(t, runOnce(t, svc.SegmentService)), svc.Name()
 }
 
 func TestSegmentedAConnectionTimeoutDoesNotCarryTheRequestSettings(t *testing.T) {
@@ -888,7 +888,7 @@ func TestSegmentedARejectedRequestLeavesTheServiceUnusable(t *testing.T) {
 			body := map[string]any{"err_code": "REJECTED", "err_msg": "Rejected.", "request_id": "r"}
 			srv := newPrerecordedServer(t, tc.status, body)
 			svc := NewSegmentedSTT(segmentedConfig(srv.URL, nil))
-			ef := reportedError(t, svc)
+			ef := reportedError(t, svc.SegmentService)
 
 			if ef.Category != tc.category {
 				t.Errorf("category = %q, want %q", ef.Category, tc.category)
@@ -907,11 +907,11 @@ func TestSegmentedASettingsUpdateMakesARejectedServiceUsableAgain(t *testing.T) 
 	body := map[string]any{"err_code": "INSUFFICIENT_PERMISSIONS", "err_msg": "No access.", "request_id": "r"}
 	srv := newPrerecordedServer(t, http.StatusForbidden, body)
 	svc := NewSegmentedSTT(segmentedConfig(srv.URL, nil))
-	reportedError(t, svc)
+	reportedError(t, svc.SegmentService)
 
 	delta := &SegmentedSTTSettings{}
 	delta.Model = settings.Set("nova-2")
-	updateSettings(t, svc, delta)
+	updateSettings(t, svc.SegmentService, delta)
 
 	if !svc.Usable() {
 		t.Error("the service is still unusable after its settings changed")
@@ -923,7 +923,7 @@ func TestSegmentedARateLimitLeavesTheServiceUsable(t *testing.T) {
 	body := map[string]any{"err_code": "TOO_MANY_REQUESTS", "err_msg": "Too many requests.", "request_id": "r"}
 	srv := newPrerecordedServer(t, http.StatusTooManyRequests, body)
 	svc := NewSegmentedSTT(segmentedConfig(srv.URL, nil))
-	ef := reportedError(t, svc)
+	ef := reportedError(t, svc.SegmentService)
 
 	if ef.Category != errclass.RateLimit {
 		t.Errorf("category = %q, want %q", ef.Category, errclass.RateLimit)
@@ -937,7 +937,7 @@ func TestSegmentedAServerErrorLeavesTheServiceUsable(t *testing.T) {
 	t.Parallel()
 	srv := newPrerecordedServer(t, http.StatusServiceUnavailable, map[string]any{})
 	svc := NewSegmentedSTT(segmentedConfig(srv.URL, nil))
-	ef := reportedError(t, svc)
+	ef := reportedError(t, svc.SegmentService)
 
 	if ef.Category != errclass.Server {
 		t.Errorf("category = %q, want %q", ef.Category, errclass.Server)

@@ -264,7 +264,7 @@ func TestAnAuthRejectionIsPermanent(t *testing.T) {
 // fails, and so does a send the session refuses.
 func TestSendMessage(t *testing.T) {
 	svc := NewSTT(Config{APIKey: "k"})
-	if err := SendMessage(svc, "GetSpeakers", nil); !errors.Is(err, errNotConnected) {
+	if err := SendMessage(svc.StreamService, "GetSpeakers", nil); !errors.Is(err, errNotConnected) {
 		t.Errorf("err = %v, want it to report no session", err)
 	}
 
@@ -278,7 +278,7 @@ func TestSendMessage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
-	if err := SendMessage(svc, "GetSpeakers", map[string]any{"final": true}); err != nil {
+	if err := SendMessage(svc.StreamService, "GetSpeakers", map[string]any{"final": true}); err != nil {
 		t.Fatalf("SendMessage: %v", err)
 	}
 	select {
@@ -293,11 +293,11 @@ func TestSendMessage(t *testing.T) {
 	// A session closed under the caller refuses the send.
 	inner := c.current()
 	_ = inner.conn.CloseNow()
-	if err := SendMessage(svc, "GetSpeakers", nil); err == nil {
+	if err := SendMessage(svc.StreamService, "GetSpeakers", nil); err == nil {
 		t.Error("a send on a closed session succeeded")
 	}
 	_ = s.Close()
-	if err := SendMessage(svc, "GetSpeakers", nil); !errors.Is(err, errNotConnected) {
+	if err := SendMessage(svc.StreamService, "GetSpeakers", nil); !errors.Is(err, errNotConnected) {
 		t.Errorf("err = %v, want no session once it closed", err)
 	}
 }

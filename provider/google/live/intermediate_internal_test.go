@@ -97,7 +97,7 @@ func settle() { time.Sleep(100 * time.Millisecond) }
 
 // startedService runs a service for model against srv in a pipeline, with the
 // async tool delegate registered and the call call_1 to it.
-func startedService(t *testing.T, srv *recordingSession, model string) *Service {
+func startedService(t *testing.T, srv *recordingSession, model string) *LLMService {
 	t.Helper()
 	return startedServiceBuilt(t, New(Config{APIKey: "k", Model: model, BaseURL: wsURL(srv)}))
 }
@@ -107,7 +107,7 @@ func wsURL(srv *recordingSession) string { return "ws" + strings.TrimPrefix(srv.
 
 // startedServiceBuilt runs s in a pipeline until its session is ready, with the
 // async tool delegate registered and the call call_1 to it.
-func startedServiceBuilt(t *testing.T, s *Service) *Service {
+func startedServiceBuilt(t *testing.T, s *LLMService) *LLMService {
 	t.Helper()
 	s.RegisterFunction("delegate", func(context.Context, llm.FunctionCallParams) error { return nil },
 		llm.WithCancelOnInterruption(false))
@@ -121,7 +121,7 @@ func startedServiceBuilt(t *testing.T, s *Service) *Service {
 // runningLive runs s in a pipeline until its session is ready, returning the
 // worker. Nothing is registered on it, so the instruction the session is set up
 // with stays the one configured.
-func runningLive(t *testing.T, s *Service) *pipeline.Worker {
+func runningLive(t *testing.T, s *LLMService) *pipeline.Worker {
 	t.Helper()
 	w := pipeline.NewWorker(pipeline.New(s), pipeline.WorkerConfig{})
 	started := make(chan struct{})
@@ -161,7 +161,7 @@ func appendFrame() *frames.LLMMessagesAppendFrame {
 	return f
 }
 
-func (s *Service) withConvo(convo *frames.LLMContext) {
+func (s *LLMService) withConvo(convo *frames.LLMContext) {
 	s.mu.Lock()
 	s.convo = convo
 	s.mu.Unlock()

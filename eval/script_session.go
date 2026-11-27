@@ -2,8 +2,6 @@ package eval
 
 import (
 	"fmt"
-
-	"github.com/gojargo/jargo/service/stt"
 )
 
 // ScriptSession runs one ScriptScenario against a bot.
@@ -34,7 +32,7 @@ type ScriptSession struct {
 // for the response event, or is nil when the scenario has none.
 func NewScriptSession(
 	scenario *ScriptScenario, botURL string, params SessionParams, judge Judge,
-	userTTS *CachingTTSService, botSTT *stt.SegmentService,
+	userTTS *CachingTTSService, botSTT SegmentedSTT,
 ) (*ScriptSession, error) {
 	if err := params.validate(); err != nil {
 		return nil, err
@@ -78,10 +76,10 @@ func NewScriptSession(
 // response in audio mode.
 //
 // It fails when a service the scenario's blocks name cannot be built, a
-// transcription factory returning anything but a *stt.SegmentService included.
+// transcription factory returning anything but a SegmentedSTT included.
 func ScriptSessionFromScenario(
 	scenario *ScriptScenario, botURL string, params SessionParams, judge Judge,
-	userTTS *CachingTTSService, botSTT *stt.SegmentService,
+	userTTS *CachingTTSService, botSTT SegmentedSTT,
 ) (*ScriptSession, error) {
 	if judge == nil && scenario.anyExpectation(func(e *Expectation) bool { return e.Eval != "" }) {
 		built, err := NewClassifierJudgeFromConfig(&scenario.Judge)

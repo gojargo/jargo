@@ -106,14 +106,27 @@ func applySpeakingRate(store any, speakingRate *settings.Opt[float64], delta any
 	return changed, nil
 }
 
+// TTSService is the Google Cloud text-to-speech service NewTTS builds.
+type TTSService struct {
+	*tts.Base
+}
+
 // NewTTS builds a Google Cloud Text-to-Speech streaming service. Each sentence
 // is synthesized on a streaming call, and its audio is passed on in half-second
 // frames as it arrives.
-func NewTTS(cfg TTSConfig) *tts.Base {
+func NewTTS(cfg TTSConfig) *TTSService {
+	s := &TTSService{}
+	s.Base = buildTTS(cfg, tts.WithSelf(s))
+	return s
+}
+
+// buildTTS builds the service NewTTS returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildTTS(cfg TTSConfig, opts ...tts.Option) *tts.Base {
 	if cfg.SampleRate == 0 {
 		cfg.SampleRate = defaultTTSSampleRate
 	}
-	return tts.New("GoogleTTS", &ttsSynthesizer{cfg: cfg, live: newTTSSettings(cfg)})
+	return tts.New("GoogleTTS", &ttsSynthesizer{cfg: cfg, live: newTTSSettings(cfg)}, opts...)
 }
 
 // newTTSSettings is the starting state, taken from what the service was built

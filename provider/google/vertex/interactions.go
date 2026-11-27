@@ -47,13 +47,13 @@ func (c InteractionsLLMConfig) Validate() error { return validateConfig(c, c.Cre
 // NewInteractionsLLM builds the Gemini Interactions LLM service on Vertex AI. It
 // is the same service as interactions.NewLLM, authorized with Google Cloud
 // credentials and sent to a Vertex AI project.
-func NewInteractionsLLM(cfg InteractionsLLMConfig) *interactions.Service {
+func NewInteractionsLLM(cfg InteractionsLLMConfig) *interactions.LLMService {
 	return newInteractionsLLM(cfg, "")
 }
 
 // newInteractionsLLM builds the service with its requests sent to host, or to
 // the location's endpoint when host is empty.
-func newInteractionsLLM(cfg InteractionsLLMConfig, host string) *interactions.Service {
+func newInteractionsLLM(cfg InteractionsLLMConfig, host string) *interactions.LLMService {
 	if cfg.Model == "" {
 		cfg.Model = defaultLLMModel
 	}

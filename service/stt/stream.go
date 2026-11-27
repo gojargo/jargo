@@ -565,7 +565,7 @@ func (s *StreamService) StopAllMetrics(ctx context.Context) { s.ttfb.reportNow(c
 
 // NewStream builds a streaming STT service named name driven by conn. A non-zero
 // sampleRate overrides the transport's input rate.
-func NewStream(name string, conn Connector, sampleRate int) *StreamService {
+func NewStream(name string, conn Connector, sampleRate int, opts ...Option) *StreamService {
 	s := &StreamService{conn: conn, cfgRate: sampleRate}
 	if d, ok := conn.(Describer); ok {
 		s.model = d.Metadata().Model
@@ -590,7 +590,7 @@ func NewStream(name string, conn Connector, sampleRate int) *StreamService {
 		}
 	}
 	s.canReopen = true
-	s.Base = service.New(name, s)
+	s.Base = service.New(name, selfOr(s, opts))
 	s.set = &providerSettings{provider: conn, name: s.Name, onModel: s.setModel, onChanged: s.SettingsUpdated}
 	s.diarization = diarization{set: s.set, name: s.Name}
 	// The connection's reconnection settings come from the provider's

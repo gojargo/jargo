@@ -25,7 +25,7 @@ func appliedDefault(t *testing.T, model string) map[string]any {
 
 // paramsOf returns the request the service builds for a one-message
 // conversation, decoded from its JSON.
-func paramsOf(t *testing.T, s *Service) map[string]any {
+func paramsOf(t *testing.T, s *LLMService) map[string]any {
 	t.Helper()
 	convo := frames.NewLLMContext("")
 	convo.AddUserMessage("hi")

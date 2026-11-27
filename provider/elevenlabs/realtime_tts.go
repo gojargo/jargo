@@ -136,6 +136,11 @@ func (c RealtimeTTSConfig) withDefaults() RealtimeTTSConfig {
 	return c
 }
 
+// RealtimeTTSService is the ElevenLabs text-to-speech service NewRealtimeTTS builds.
+type RealtimeTTSService struct {
+	*tts.Base
+}
+
 // NewRealtimeTTS builds an ElevenLabs TTS service over the streaming WebSocket
 // API. Unlike NewTTS, which issues one HTTP request per sentence, this holds a
 // single connection open for the call and one synthesis context open for each
@@ -144,13 +149,21 @@ func (c RealtimeTTSConfig) withDefaults() RealtimeTTSConfig {
 // The connection is opened when the pipeline starts. When it drops it is
 // restored with backoff, and when that keeps failing the service reports a
 // permanent error and becomes unusable. See tts.Websocket.
-func NewRealtimeTTS(cfg RealtimeTTSConfig) *tts.Base {
-	b, _ := newRealtimeTTS(cfg)
+func NewRealtimeTTS(cfg RealtimeTTSConfig) *RealtimeTTSService {
+	s := &RealtimeTTSService{}
+	s.Base = buildRealtimeTTS(cfg, tts.WithSelf(s))
+	return s
+}
+
+// buildRealtimeTTS builds the service NewRealtimeTTS returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildRealtimeTTS(cfg RealtimeTTSConfig, opts ...tts.Option) *tts.Base {
+	b, _ := newRealtimeTTS(cfg, opts...)
 	return b
 }
 
 // newRealtimeTTS builds the service and returns its synthesizer alongside it.
-func newRealtimeTTS(cfg RealtimeTTSConfig) (*tts.Base, *realtimeSynthesizer) {
+func newRealtimeTTS(cfg RealtimeTTSConfig, opts ...tts.Option) (*tts.Base, *realtimeSynthesizer) {
 	s := newRealtimeSynthesizer(cfg)
 	// The multi-stream endpoint serves no Eleven v3 or v4 model: the connection
 	// is rejected with a 400 at the handshake, which surfaces as an opaque error
@@ -164,9 +177,9 @@ func newRealtimeTTS(cfg RealtimeTTSConfig) (*tts.Base, *realtimeSynthesizer) {
 	if s.cfg.WordTimestamps {
 		// Only the timestamp-aware type implements tts.WordTimestamps, so the
 		// base takes the word-aligned path solely when timings were requested.
-		b = tts.New("ElevenLabsRealtimeTTS", &timedRealtimeSynthesizer{realtimeSynthesizer: s})
+		b = tts.New("ElevenLabsRealtimeTTS", &timedRealtimeSynthesizer{realtimeSynthesizer: s}, opts...)
 	} else {
-		b = tts.New("ElevenLabsRealtimeTTS", s)
+		b = tts.New("ElevenLabsRealtimeTTS", s, opts...)
 	}
 	b.SetPauseFrameProcessing(tts.PauseOptions{Enabled: s.cfg.PauseFrameProcessing})
 	s.svc = b

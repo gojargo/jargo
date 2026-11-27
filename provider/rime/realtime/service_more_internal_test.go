@@ -775,7 +775,7 @@ func TestInterruptionCancelsReplyAndSendsEstimatedPosition(t *testing.T) {
 }
 
 // observe records the payloads of type T the service's events carry.
-func observe[T EventPayload](s *Service) func() []T {
+func observe[T EventPayload](s *LLMService) func() []T {
 	var mu sync.Mutex
 	var seen []T
 	event.On(s.Events(), EventRimeEvent, func(_ context.Context, event *Event) {
@@ -796,7 +796,7 @@ func TestRetainedTextEventIsForwardedWithoutReplacingContext(t *testing.T) {
 	for _, kept := range []*string{nil, new(""), new("Retained words")} {
 		t.Run(fmt.Sprint(kept != nil), func(t *testing.T) {
 			var observed func() []ItemTruncated
-			h := converse(t, harnessOptions{setup: func(s *Service) { observed = observe[ItemTruncated](s) }})
+			h := converse(t, harnessOptions{setup: func(s *LLMService) { observed = observe[ItemTruncated](s) }})
 			ref := h.peer.start(nil, nil)
 			h.peer.message(ref, messageOptions{text: "Generated answer"})
 			h.peer.complete(ref)
@@ -829,7 +829,7 @@ func TestPromptTruncationSummaryIsForwardedWithoutDeletingHistory(t *testing.T) 
 			var observed func() []ResponseEnded
 			convo := frames.NewLLMContext("")
 			convo.SetMessages([]frames.Message{{Role: frames.RoleUser, Text: "Keep this history"}})
-			h := converse(t, harnessOptions{convo: convo, setup: func(s *Service) {
+			h := converse(t, harnessOptions{convo: convo, setup: func(s *LLMService) {
 				observed = observe[ResponseEnded](s)
 			}})
 			ref := h.peer.start(nil, nil)

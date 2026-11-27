@@ -68,7 +68,7 @@ func (discardSink) Text(string) error          { return nil }
 func (discardSink) Tool(frames.ToolCall) error { return nil }
 
 // runAll makes one request down each path the service has.
-func runAll(t *testing.T, svc *anthropic.Service) {
+func runAll(t *testing.T, svc *anthropic.LLMService) {
 	t.Helper()
 	convo := frames.NewLLMContext("sys")
 	convo.AddUserMessage("hi")

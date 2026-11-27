@@ -104,6 +104,11 @@ type Config struct {
 // Validate reports whether the configuration is usable.
 func (c Config) Validate() error { return validate.Struct(c) }
 
+// TTSService is the Bland text-to-speech service NewTTS builds.
+type TTSService struct {
+	*tts.Base
+}
+
 // NewTTS builds a Bland realtime TTS service.
 //
 // It streams speech from Bland's /v2/tts/ws endpoint over a single connection
@@ -116,13 +121,21 @@ func (c Config) Validate() error { return validate.Struct(c) }
 // When the connection drops it is restored with backoff, and when that keeps
 // failing the service reports a permanent error and becomes unusable. See
 // tts.Websocket.
-func NewTTS(cfg Config) *tts.Base {
-	b, _ := newTTS(cfg)
+func NewTTS(cfg Config) *TTSService {
+	s := &TTSService{}
+	s.Base = buildTTS(cfg, tts.WithSelf(s))
+	return s
+}
+
+// buildTTS builds the service NewTTS returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildTTS(cfg Config, opts ...tts.Option) *tts.Base {
+	b, _ := newTTS(cfg, opts...)
 	return b
 }
 
 // newTTS builds the service and returns its synthesizer alongside it.
-func newTTS(cfg Config) (*tts.Base, *synthesizer) {
+func newTTS(cfg Config, opts ...tts.Option) (*tts.Base, *synthesizer) {
 	if cfg.URL == "" {
 		cfg.URL = defaultURL
 	}
@@ -135,7 +148,7 @@ func newTTS(cfg Config) (*tts.Base, *synthesizer) {
 		live:         newTTSSettings(cfg.Voice, cfg.Expressiveness, cfg.Stability, cfg.AutoFormatting),
 		readyTimeout: readyTimeout,
 	}
-	b := tts.New("BlandTTS", s)
+	b := tts.New("BlandTTS", s, opts...)
 	b.SetPauseFrameProcessing(tts.PauseOptions{Enabled: true})
 	if cfg.TextAggregation != frames.TextTypeSentence {
 		b.SetTextAggregator(ttstext.NewTokenAggregator())

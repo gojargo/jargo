@@ -97,7 +97,7 @@ func httpTTS(s *httpServer, cfg HTTPTTSConfig) *tts.Base {
 	if cfg.SampleRate == 0 {
 		cfg.SampleRate = 24000
 	}
-	return NewHTTPTTS(cfg)
+	return NewHTTPTTS(cfg).Base
 }
 
 // The service sends the documented request and emits sample-aligned PCM frames.

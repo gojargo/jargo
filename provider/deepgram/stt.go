@@ -129,8 +129,21 @@ type Config struct {
 // Validate reports whether the configuration is usable.
 func (cfg Config) Validate() error { return validate.Struct(cfg) }
 
+// STTService is the Deepgram speech-to-text service NewSTT builds.
+type STTService struct {
+	*stt.StreamService
+}
+
 // NewSTT builds a Deepgram streaming STT service.
-func NewSTT(cfg Config) *stt.StreamService {
+func NewSTT(cfg Config) *STTService {
+	s := &STTService{}
+	s.StreamService = buildSTT(cfg, stt.WithSelf(s))
+	return s
+}
+
+// buildSTT builds the service NewSTT returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildSTT(cfg Config, opts ...stt.Option) *stt.StreamService {
 	if cfg.Model == "" {
 		cfg.Model = defaultSTTModel
 	}
@@ -147,7 +160,7 @@ func NewSTT(cfg Config) *stt.StreamService {
 		cfg.BaseURL = defaultHost
 	}
 	c := &connector{cfg: cfg, live: newSettings(cfg)}
-	svc := stt.NewStream("DeepgramSTT", c, cfg.SampleRate)
+	svc := stt.NewStream("DeepgramSTT", c, cfg.SampleRate, opts...)
 	// The connector is handed the service it drives, so a session can record
 	// the finalize it asks for, which Deepgram's answer then confirms.
 	c.svc = svc

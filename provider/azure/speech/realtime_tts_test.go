@@ -550,7 +550,7 @@ func runTest(t *testing.T, svc *tts.Base, steps ...step) (down, up []frames.Fram
 }
 
 func testRealtime(f *fakeSynthesis) *tts.Base {
-	return NewRealtimeTTS(RealtimeTTSConfig{APIKey: "test-key", PrivateEndpoint: f.url, SampleRate: 24000})
+	return NewRealtimeTTS(RealtimeTTSConfig{APIKey: "test-key", PrivateEndpoint: f.url, SampleRate: 24000}).Base
 }
 
 func audioBytes(fs []frames.Frame) int {

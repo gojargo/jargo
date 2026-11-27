@@ -74,8 +74,21 @@ type STTConfig struct {
 // Validate reports whether the configuration is usable.
 func (c STTConfig) Validate() error { return validate.Struct(c) }
 
+// STTService is the Smallest AI speech-to-text service NewSTT builds.
+type STTService struct {
+	*stt.StreamService
+}
+
 // NewSTT builds a Smallest AI streaming STT service.
-func NewSTT(cfg STTConfig) *stt.StreamService {
+func NewSTT(cfg STTConfig) *STTService {
+	s := &STTService{}
+	s.StreamService = buildSTT(cfg, stt.WithSelf(s))
+	return s
+}
+
+// buildSTT builds the service NewSTT returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildSTT(cfg STTConfig, opts ...stt.Option) *stt.StreamService {
 	if cfg.BaseURL == "" {
 		cfg.BaseURL = defaultSTTURL
 	}
@@ -88,7 +101,7 @@ func NewSTT(cfg STTConfig) *stt.StreamService {
 	if cfg.Numerals == "" {
 		cfg.Numerals = defaultSTTNumerals
 	}
-	return stt.NewStream("SmallestSTT", &connector{cfg: cfg}, cfg.SampleRate)
+	return stt.NewStream("SmallestSTT", &connector{cfg: cfg}, cfg.SampleRate, opts...)
 }
 
 type connector struct {

@@ -16,8 +16,8 @@ import (
 	"github.com/gojargo/jargo/processor"
 )
 
-// Service is the memory frame processor.
-type Service struct {
+// MemoryService is the memory frame processor.
+type MemoryService struct {
 	*processor.Base
 	cfg  Config
 	http *http.Client
@@ -33,7 +33,7 @@ type Service struct {
 }
 
 // NewMemory builds a memory service from cfg.
-func NewMemory(cfg Config) *Service {
+func NewMemory(cfg Config) *MemoryService {
 	if cfg.SearchLimit <= 0 {
 		cfg.SearchLimit = defaultSearchLimit
 	}
@@ -44,7 +44,7 @@ func NewMemory(cfg Config) *Service {
 	if hc == nil {
 		hc = &http.Client{Timeout: cfg.Timeout}
 	}
-	s := &Service{
+	s := &MemoryService{
 		cfg:  cfg,
 		http: hc,
 		host: strings.TrimRight(cfg.Host, "/"),
@@ -55,7 +55,7 @@ func NewMemory(cfg Config) *Service {
 
 // ProcessFrame retrieves and stores memory around the LLM context, forwarding
 // every frame untouched.
-func (s *Service) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
+func (s *MemoryService) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
 	if err := s.Base.ProcessFrame(ctx, f, dir); err != nil {
 		return err
 	}
@@ -77,7 +77,7 @@ func (s *Service) ProcessFrame(ctx context.Context, f frames.Frame, dir processo
 // the new turns. Retrieval is synchronous (the LLM needs the memories now) and
 // runs under the turn's context, so an interruption cancels it; storage runs in
 // the background under a detached context so memories outlive a barge-in.
-func (s *Service) onContext(ctx context.Context, convo *frames.LLMContext) {
+func (s *MemoryService) onContext(ctx context.Context, convo *frames.LLMContext) {
 	msgs := convo.Messages()
 	if query := lastText(msgs, frames.RoleUser); query != "" && query != s.lastQuery {
 		s.lastQuery = query
@@ -94,7 +94,7 @@ func (s *Service) onContext(ctx context.Context, convo *frames.LLMContext) {
 
 // searchContext bounds retrieval when SearchTimeout is set, so a slow mem0
 // delays a reply by no more than that.
-func (s *Service) searchContext(ctx context.Context) (context.Context, context.CancelFunc) {
+func (s *MemoryService) searchContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	if s.cfg.SearchTimeout <= 0 {
 		return ctx, func() {}
 	}
@@ -105,7 +105,7 @@ func (s *Service) searchContext(ctx context.Context) (context.Context, context.C
 // does not pay for whatever the path warms up. Measured over a session on a
 // self-hosted server: 1.52s for the first search, 0.58s for the second, 0.19s
 // for the third.
-func (s *Service) prewarm() {
+func (s *MemoryService) prewarm() {
 	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.Timeout)
 	defer cancel()
 	if _, err := s.search(ctx, prewarmQuery); err != nil {
@@ -116,7 +116,7 @@ func (s *Service) prewarm() {
 // store sends the latest user and assistant turns to mem0 once each. The
 // de-duplication state is updated here on the process goroutine; only the
 // network write is offloaded.
-func (s *Service) store(msgs []frames.Message) {
+func (s *MemoryService) store(msgs []frames.Message) {
 	user := lastText(msgs, frames.RoleUser)
 	asst := lastText(msgs, frames.RoleAssistant)
 
@@ -136,7 +136,7 @@ func (s *Service) store(msgs []frames.Message) {
 
 // searchFilters scopes a search to the configured entities. Search takes them
 // nested under "filters" and rejects the top-level fields that add accepts.
-func (s *Service) searchFilters() map[string]any {
+func (s *MemoryService) searchFilters() map[string]any {
 	filters := make(map[string]any, 3)
 	if s.cfg.UserID != "" {
 		filters["user_id"] = s.cfg.UserID
@@ -151,7 +151,7 @@ func (s *Service) searchFilters() map[string]any {
 }
 
 // search returns the memories relevant to query.
-func (s *Service) search(ctx context.Context, query string) ([]memory, error) {
+func (s *MemoryService) search(ctx context.Context, query string) ([]memory, error) {
 	body := searchRequest{
 		Query:     query,
 		Filters:   s.searchFilters(),
@@ -166,7 +166,7 @@ func (s *Service) search(ctx context.Context, query string) ([]memory, error) {
 }
 
 // add persists a batch of turns to mem0 under a detached, time-bounded context.
-func (s *Service) add(batch []apiMessage) {
+func (s *MemoryService) add(batch []apiMessage) {
 	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.Timeout)
 	defer cancel()
 	body := addRequest{
@@ -183,7 +183,7 @@ func (s *Service) add(batch []apiMessage) {
 
 // post sends in as JSON to path and, when out is non-nil, decodes the response
 // into it.
-func (s *Service) post(ctx context.Context, path string, in, out any) error {
+func (s *MemoryService) post(ctx context.Context, path string, in, out any) error {
 	buf, err := json.Marshal(in)
 	if err != nil {
 		return err

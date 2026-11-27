@@ -238,7 +238,7 @@ func TestHTTPTTSFramesStaySampleAligned(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	svc := NewTTS(TTSConfig{APIKey: "test-key", BaseURL: srv.URL, SampleRate: 24000})
-	down, _ := runAuraPipeline(t, svc, pipeline.Params{EnableMetrics: true},
+	down, _ := runAuraPipeline(t, svc.Base, pipeline.Params{EnableMetrics: true},
 		frames.NewTTSSpeakFrame("Hello from Deepgram."), 300*time.Millisecond)
 
 	audio := framesOf[*frames.TTSAudioRawFrame](down)

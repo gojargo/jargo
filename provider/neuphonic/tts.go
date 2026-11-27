@@ -37,6 +37,11 @@ const keepaliveInterval = 10 * time.Second
 //nolint:gochecknoglobals // sentinel error
 var errNotConnected = errors.New("neuphonic tts: websocket not connected")
 
+// TTSService is the Neuphonic text-to-speech service NewTTS builds.
+type TTSService struct {
+	*tts.Base
+}
+
 // NewTTS builds a Neuphonic TTS service.
 //
 // It holds one connection open for the call, opened when the pipeline starts.
@@ -45,15 +50,23 @@ var errNotConnected = errors.New("neuphonic tts: websocket not connected")
 // names no request, so an interruption while the bot speaks resets the
 // connection, and the next request's frames are held until this one's audio
 // has played. See tts.NewInterruptibleWebsocket.
-func NewTTS(cfg Config) *tts.Base {
-	b, _ := newTTS(cfg)
+func NewTTS(cfg Config) *TTSService {
+	s := &TTSService{}
+	s.Base = buildTTS(cfg, tts.WithSelf(s))
+	return s
+}
+
+// buildTTS builds the service NewTTS returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildTTS(cfg Config, opts ...tts.Option) *tts.Base {
+	b, _ := newTTS(cfg, opts...)
 	return b
 }
 
 // newTTS builds the service and returns its synthesizer alongside it.
-func newTTS(cfg Config) (*tts.Base, *synthesizer) {
+func newTTS(cfg Config, opts ...tts.Option) (*tts.Base, *synthesizer) {
 	s := newSynthesizer(cfg)
-	b := tts.New("NeuphonicTTS", s)
+	b := tts.New("NeuphonicTTS", s, opts...)
 	// The service names the language the settings start with, so the URL is
 	// built again from the store as it now stands.
 	s.refreshEndpoint()

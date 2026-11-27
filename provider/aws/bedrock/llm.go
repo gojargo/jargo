@@ -46,7 +46,7 @@ func (c Config) anthropicConfig() anthropic.Config {
 // NewLLM builds a Bedrock-backed Anthropic LLM service. It loads AWS
 // configuration (which may read the environment, shared config files or
 // instance metadata), so it takes a context and can fail.
-func NewLLM(ctx context.Context, cfg Config) (*anthropic.Service, error) {
+func NewLLM(ctx context.Context, cfg Config) (*anthropic.LLMService, error) {
 	awsCfg, err := awsconfig.LoadDefaultConfig(ctx, cfg.loadOptions()...)
 	if err != nil {
 		return nil, err
@@ -56,7 +56,7 @@ func NewLLM(ctx context.Context, cfg Config) (*anthropic.Service, error) {
 
 // newLLM builds the service from a loaded AWS config. extra is appended after
 // the Bedrock option, which is how a test points the service at a stub.
-func newLLM(cfg Config, awsCfg aws.Config, extra ...option.RequestOption) *anthropic.Service {
+func newLLM(cfg Config, awsCfg aws.Config, extra ...option.RequestOption) *anthropic.LLMService {
 	opts := append([]option.RequestOption{bedrock.WithConfig(awsCfg)}, extra...)
 	return anthropic.NewLLMWithOptions("BedrockLLM", cfg.anthropicConfig(), opts...)
 }

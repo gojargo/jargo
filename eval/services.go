@@ -13,6 +13,7 @@ import (
 	"github.com/gojargo/jargo/classifier"
 	"github.com/gojargo/jargo/classifier/llmclassifier"
 	"github.com/gojargo/jargo/language"
+	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/provider/kokoro"
 	"github.com/gojargo/jargo/provider/moonshine"
 	"github.com/gojargo/jargo/provider/ollama"
@@ -45,9 +46,9 @@ import (
 //
 // What a factory must return: the judge's LLM an llm.Inferencer, or a
 // classifier.Classifier for judge.eval; the user's TTS a local or HTTP service
-// (a *tts.Base or a tts.Synthesizer), since the cache around it drives its
+// (a TTSService or a tts.Synthesizer), since the cache around it drives its
 // RunTTS directly and a WebSocket-streaming one yields nothing there; the
-// bot's STT a *stt.SegmentService, since only its transcripts can be traced
+// bot's STT a SegmentedSTT, since only its transcripts can be traced
 // to when their audio began.
 //
 // This is harness code, so like the factories the release suite names, it
@@ -85,12 +86,30 @@ type Factory func(config map[string]any) (any, error)
 
 // STTServiceBuilder builds the STT a built-in `judge.transcription.service:`
 // name stands for.
-type STTServiceBuilder func(cfg *TranscriptionConfig) (*stt.SegmentService, error)
+type STTServiceBuilder func(cfg *TranscriptionConfig) (SegmentedSTT, error)
 
 // TTSServiceBuilder builds the TTS a built-in `user.speech.service:` name
 // stands for. It should synthesize at CacheSampleRate, the rate the cache
 // stores, so its audio is cached as it came.
-type TTSServiceBuilder func(cfg *SpeechConfig) (*tts.Base, error)
+type TTSServiceBuilder func(cfg *SpeechConfig) (TTSService, error)
+
+// SegmentedSTT is a speech-to-text service that transcribes whole speech
+// segments, which is what the harness transcribes the bot's audio with: it
+// wraps the run to record when each segment's audio began. Every segmented
+// provider service satisfies it, as does a *stt.SegmentService.
+type SegmentedSTT interface {
+	processor.Processor
+	RunSTT() stt.RunSTTFunc
+	SetRunSTT(run stt.RunSTTFunc)
+}
+
+// TTSService is a text-to-speech service the harness can speak the user's turns
+// with: the cache around it drives the synthesizer behind it directly. Every
+// provider's TTS service satisfies it, as does a *tts.Base.
+type TTSService interface {
+	processor.Processor
+	Synthesizer() tts.Synthesizer
+}
 
 // The built-in local services, named by a block's `service:`.
 const (
@@ -217,9 +236,9 @@ func cfgLanguage(value any) (language.Language, error) {
 // `judge.transcription:` block.
 //
 // A factory builds it; otherwise the service name picks one, "moonshine" by
-// default. A factory must return a *stt.SegmentService, as the built-in ones
-// are. A nil cfg uses the Moonshine default.
-func STTServiceFromConfig(cfg *TranscriptionConfig) (*stt.SegmentService, error) {
+// default. A factory must return a SegmentedSTT, as the built-in ones
+// do. A nil cfg uses the Moonshine default.
+func STTServiceFromConfig(cfg *TranscriptionConfig) (SegmentedSTT, error) {
 	if cfg == nil {
 		cfg = &TranscriptionConfig{}
 	}
@@ -232,9 +251,9 @@ func STTServiceFromConfig(cfg *TranscriptionConfig) (*stt.SegmentService, error)
 		if err != nil {
 			return nil, err
 		}
-		service, ok := built.(*stt.SegmentService)
+		service, ok := built.(SegmentedSTT)
 		if !ok {
-			return nil, fmt.Errorf("%w: transcription.factory %q returned %T, not a *stt.SegmentService",
+			return nil, fmt.Errorf("%w: transcription.factory %q returned %T, not a segmented STT service",
 				ErrFactory, cfg.Factory, built)
 		}
 		return service, nil
@@ -247,7 +266,7 @@ func STTServiceFromConfig(cfg *TranscriptionConfig) (*stt.SegmentService, error)
 	registry.RUnlock()
 	if !ok {
 		return nil, fmt.Errorf("%w: unknown STT service: %q. Known: %s. For any other, set "+
-			"transcription.factory to a registered factory returning a *stt.SegmentService",
+			"transcription.factory to a registered factory returning a segmented STT service",
 			ErrUnknownService, name, names)
 	}
 	if build == nil {
@@ -266,16 +285,20 @@ func STTServiceFromConfig(cfg *TranscriptionConfig) (*stt.SegmentService, error)
 // transcribe synthesized speech unreliably, returning an empty transcript or
 // dropping the tail of an utterance, and an empty transcript is
 // indistinguishable from a bot that said nothing.
-func moonshineService(cfg *TranscriptionConfig) (*stt.SegmentService, error) {
+func moonshineService(cfg *TranscriptionConfig) (SegmentedSTT, error) {
 	lang, err := cfgLanguage(cfg.Language)
 	if err != nil {
 		return nil, err
 	}
-	return moonshine.NewSTT(moonshine.STTConfig{
+	svc, err := moonshine.NewSTT(moonshine.STTConfig{
 		Model:       moonshine.Model(cmp.Or(cfg.Model, string(moonshine.ModelSmallStreaming))),
 		Language:    lang,
 		LibraryPath: os.Getenv(moonshine.LibPathEnv),
 	})
+	if err != nil {
+		return nil, err
+	}
+	return svc, nil
 }
 
 // TTSServiceFromConfig builds the user-audio TTS, wrapped in a cache, from a
@@ -325,7 +348,7 @@ func TTSServiceFromConfig(cfg *SpeechConfig, cacheDir string, useCache bool) (*C
 }
 
 // builtinTTS is the TTS a built-in `user.speech.service:` name builds.
-func builtinTTS(name string, cfg *SpeechConfig) (*tts.Base, error) {
+func builtinTTS(name string, cfg *SpeechConfig) (TTSService, error) {
 	registry.RLock()
 	build, ok := registry.tts[name]
 	names := known(registry.tts)
@@ -345,9 +368,9 @@ func builtinTTS(name string, cfg *SpeechConfig) (*tts.Base, error) {
 // TTS service, or a synthesizer itself.
 func innerSynthesizer(factoryName string, built any) (tts.Synthesizer, error) {
 	switch v := built.(type) {
-	case *tts.Base:
-		if v != nil {
-			return v.Synthesizer(), nil
+	case TTSService:
+		if syn := v.Synthesizer(); syn != nil {
+			return syn, nil
 		}
 	case tts.Synthesizer:
 		return v, nil
@@ -366,18 +389,22 @@ func innerSynthesizer(factoryName string, built any) (tts.Synthesizer, error) {
 // No API key and no per-run cost: the model is downloaded once into the user
 // cache (see kokoro.DefaultCacheDir). libespeak-ng is loaded from
 // JARGO_ESPEAK_LIB, or by its conventional names when that is unset.
-func kokoroService(cfg *SpeechConfig) (*tts.Base, error) {
+func kokoroService(cfg *SpeechConfig) (TTSService, error) {
 	lang, err := cfgLanguage(cfg.Language)
 	if err != nil {
 		return nil, err
 	}
-	return kokoro.NewTTS(kokoro.Config{
+	svc, err := kokoro.NewTTS(kokoro.Config{
 		Voice:      cfg.Voice,
 		Language:   lang,
 		Speed:      cfg.Speed,
 		Espeak:     kokoro.EspeakConfig{LibPath: os.Getenv(kokoro.EspeakLibPathEnv)},
 		SampleRate: CacheSampleRate,
 	})
+	if err != nil {
+		return nil, err
+	}
+	return svc, nil
 }
 
 // ClassifierFromConfig builds the classifier a `judge.eval:` block names.

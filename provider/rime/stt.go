@@ -196,6 +196,11 @@ func (s *STTSettings) streamOptions(sampleRate int) streamOptions {
 	}
 }
 
+// STTService is the Rime speech-to-text service NewSTT builds.
+type STTService struct {
+	*stt.StreamService
+}
+
 // NewSTT builds a Rime STT service.
 //
 // Rime transcribes one utterance per stream, so the service needs VAD frames
@@ -207,16 +212,24 @@ func (s *STTSettings) streamOptions(sampleRate int) streamOptions {
 //
 // Rime's model runs out of context after about 90 to 110 seconds of speech, so
 // a segment with no pause that long fails with no transcript.
-func NewSTT(cfg STTConfig) *stt.StreamService {
-	return newSTT(cfg, nil).svc
+func NewSTT(cfg STTConfig) *STTService {
+	s := &STTService{}
+	s.StreamService = buildSTT(cfg, stt.WithSelf(s))
+	return s
+}
+
+// buildSTT builds the service NewSTT returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildSTT(cfg STTConfig, opts ...stt.Option) *stt.StreamService {
+	return newSTT(cfg, nil, opts...).svc
 }
 
 // newSTT builds the service's connector, creating each session's client with
 // newClient, or on Rime's endpoint when it is nil.
-func newSTT(cfg STTConfig, newClient func(apiKey string) (transcriber, error)) *sttConnector {
+func newSTT(cfg STTConfig, newClient func(apiKey string) (transcriber, error), opts ...stt.Option) *sttConnector {
 	c := &sttConnector{cfg: cfg, live: newSTTSettings(cfg), newClient: newClient}
 	c.current = c.snapshot()
-	c.svc = stt.NewStream("RimeSTT", c, cfg.SampleRate)
+	c.svc = stt.NewStream("RimeSTT", c, cfg.SampleRate, opts...)
 	return c
 }
 

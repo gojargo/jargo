@@ -305,6 +305,39 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   | `eval.CheckFrom`, `eval.FailureKinds`, `eval.FunctionCallEvents`, `eval.JudgeableEvents`, `eval.MarkerKinds`, `eval.PipelineLogCategories`, `eval.PipelineLogLabels`, `eval.ScenarioSuffixes`, `eval.SimulationEndings`, `eval.SimulationMeasures`, `eval.TurnStatuses` | the same names, called |
   | `elevenlabs.PhonemeModels`, `decisions.FileTypes` | removed |
 
+- **BREAKING: every provider service has a type of its own.** An STT or TTS
+  constructor used to return the shared base (`*tts.Base`, `*stt.StreamService`
+  or `*stt.SegmentService`). It now returns the provider's own type, which
+  embeds that base, so every method it had is still there: `cartesia.NewTTS`
+  returns a `*cartesia.TTSService`, `deepgram.NewSTT` a `*deepgram.STTService`,
+  and so on, one type per constructor (`NewHTTPTTS` returns an
+  `HTTPTTSService`, `NewSegmentedSTT` a `SegmentedSTTService`). A provider can
+  now gain a method of its own in a minor release without changing what its
+  constructor returns, and the type names match the service names a Pipecat user
+  knows, minus the provider prefix. The LLM services that were named plain
+  `Service` follow the same rule:
+
+  | Before | After |
+  |---|---|
+  | `anthropic.Service`, `gemini.Service`, `interactions.Service`, `live.Service`, `novasonic.Service` | `anthropic.LLMService`, `gemini.LLMService`, `interactions.LLMService`, `live.LLMService`, `novasonic.LLMService` |
+  | `responses.Service`, `responses.HTTPService` | `responses.LLMService`, `responses.HTTPLLMService` |
+  | `realtime.Service` (OpenAI, xAI and Rime) | `realtime.LLMService` |
+  | `mem0.Service` | `mem0.MemoryService` |
+
+  Code that stored a constructor's result in a `*tts.Base` or an STT service
+  variable, or type-asserted a processor to one, now names the provider's type,
+  or reads the embedded field (`svc.Base`, `svc.StreamService`,
+  `svc.SegmentService`).
+
+  The type a constructor returns is also the processor the pipeline runs:
+  `tts.New`, `stt.NewStream`, `stt.NewSegment` and `stt.NewSegmentRunner` take
+  `tts.WithSelf` / `stt.WithSelf`, naming the type that embeds them, the way
+  `llm.New` already takes the service as its generator. Frames, observers and
+  service switchers know the service by that value. A service written outside
+  jargo can do the same; the custom-service guide shows how. The eval harness
+  takes any segmented STT service (`eval.SegmentedSTT`) and any TTS service
+  (`eval.TTSService`) instead of the base types.
+
 - **BREAKING: one name for each observer type, and one shape for a frame
   predicate.** The `pipeline` package re-exported the observer types that live
   in `processor`, so each had two names. Only the `processor` ones remain.

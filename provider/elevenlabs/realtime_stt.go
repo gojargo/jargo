@@ -98,19 +98,32 @@ type RealtimeSTTConfig struct {
 // Validate reports whether the configuration is usable.
 func (c RealtimeSTTConfig) Validate() error { return validate.Struct(c) }
 
+// RealtimeSTTService is the ElevenLabs speech-to-text service NewRealtimeSTT builds.
+type RealtimeSTTService struct {
+	*stt.StreamService
+}
+
 // NewRealtimeSTT builds an ElevenLabs streaming STT service. Unlike NewSTT,
 // which transcribes one delimited utterance per request, this holds a
 // connection open and lets ElevenLabs commit each segment when its own detector
 // hears a pause. That commit delimits the transcript, not the turn: the pipeline
 // still decides where the turn ends.
-func NewRealtimeSTT(cfg RealtimeSTTConfig) *stt.StreamService {
+func NewRealtimeSTT(cfg RealtimeSTTConfig) *RealtimeSTTService {
+	s := &RealtimeSTTService{}
+	s.StreamService = buildRealtimeSTT(cfg, stt.WithSelf(s))
+	return s
+}
+
+// buildRealtimeSTT builds the service NewRealtimeSTT returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildRealtimeSTT(cfg RealtimeSTTConfig, opts ...stt.Option) *stt.StreamService {
 	if cfg.Host == "" {
 		cfg.Host = defaultRealtimeSTTHost
 	}
 	if cfg.Model == "" {
 		cfg.Model = defaultRealtimeSTTModel
 	}
-	return stt.NewStream("ElevenLabsRealtimeSTT", &realtimeSTTConnector{cfg: cfg}, cfg.SampleRate)
+	return stt.NewStream("ElevenLabsRealtimeSTT", &realtimeSTTConnector{cfg: cfg}, cfg.SampleRate, opts...)
 }
 
 type realtimeSTTConnector struct {

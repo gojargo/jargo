@@ -126,9 +126,22 @@ type STTConfig struct {
 // Validate reports whether the configuration is usable.
 func (c STTConfig) Validate() error { return validate.Struct(c) }
 
+// STTService is the Sarvam speech-to-text service NewSTT builds.
+type STTService struct {
+	*stt.StreamService
+}
+
 // NewSTT builds a Sarvam streaming STT service. Sarvam finalizes per utterance,
 // so it works best behind a turn detector or with its own VAD signals.
-func NewSTT(cfg STTConfig) *stt.StreamService {
+func NewSTT(cfg STTConfig) *STTService {
+	s := &STTService{}
+	s.StreamService = buildSTT(cfg, stt.WithSelf(s))
+	return s
+}
+
+// buildSTT builds the service NewSTT returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildSTT(cfg STTConfig, opts ...stt.Option) *stt.StreamService {
 	if cfg.Model == "" {
 		cfg.Model = defaultSTTModel
 	}
@@ -139,7 +152,7 @@ func NewSTT(cfg STTConfig) *stt.StreamService {
 	if !ok {
 		mc = sttModelConfigs[defaultSTTModel]
 	}
-	return stt.NewStream("SarvamSTT", &connector{cfg: cfg, mc: mc}, cfg.SampleRate)
+	return stt.NewStream("SarvamSTT", &connector{cfg: cfg, mc: mc}, cfg.SampleRate, opts...)
 }
 
 // sarvamSTTLanguageCode maps a Language to Sarvam's regional code, or "" when

@@ -102,7 +102,7 @@ func (f *fakeRealtime) awaitMessage(t *testing.T, want string) map[string]any {
 
 // runService starts a built service in a pipeline, for a test that needs the
 // service itself rather than only the frames it produces.
-func runService(t *testing.T, svc *realtime.Service) (*pipeline.Worker, chan error) {
+func runService(t *testing.T, svc *realtime.LLMService) (*pipeline.Worker, chan error) {
 	t.Helper()
 	task := pipeline.NewWorker(pipeline.New(svc), pipeline.WorkerConfig{
 		Params: pipeline.Params{AudioInSampleRate: 24000, AudioOutSampleRate: 24000},

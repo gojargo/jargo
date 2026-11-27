@@ -128,7 +128,7 @@ func service(f *fakeZoomTTS, cfg HTTPTTSConfig) *tts.Base {
 	cfg.APIKey = "test-key"
 	cfg.URL = f.url
 	cfg.SampleRate = 44100
-	return NewHTTPTTS(cfg)
+	return NewHTTPTTS(cfg).Base
 }
 
 // step is one thing a test does to the running pipeline: queue a frame or

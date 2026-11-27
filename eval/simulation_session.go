@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"github.com/gojargo/jargo/processor/rtvi"
-	"github.com/gojargo/jargo/service/stt"
 )
 
 // errNoPersonaLLM is a simulation session built without the LLM that plays the
@@ -47,7 +46,7 @@ type SimulationSession struct {
 // text mode; botSTT transcribes the bot's audio, or is nil in text mode.
 func NewSimulationSession(
 	scenario *SimulationScenario, botURL string, params SessionParams, personaLLM PersonaLLM,
-	judge RunJudge, userTTS *CachingTTSService, botSTT *stt.SegmentService,
+	judge RunJudge, userTTS *CachingTTSService, botSTT SegmentedSTT,
 ) (*SimulationSession, error) {
 	if err := params.validate(); err != nil {
 		return nil, err
@@ -90,7 +89,7 @@ func NewSimulationSession(
 // It fails when a service the simulation's blocks name cannot be built.
 func SimulationSessionFromScenario(
 	scenario *SimulationScenario, botURL string, params SessionParams, personaLLM PersonaLLM,
-	judge RunJudge, userTTS *CachingTTSService, botSTT *stt.SegmentService,
+	judge RunJudge, userTTS *CachingTTSService, botSTT SegmentedSTT,
 ) (*SimulationSession, error) {
 	if personaLLM == nil {
 		built, err := PersonaLLMFromConfig(&scenario.Simulator)

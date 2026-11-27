@@ -17,8 +17,8 @@ import (
 	"github.com/gojargo/jargo/service/llm/adapter"
 )
 
-// Service is a streaming Anthropic LLM processor.
-type Service struct {
+// LLMService is a streaming Anthropic LLM processor.
+type LLMService struct {
 	*llm.Base
 	client sdk.Client
 	// live is what an LLMUpdateSettingsFrame may change while the pipeline runs.
@@ -32,7 +32,7 @@ type Service struct {
 }
 
 // NewLLM builds an Anthropic LLM service.
-func NewLLM(cfg Config) *Service {
+func NewLLM(cfg Config) *LLMService {
 	return NewLLMWithOptions("AnthropicLLM", cfg)
 }
 
@@ -58,8 +58,8 @@ func requestOptions(cfg Config, extra ...option.RequestOption) []option.RequestO
 // request options appended. It backs alternative Anthropic backends (such as
 // Amazon Bedrock or Google Vertex) that authorize and address requests through
 // an SDK option rather than an API key.
-func NewLLMWithOptions(name string, cfg Config, extra ...option.RequestOption) *Service {
-	s := &Service{
+func NewLLMWithOptions(name string, cfg Config, extra ...option.RequestOption) *LLMService {
+	s := &LLMService{
 		client: sdk.NewClient(requestOptions(cfg, extra...)...),
 		live:   newLLMSettings(cfg),
 
@@ -72,7 +72,7 @@ func NewLLMWithOptions(name string, cfg Config, extra ...option.RequestOption) *
 
 // newParams builds the request params shared by both generation paths from the
 // settings as they stand.
-func (s *Service) newParams(
+func (s *LLMService) newParams(
 	convo *frames.LLMContext, opts adapter.Options,
 ) (sdk.MessageNewParams, error) {
 	return s.newParamsFrom(s.requestSettings(), convo, opts)
@@ -80,7 +80,7 @@ func (s *Service) newParams(
 
 // newParamsFrom builds the request params from rs: model, token cap, the
 // converted conversation, sampling controls and the system prompt.
-func (s *Service) newParamsFrom(
+func (s *LLMService) newParamsFrom(
 	rs requestSettings, convo *frames.LLMContext, opts adapter.Options,
 ) (sdk.MessageNewParams, error) {
 	opts.EnablePromptCaching = rs.cachePrompt
@@ -140,7 +140,7 @@ func extraConfiguresThinking(extra map[string]any) bool {
 // every request when UseProviderThinkingDefault is set. The first request for
 // each model logs the setting sent, or that the model runs at Anthropic's
 // default, warning for an unlisted Claude model.
-func (s *Service) applyThinkingDefault(params *sdk.MessageNewParams, rs requestSettings) {
+func (s *LLMService) applyThinkingDefault(params *sdk.MessageNewParams, rs requestSettings) {
 	if rs.thinkingSet || rs.effort != "" || extraConfiguresThinking(rs.extra) {
 		return
 	}
@@ -165,7 +165,7 @@ func (s *Service) applyThinkingDefault(params *sdk.MessageNewParams, rs requestS
 
 // reportUsage reports a response's usage, unless it counted no tokens at all:
 // an all-zero report says nothing about what the response cost.
-func (s *Service) reportUsage(ctx context.Context, u sdk.Usage) error {
+func (s *LLMService) reportUsage(ctx context.Context, u sdk.Usage) error {
 	if u.InputTokens == 0 && u.OutputTokens == 0 && u.CacheCreationInputTokens == 0 && u.CacheReadInputTokens == 0 {
 		return nil
 	}
@@ -195,7 +195,7 @@ func toUsage(u sdk.Usage) frames.LLMTokenUsage {
 // Generate streams a response for the conversation, emitting each text delta.
 // When usage metrics are enabled it accumulates the stream so it can report the
 // turn's token usage once the response completes.
-func (s *Service) Generate(ctx context.Context, convo *frames.LLMContext, emit llm.Emit) error {
+func (s *LLMService) Generate(ctx context.Context, convo *frames.LLMContext, emit llm.Emit) error {
 	report := s.UsageMetricsEnabled()
 	var acc sdk.Message
 	rs := s.requestSettings()
@@ -251,7 +251,7 @@ func (s *Service) Generate(ctx context.Context, convo *frames.LLMContext, emit l
 // conversation as this provider's own message: a thinking block has to be
 // handed back on the next turn, signature intact, for the model to carry its
 // reasoning across a tool call.
-func (s *Service) pushThought(ctx context.Context, event sdk.MessageStreamEventUnion) error {
+func (s *LLMService) pushThought(ctx context.Context, event sdk.MessageStreamEventUnion) error {
 	var f frames.Frame
 	switch ev := event.AsAny().(type) {
 	case sdk.ContentBlockStartEvent:
@@ -281,7 +281,7 @@ func (s *Service) pushThought(ctx context.Context, event sdk.MessageStreamEventU
 
 // handleStreamStopReason passes a streamed message_delta's stop reason to
 // handleStopReason. Every other event is left alone.
-func (s *Service) handleStreamStopReason(ctx context.Context, event sdk.MessageStreamEventUnion) {
+func (s *LLMService) handleStreamStopReason(ctx context.Context, event sdk.MessageStreamEventUnion) {
 	if ev, ok := event.AsAny().(sdk.MessageDeltaEvent); ok {
 		s.handleStopReason(ctx, ev.Delta.StopReason, ev.Delta.StopDetails)
 	}
@@ -295,7 +295,7 @@ func (s *Service) handleStreamStopReason(ctx context.Context, event sdk.MessageS
 // token limit or the context window. Whatever text did arrive is still passed
 // on. reason and details come from a streamed message_delta or from a complete
 // message, which both carry them.
-func (s *Service) handleStopReason(ctx context.Context, reason sdk.StopReason, details sdk.RefusalStopDetails) {
+func (s *LLMService) handleStopReason(ctx context.Context, reason sdk.StopReason, details sdk.RefusalStopDetails) {
 	switch reason {
 	case "", sdk.StopReasonEndTurn, sdk.StopReasonToolUse, sdk.StopReasonStopSequence:
 		return
@@ -325,7 +325,7 @@ func interleavedThinking() option.RequestOption {
 // requestOpts is what every request this service makes is sent with: the
 // interleaved-thinking beta, unless the service was built for a backend that
 // does not take it, and the settings' extra request fields.
-func (s *Service) requestOpts(rs requestSettings) []option.RequestOption {
+func (s *LLMService) requestOpts(rs requestSettings) []option.RequestOption {
 	var opts []option.RequestOption
 	if !s.omitInterleavedThinking {
 		opts = append(opts, interleavedThinking())
@@ -353,7 +353,7 @@ func carriesModelOutput(event sdk.MessageStreamEventUnion) bool {
 // TTFAT at a tool call's start: a turn that only calls tools produces no answer
 // text, so the call itself is what the caller gets and TTFAT ends there rather
 // than going unmeasured.
-func (s *Service) timeEvent(ctx context.Context, event sdk.MessageStreamEventUnion) {
+func (s *LLMService) timeEvent(ctx context.Context, event sdk.MessageStreamEventUnion) {
 	if carriesModelOutput(event) {
 		s.StopTTFBMetrics(ctx)
 	}
@@ -367,7 +367,7 @@ func (s *Service) timeEvent(ctx context.Context, event sdk.MessageStreamEventUni
 // each tool-use block the model produced. The conversation's tools are sent on
 // the request, and any tool-use / tool-result turns already in the context are
 // replayed as the matching Anthropic blocks.
-func (s *Service) GenerateWithTools(ctx context.Context, convo *frames.LLMContext, sink llm.Sink) error {
+func (s *LLMService) GenerateWithTools(ctx context.Context, convo *frames.LLMContext, sink llm.Sink) error {
 	rs := s.requestSettings()
 	params, err := s.newParamsFrom(rs, convo, adapter.Options{SystemInstruction: s.SystemInstruction()})
 	if err != nil {
@@ -415,7 +415,7 @@ func (s *Service) GenerateWithTools(ctx context.Context, convo *frames.LLMContex
 
 // RunInference answers the conversation once, off to the side of the pipeline:
 // no streaming, no frames, just the text. It implements llm.Inferencer.
-func (s *Service) RunInference(
+func (s *LLMService) RunInference(
 	ctx context.Context, convo *frames.LLMContext, opts llm.InferenceOptions,
 ) (string, error) {
 	// The call's own instruction, or else the service's: an inference is still
@@ -455,7 +455,7 @@ func (s *Service) RunInference(
 }
 
 // SupportsResponseSchema implements llm.ResponseSchemaSupporter.
-func (s *Service) SupportsResponseSchema() bool { return true }
+func (s *LLMService) SupportsResponseSchema() bool { return true }
 
 // modelVersion reads the generation out of a Claude model id: "claude-3-5-sonnet"
 // is 3.5 and "claude-sonnet-4-5" 4.5. A minor version is at most two digits, so
@@ -467,7 +467,7 @@ var modelVersion = regexp.MustCompile(`claude(?:-[a-z]+)?-(\d+)(?:-(\d{1,2})(?:[
 // ModelSupportsResponseSchema implements llm.ResponseSchemaSupporter.
 // Structured outputs arrived with the 4.5 models. A model id without a
 // version, such as a preview, is assumed to support them.
-func (s *Service) ModelSupportsResponseSchema(model string) bool {
+func (s *LLMService) ModelSupportsResponseSchema(model string) bool {
 	m := modelVersion.FindStringSubmatch(model)
 	if m == nil {
 		return true
@@ -515,16 +515,16 @@ func supportsPrefill(model string) bool {
 // LLMAdapter returns the adapter this service converts through, so the base can
 // add the tools it implements itself to what every request advertises. It
 // implements llm.AdapterHolder.
-func (s *Service) LLMAdapter() llm.BuiltinToolHolder { return &s.adapter }
+func (s *LLMService) LLMAdapter() llm.BuiltinToolHolder { return &s.adapter }
 
 // MessagesForLogging renders the conversation as this provider will see it, for
 // the generation span. It implements llm.TraceRenderer.
-func (s *Service) MessagesForLogging(convo *frames.LLMContext) []map[string]any {
+func (s *LLMService) MessagesForLogging(convo *frames.LLMContext) []map[string]any {
 	return s.adapter.MessagesForLogging(convo)
 }
 
 // ToolsForLogging renders the toolset as this provider will see it, for the
 // generation span. It implements llm.TraceRenderer.
-func (s *Service) ToolsForLogging(schema frames.ToolsSchema) []any {
+func (s *LLMService) ToolsForLogging(schema frames.ToolsSchema) []any {
 	return adapter.ToolsForLogging(&s.adapter, schema)
 }

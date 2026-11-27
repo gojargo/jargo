@@ -103,10 +103,10 @@ func TestRunInferenceResponseSchema(t *testing.T) {
 
 // Compile-time checks of the interfaces the base looks for.
 var (
-	_ llm.Inferencer              = (*Service)(nil)
-	_ llm.ToolGenerator           = (*Service)(nil)
-	_ llm.ResponseSchemaSupporter = (*Service)(nil)
-	_ llm.TraceRenderer           = (*Service)(nil)
+	_ llm.Inferencer              = (*LLMService)(nil)
+	_ llm.ToolGenerator           = (*LLMService)(nil)
+	_ llm.ResponseSchemaSupporter = (*LLMService)(nil)
+	_ llm.TraceRenderer           = (*LLMService)(nil)
 )
 
 // TestSettingsCarryOver checks the service takes the Gemini service's settings.

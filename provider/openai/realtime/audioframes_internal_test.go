@@ -59,7 +59,7 @@ func (r *recorder) spoken() []string {
 }
 
 // framedService is an offline service whose pushed frames are recorded.
-func framedService(t *testing.T) (*Service, *recorder, *sentEvents) {
+func framedService(t *testing.T) (*LLMService, *recorder, *sentEvents) {
 	t.Helper()
 	s, sent := offlineService(t, Config{})
 	r := newRecorder()
@@ -68,7 +68,7 @@ func framedService(t *testing.T) (*Service, *recorder, *sentEvents) {
 }
 
 // drive feeds server events through the service's handler.
-func drive(t *testing.T, s *Service, evs ...map[string]any) {
+func drive(t *testing.T, s *LLMService, evs ...map[string]any) {
 	t.Helper()
 	for _, e := range evs {
 		raw, _ := json.Marshal(e)
@@ -121,7 +121,7 @@ func equal(got []string, want ...string) bool {
 	return true
 }
 
-func (s *Service) trackedItem() string {
+func (s *LLMService) trackedItem() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.audioResp == nil {

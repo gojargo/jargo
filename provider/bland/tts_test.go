@@ -323,7 +323,7 @@ func newService(f *fakeBland, cfg Config) *tts.Base {
 	if cfg.SampleRate == 0 {
 		cfg.SampleRate = 24000
 	}
-	return NewTTS(cfg)
+	return NewTTS(cfg).Base
 }
 
 // init, speak and end_of_turn are sent, and the turn's audio is emitted.

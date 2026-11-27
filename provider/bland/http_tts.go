@@ -48,16 +48,29 @@ type HTTPTTSConfig struct {
 // Validate reports whether the configuration is usable.
 func (c HTTPTTSConfig) Validate() error { return validate.Struct(c) }
 
+// HTTPTTSService is the Bland text-to-speech service NewHTTPTTS builds.
+type HTTPTTSService struct {
+	*tts.Base
+}
+
 // NewHTTPTTS builds a Bland TTS service over the /v2/tts endpoint, which takes
 // the complete text in one request. Voice agents should prefer NewTTS, which
 // streams text into a realtime session.
-func NewHTTPTTS(cfg HTTPTTSConfig) *tts.Base {
-	b, _ := newHTTPTTS(cfg)
+func NewHTTPTTS(cfg HTTPTTSConfig) *HTTPTTSService {
+	s := &HTTPTTSService{}
+	s.Base = buildHTTPTTS(cfg, tts.WithSelf(s))
+	return s
+}
+
+// buildHTTPTTS builds the service NewHTTPTTS returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildHTTPTTS(cfg HTTPTTSConfig, opts ...tts.Option) *tts.Base {
+	b, _ := newHTTPTTS(cfg, opts...)
 	return b
 }
 
 // newHTTPTTS builds the service and returns its synthesizer alongside it.
-func newHTTPTTS(cfg HTTPTTSConfig) (*tts.Base, *httpSynthesizer) {
+func newHTTPTTS(cfg HTTPTTSConfig, opts ...tts.Option) (*tts.Base, *httpSynthesizer) {
 	if cfg.URL == "" {
 		cfg.URL = defaultHTTPURL
 	}
@@ -73,7 +86,7 @@ func newHTTPTTS(cfg HTTPTTSConfig) (*tts.Base, *httpSynthesizer) {
 		blandRate: resolveSampleRate(cfg.SampleRate),
 		live:      newTTSSettings(cfg.Voice, cfg.Expressiveness, cfg.Stability, cfg.AutoFormatting),
 	}
-	return tts.New("BlandHTTPTTS", s), s
+	return tts.New("BlandHTTPTTS", s, opts...), s
 }
 
 // httpSynthesizer speaks each sentence with one request to /v2/tts.

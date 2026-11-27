@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/gojargo/jargo/event"
-	"github.com/gojargo/jargo/service/stt"
 )
 
 // The eval session: one conversation with a bot, driven to a result.
@@ -351,7 +350,7 @@ type SessionServices struct {
 	// UserTTS speaks the user's turns in audio mode.
 	UserTTS *CachingTTSService
 	// BotSTT transcribes the bot's audio when the run transcribes it.
-	BotSTT *stt.SegmentService
+	BotSTT SegmentedSTT
 }
 
 // SessionFromScenario builds a ready-to-run session for a scenario of either

@@ -66,15 +66,15 @@ func TestEveryRequestOptsIntoInterleavedThinking(t *testing.T) {
 	}
 	calls := map[string]struct {
 		stream bool
-		run    func(*Service, *frames.LLMContext) error
+		run    func(*LLMService, *frames.LLMContext) error
 	}{
-		"Generate": {true, func(s *Service, c *frames.LLMContext) error {
+		"Generate": {true, func(s *LLMService, c *frames.LLMContext) error {
 			return s.Generate(t.Context(), c, func(string) error { return nil })
 		}},
-		"GenerateWithTools": {true, func(s *Service, c *frames.LLMContext) error {
+		"GenerateWithTools": {true, func(s *LLMService, c *frames.LLMContext) error {
 			return s.GenerateWithTools(t.Context(), c, discardSink{})
 		}},
-		"RunInference": {false, func(s *Service, c *frames.LLMContext) error {
+		"RunInference": {false, func(s *LLMService, c *frames.LLMContext) error {
 			_, err := s.RunInference(t.Context(), c, llm.InferenceOptions{})
 			return err
 		}},

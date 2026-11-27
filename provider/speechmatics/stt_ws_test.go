@@ -625,7 +625,7 @@ type serviceRun struct {
 func runService(t *testing.T, endpoint string) *serviceRun {
 	t.Helper()
 	r := &serviceRun{done: make(chan error, 1)}
-	r.svc = NewSTT(Config{APIKey: "test-key", URL: endpoint, SampleRate: 16000})
+	r.svc = NewSTT(Config{APIKey: "test-key", URL: endpoint, SampleRate: 16000}).StreamService
 	event.On(r.svc.Events(), processor.EventError, func(_ context.Context, ef *frames.ErrorFrame) {
 		r.mu.Lock()
 		defer r.mu.Unlock()

@@ -97,8 +97,8 @@ func (sess *session) live() bool {
 	}
 }
 
-// Service is a Responses LLM processor over a persistent WebSocket.
-type Service struct {
+// LLMService is a Responses LLM processor over a persistent WebSocket.
+type LLMService struct {
 	*llm.Base
 	cfg Config
 	// live is what an LLMUpdateSettingsFrame may change while the pipeline runs.
@@ -174,7 +174,7 @@ type continuation struct {
 // NewLLM builds a Responses LLM service over a persistent WebSocket. It sends
 // only the new items each turn when the conversation has grown from where the
 // previous one left off, and the full context otherwise.
-func NewLLM(cfg Config) *Service {
+func NewLLM(cfg Config) *LLMService {
 	if cfg.WSURL == "" {
 		cfg.WSURL = defaultWSURL
 	}
@@ -184,7 +184,7 @@ func NewLLM(cfg Config) *Service {
 	if cfg.Model == "" {
 		cfg.Model = defaultModel
 	}
-	s := &Service{cfg: cfg, live: newLLMSettings(cfg), http: &http.Client{}}
+	s := &LLMService{cfg: cfg, live: newLLMSettings(cfg), http: &http.Client{}}
 	s.Base = llm.New("OpenAIResponsesLLM", s)
 	s.Base.SetModel(cfg.Model)
 	s.SetSystemInstruction(cfg.Instructions)
@@ -196,7 +196,7 @@ func NewLLM(cfg Config) *Service {
 // Setup sets the service up and opens the connection, so the first turn does
 // not pay for the handshake. A connection that cannot be opened is reported,
 // and the first turn tries again.
-func (s *Service) Setup(ctx context.Context, setup processor.Setup) error {
+func (s *LLMService) Setup(ctx context.Context, setup processor.Setup) error {
 	if err := s.Base.Setup(ctx, setup); err != nil {
 		return err
 	}
@@ -205,7 +205,7 @@ func (s *Service) Setup(ctx context.Context, setup processor.Setup) error {
 }
 
 // ProcessFrame closes the connection when the pipeline ends or is canceled.
-func (s *Service) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
+func (s *LLMService) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.Direction) error {
 	err := s.Base.ProcessFrame(ctx, f, dir)
 	switch f.(type) {
 	case *frames.EndFrame, *frames.CancelFrame:
@@ -215,19 +215,19 @@ func (s *Service) ProcessFrame(ctx context.Context, f frames.Frame, dir processo
 }
 
 // Generate streams a completion, emitting each text delta.
-func (s *Service) Generate(ctx context.Context, convo *frames.LLMContext, emit llm.Emit) error {
+func (s *LLMService) Generate(ctx context.Context, convo *frames.LLMContext, emit llm.Emit) error {
 	return s.run(ctx, convo, textSink{emit: emit}, false)
 }
 
 // GenerateWithTools streams a completion, reporting text and any tool calls the
 // model requests. It implements llm.ToolGenerator.
-func (s *Service) GenerateWithTools(ctx context.Context, convo *frames.LLMContext, sink llm.Sink) error {
+func (s *LLMService) GenerateWithTools(ctx context.Context, convo *frames.LLMContext, sink llm.Sink) error {
 	return s.run(ctx, convo, sink, true)
 }
 
 // RunInference answers the conversation once, off to the side of the pipeline:
 // no streaming, no frames, just the text. It implements llm.Inferencer.
-func (s *Service) RunInference(
+func (s *LLMService) RunInference(
 	ctx context.Context, convo *frames.LLMContext, opts llm.InferenceOptions,
 ) (string, error) {
 	opts.ResponseSchema = s.CheckResponseSchema(ctx, opts.ResponseSchema)
@@ -241,39 +241,39 @@ func (s *Service) RunInference(
 }
 
 // LLMAdapter implements llm.AdapterHolder.
-func (s *Service) LLMAdapter() llm.BuiltinToolHolder { return &s.adapter }
+func (s *LLMService) LLMAdapter() llm.BuiltinToolHolder { return &s.adapter }
 
 // SupportsResponseSchema implements llm.ResponseSchemaSupporter.
-func (s *Service) SupportsResponseSchema() bool { return true }
+func (s *LLMService) SupportsResponseSchema() bool { return true }
 
 // ModelSupportsResponseSchema implements llm.ResponseSchemaSupporter. OpenAI
 // models before gpt-4o-mini and gpt-4o-2024-08-06 cannot enforce a schema.
-func (s *Service) ModelSupportsResponseSchema(model string) bool {
+func (s *LLMService) ModelSupportsResponseSchema(model string) bool {
 	return chat.ModelSupportsResponseSchema(model)
 }
 
 // Cleanup closes the connection and tears the processor down.
-func (s *Service) Cleanup(ctx context.Context) error {
+func (s *LLMService) Cleanup(ctx context.Context) error {
 	s.ws.Disconnect(ctx)
 	return s.Base.Cleanup(ctx)
 }
 
 // ConnectWebsocket implements llm.WebsocketHandler. It opens the connection,
 // and does nothing while one is open.
-func (s *Service) ConnectWebsocket(ctx context.Context) error {
+func (s *LLMService) ConnectWebsocket(ctx context.Context) error {
 	_, err := s.connect(ctx)
 	return err
 }
 
 // DisconnectWebsocket implements llm.WebsocketHandler. It closes the
 // connection, and forgets what the server held and which lanes were in use.
-func (s *Service) DisconnectWebsocket(context.Context) error {
+func (s *LLMService) DisconnectWebsocket(context.Context) error {
 	s.disconnect()
 	return nil
 }
 
 // Connected implements llm.WebsocketHandler.
-func (s *Service) Connected() bool {
+func (s *LLMService) Connected() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.sess != nil && s.sess.live()
@@ -285,7 +285,7 @@ func (s *Service) Connected() bool {
 // the server merely lost the previous response, on a restored one when the
 // connection itself is gone or spent. A connection that cannot be restored
 // fails the turn; restoring it has already reported why.
-func (s *Service) run(ctx context.Context, convo *frames.LLMContext, sink llm.Sink, withTools bool) error {
+func (s *LLMService) run(ctx context.Context, convo *frames.LLMContext, sink llm.Sink, withTools bool) error {
 	lane := s.chooseNextLane()
 	var err error
 	// Only the first attempt is bounded: the retry waits as long as it takes.
@@ -329,7 +329,7 @@ func isRecoverable(err error) bool {
 
 // forgetContinuation drops what the previous turn left the server holding, so
 // the next request sends the full context.
-func (s *Service) forgetContinuation() {
+func (s *LLMService) forgetContinuation() {
 	s.mu.Lock()
 	s.cont = continuation{}
 	s.mu.Unlock()
@@ -337,7 +337,7 @@ func (s *Service) forgetContinuation() {
 
 // turn runs one exchange on a lane: it builds the request, sends it, and reads
 // events until the response ends.
-func (s *Service) turn(
+func (s *LLMService) turn(
 	ctx context.Context, convo *frames.LLMContext, sink llm.Sink, withTools bool, lane string,
 	outputTimeout time.Duration,
 ) error {
@@ -416,7 +416,7 @@ func (s *Service) turn(
 // with nothing past response.created by then it reports errResponseTimeout.
 // Once the response is under way the wait is unbounded, since its output is
 // already on its way and re-issuing it would repeat it.
-func (s *Service) readTurn(
+func (s *LLMService) readTurn(
 	ctx context.Context, sess *session, sink llm.Sink, lane string, outputTimeout time.Duration,
 ) (*streamState, error) {
 	state := newStreamState(sink, "WebSocket API error")
@@ -458,7 +458,7 @@ func (s *Service) readTurn(
 // turnEvent folds one event of the response in: the metrics it ends, then the
 // state machine. It reports done when the turn has ended, and an error when the
 // response failed.
-func (s *Service) turnEvent(ctx context.Context, state *streamState, ev event) (bool, error) {
+func (s *LLMService) turnEvent(ctx context.Context, state *streamState, ev event) (bool, error) {
 	if carriesModelOutput(ev) {
 		s.StopTTFBMetrics(ctx)
 	}
@@ -492,7 +492,7 @@ func (s *Service) turnEvent(ctx context.Context, state *streamState, ev event) (
 //
 // If every lane is taken, the connection is closed, which ends the abandoned
 // responses; the next send opens a new one.
-func (s *Service) chooseNextLane() string {
+func (s *LLMService) chooseNextLane() string {
 	s.mu.Lock()
 	for i := range laneCount {
 		lane := laneName(i)
@@ -511,7 +511,7 @@ func (s *Service) chooseNextLane() string {
 func laneName(i int) string { return "lane-" + strconv.Itoa(i) }
 
 // abandonResponse leaves the response in flight to drain from its lane.
-func (s *Service) abandonResponse() {
+func (s *LLMService) abandonResponse() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.currentLane == "" {
@@ -531,7 +531,7 @@ func (s *Service) abandonResponse() {
 // An event on another lane is a draining lane's, from an abandoned response;
 // the lane is free again once that response ends. Events with no stream_id
 // concern the connection, and so the response in flight.
-func (s *Service) followLane(ev event, lane string) bool {
+func (s *LLMService) followLane(ev event, lane string) bool {
 	ends := endsResponse(ev.Type)
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -566,7 +566,7 @@ func classifyStreamError(ev event) error {
 // already hold, and returns how many items were sent. The full input goes
 // unless the conversation is the previous input, then the previous response's
 // own output, then something new.
-func (s *Service) applyContinuation(req *request) int {
+func (s *LLMService) applyContinuation(req *request) int {
 	s.mu.Lock()
 	cont := s.cont
 	s.mu.Unlock()
@@ -639,7 +639,7 @@ func startsWithResponseOutput(items []inputItem, output []responseOutput) bool {
 //
 // Only a completed response is recorded: one cut short leaves the previous
 // record in place.
-func (s *Service) recordContinuation(state *streamState, full []inputItem, sent int, lane string) {
+func (s *LLMService) recordContinuation(state *streamState, full []inputItem, sent int, lane string) {
 	if !state.completed || state.responseID == "" {
 		return
 	}
@@ -666,7 +666,7 @@ func hashItems(items []inputItem) string {
 }
 
 // connect returns the live session, dialing one if there is none.
-func (s *Service) connect(ctx context.Context) (*session, error) {
+func (s *LLMService) connect(ctx context.Context) (*session, error) {
 	s.mu.Lock()
 	sess := s.sess
 	s.mu.Unlock()
@@ -710,7 +710,7 @@ func (s *Service) connect(ctx context.Context) (*session, error) {
 
 // readLoop drains the socket into the session's event channel until the
 // connection ends or the session is torn down.
-func (s *Service) readLoop(sess *session) {
+func (s *LLMService) readLoop(sess *session) {
 	defer s.wg.Done()
 	defer close(sess.ended)
 	defer close(sess.events)
@@ -737,7 +737,7 @@ func (s *Service) readLoop(sess *session) {
 
 // disconnect closes the connection, stops the read loop, and forgets what the
 // server held and which lanes were in use. It is safe to call more than once.
-func (s *Service) disconnect() {
+func (s *LLMService) disconnect() {
 	s.mu.Lock()
 	sess := s.sess
 	s.sess = nil
@@ -754,7 +754,7 @@ func (s *Service) disconnect() {
 }
 
 // reportUsage forwards the turn's token accounting, when usage metrics are on.
-func (s *Service) reportUsage(ctx context.Context, state *streamState) {
+func (s *LLMService) reportUsage(ctx context.Context, state *streamState) {
 	if state.usage == nil || !s.UsageMetricsEnabled() {
 		return
 	}
@@ -763,4 +763,4 @@ func (s *Service) reportUsage(ctx context.Context, state *streamState) {
 
 // ClassifyError implements processor.ErrorClassifier, for the one-shot
 // inferences this service answers over HTTP.
-func (s *Service) ClassifyError(err error) errclass.Category { return apierror.Classify(err) }
+func (s *LLMService) ClassifyError(err error) errclass.Category { return apierror.Classify(err) }

@@ -139,6 +139,11 @@ func (c RealtimeTTSConfig) withDefaults() RealtimeTTSConfig {
 	return c
 }
 
+// RealtimeTTSService is the Rime text-to-speech service NewRealtimeTTS builds.
+type RealtimeTTSService struct {
+	*tts.Base
+}
+
 // NewRealtimeTTS builds a Rime TTS service over the WebSocket JSON API. Unlike
 // NewTTS, which issues one HTTP request per sentence, it holds one connection
 // open for the call and gives each turn a context on it: the sentences of a
@@ -151,16 +156,24 @@ func (c RealtimeTTSConfig) withDefaults() RealtimeTTSConfig {
 // reconnects. The connection is opened when the pipeline starts. When it drops
 // it is restored with backoff, and when that keeps failing the service reports
 // a permanent error and becomes unusable. See tts.Websocket.
-func NewRealtimeTTS(cfg RealtimeTTSConfig) *tts.Base {
-	b, _ := newRealtimeTTS(cfg)
+func NewRealtimeTTS(cfg RealtimeTTSConfig) *RealtimeTTSService {
+	s := &RealtimeTTSService{}
+	s.Base = buildRealtimeTTS(cfg, tts.WithSelf(s))
+	return s
+}
+
+// buildRealtimeTTS builds the service NewRealtimeTTS returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildRealtimeTTS(cfg RealtimeTTSConfig, opts ...tts.Option) *tts.Base {
+	b, _ := newRealtimeTTS(cfg, opts...)
 	return b
 }
 
 // newRealtimeTTS builds the service and returns its synthesizer alongside it.
-func newRealtimeTTS(cfg RealtimeTTSConfig) (*tts.Base, *realtimeSynthesizer) {
+func newRealtimeTTS(cfg RealtimeTTSConfig, opts ...tts.Option) (*tts.Base, *realtimeSynthesizer) {
 	cfg = cfg.withDefaults()
 	s := &realtimeSynthesizer{cfg: cfg, live: newRealtimeTTSSettings(cfg)}
-	b := tts.New("RimeRealtimeTTS", s)
+	b := tts.New("RimeRealtimeTTS", s, opts...)
 	s.base = b
 	s.ws = tts.NewWebsocket(b, s, cfg.Websocket)
 	// Spelled-out text is always kept in one piece. The preferred way to use

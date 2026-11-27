@@ -677,7 +677,7 @@ func waitFor(t *testing.T, what string, ch <-chan struct{}) {
 type harness struct {
 	t      *testing.T
 	peer   *peer
-	svc    *Service
+	svc    *LLMService
 	worker *pipeline.Worker
 	convo  *frames.LLMContext
 	output *testOutput
@@ -697,11 +697,11 @@ type harnessOptions struct {
 	// opening starts the conversation; nil queues an LLMRunFrame.
 	opening func(h *harness)
 	// setup runs on the service before the pipeline starts.
-	setup func(*Service)
+	setup func(*LLMService)
 }
 
 // newService builds a service for the peer.
-func newService(p *peer, configure func(*Config)) *Service {
+func newService(p *peer, configure func(*Config)) *LLMService {
 	cfg := Config{APIKey: "local-peer", Endpoint: p.endpoint()}
 	if configure != nil {
 		configure(&cfg)

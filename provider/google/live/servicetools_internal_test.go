@@ -25,7 +25,7 @@ func sampleTool(name string) frames.Tool {
 	}
 }
 
-func withTools(tools frames.ToolsSchema) *Service {
+func withTools(tools frames.ToolsSchema) *LLMService {
 	return New(Config{APIKey: "test-key", Tools: tools})
 }
 

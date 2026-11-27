@@ -11,6 +11,13 @@ metrics, tracing, interruption, and the tool loop.
 
 You do **not** write a processor for this. The base is the processor.
 
+Give the service a type of its own that embeds the base, as every provider in
+jargo does (`cartesia.TTSService`, `deepgram.STTService`), and pass it to the
+base with `WithSelf`. The type is what your users hold and can type-switch on,
+and `WithSelf` makes it the processor the pipeline runs, so a service switcher
+or an observer comparing against it finds it. An LLM service needs no option:
+it passes itself to `llm.New` as its `Generator`.
+
 ## The pattern
 
 ```mermaid
@@ -42,22 +49,23 @@ type Config struct {
     Model  string
 }
 
-type Service struct {
+// LLMService is the MyProvider LLM service.
+type LLMService struct {
     *llm.Base
     cfg Config
 }
 
-func NewLLM(cfg Config) *Service {
+func NewLLM(cfg Config) *LLMService {
     if cfg.Model == "" {
         cfg.Model = "my-default-model"
     }
-    s := &Service{cfg: cfg}
+    s := &LLMService{cfg: cfg}
     s.Base = llm.New("MyLLM", s)
     s.SetModel(cfg.Model)     // reported as a span attribute
     return s
 }
 
-func (s *Service) Generate(ctx context.Context, convo *frames.LLMContext, emit llm.Emit) error {
+func (s *LLMService) Generate(ctx context.Context, convo *frames.LLMContext, emit llm.Emit) error {
     stream, err := s.startStream(ctx, convo.Messages())
     if err != nil {
         return err
@@ -107,22 +115,30 @@ model's turn completes. `llm.Base` runs the whole tool loop (dispatching handler
 emitting the call frames, feeding results back) as long as the context carries
 tools and your service implements this.
 
-For a server-sent-events provider, `service/llm/sse.go` already handles the SSE
-framing.
-
 ## A TTS service
 
 ```go
 type Synthesizer interface {
     SampleRate() int
-    Synthesize(ctx context.Context, text string, emit func(pcm []byte) error) error
+    RunTTS(ctx context.Context, text, contextID string, yield func(frames.Frame) error) error
 }
 ```
 
 ```go
-func (s *Service) SampleRate() int { return s.cfg.SampleRate }
+// TTSService is the MyProvider text-to-speech service.
+type TTSService struct {
+    *tts.Base
+}
 
-func (s *Service) Synthesize(ctx context.Context, text string, emit func([]byte) error) error {
+func NewTTS(cfg Config) *TTSService {
+    s := &TTSService{}
+    s.Base = tts.New("MyTTS", &synthesizer{cfg: cfg}, tts.WithSelf(s))
+    return s
+}
+
+func (s *synthesizer) SampleRate() int { return s.cfg.SampleRate }
+
+func (s *synthesizer) RunTTS(ctx context.Context, text, _ string, yield func(frames.Frame) error) error {
     resp, err := s.post(ctx, text)
     if err != nil {
         return err
@@ -133,8 +149,9 @@ func (s *Service) Synthesize(ctx context.Context, text string, emit func([]byte)
     for {
         n, err := resp.Body.Read(buf)
         if n > 0 {
-            if err := emit(buf[:n]); err != nil {   // emit as it arrives
-                return err
+            pcm := append([]byte(nil), buf[:n]...)
+            if err := yield(frames.NewTTSAudioRawFrame(pcm, s.cfg.SampleRate, 1)); err != nil {
+                return err // yield audio as it arrives
             }
         }
         if errors.Is(err, io.EOF) {
@@ -147,9 +164,9 @@ func (s *Service) Synthesize(ctx context.Context, text string, emit func([]byte)
 }
 ```
 
-Emit PCM **as it arrives**. Buffering the whole utterance before the first `emit`
-adds its full synthesis time to perceived latency. It is the single most common
-mistake in a TTS integration.
+Yield audio **as it arrives**. Buffering the whole utterance before the first
+frame adds its full synthesis time to perceived latency. It is the single most
+common mistake in a TTS integration.
 
 `tts.Base` handles chunking, the `TTSStartedFrame` / `TTSStoppedFrame` bracket,
 `TTSAudioRawFrame`s, and TTFA measured from the first *audible* sample.
@@ -184,14 +201,21 @@ type Stream interface {
 ```
 
 ```go
-func NewSTT(cfg Config) *stt.StreamService {
-    return stt.NewStream("MySTT", &connector{cfg: cfg}, cfg.SampleRate)
+// STTService is the MyProvider speech-to-text service.
+type STTService struct {
+    *stt.StreamService
+}
+
+func NewSTT(cfg Config) *STTService {
+    s := &STTService{}
+    s.StreamService = stt.NewStream("MySTT", &connector{cfg: cfg}, cfg.SampleRate, stt.WithSelf(s))
+    return s
 }
 ```
 
 `stt.StreamService` turns that into a processor: `Send` gets the audio, and each
 `Result` becomes an `InterimTranscriptionFrame` or a `TranscriptionFrame`
-depending on its final flag. `service/stt/wsutil` helps with WebSocket providers.
+depending on its final flag. `service/wsutil` helps with WebSocket providers.
 
 Mark interim results honestly. Reporting partials as final makes the bot answer
 half-sentences.
@@ -202,11 +226,12 @@ be no interim transcriptions.
 
 ## Metadata
 
-Implement `Describer` to announce useful facts at pipeline start:
+Implement `Describer` on the connector or transcriber to announce useful facts
+at pipeline start:
 
 ```go
-func (s *Service) Metadata() stt.Metadata {
-    return stt.Metadata{TTFSP99Latency: 300 * time.Millisecond}
+func (c *connector) Metadata() stt.Metadata {
+    return stt.Metadata{TTFSP99: new(300 * time.Millisecond)}
 }
 ```
 

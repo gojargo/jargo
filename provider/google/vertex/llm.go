@@ -56,11 +56,11 @@ type LLMConfig struct {
 func (c LLMConfig) Validate() error { return validateConfig(c, c.Credentials) }
 
 // NewLLM builds a Vertex AI Gemini LLM service.
-func NewLLM(cfg LLMConfig) *gemini.Service { return newLLM(cfg, "") }
+func NewLLM(cfg LLMConfig) *gemini.LLMService { return newLLM(cfg, "") }
 
 // newLLM builds the service with its requests sent to host, or to the regional
 // endpoint when host is empty.
-func newLLM(cfg LLMConfig, host string) *gemini.Service {
+func newLLM(cfg LLMConfig, host string) *gemini.LLMService {
 	if cfg.Model == "" {
 		cfg.Model = defaultLLMModel
 	}

@@ -107,7 +107,7 @@ func resolvedThinking(model string, cfg *gemini.ThinkingConfig) *gemini.Thinking
 
 // supportsNonBlockingTools reports whether this session takes non-blocking tool
 // calls: the model decides, unless the connector's deployment overrides it.
-func (s *Service) supportsNonBlockingTools() bool {
+func (s *LLMService) supportsNonBlockingTools() bool {
 	if gate, ok := s.connector.(NonBlockingToolsGate); ok {
 		return gate.SupportsNonBlockingTools(s.model())
 	}

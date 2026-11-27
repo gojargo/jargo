@@ -16,7 +16,7 @@ import (
 )
 
 func turnsService(url string) *stt.StreamService {
-	return cartesia.NewTurnsSTT(cartesia.TurnsSTTConfig{APIKey: "test-key", URL: url, SampleRate: 16000})
+	return cartesia.NewTurnsSTT(cartesia.TurnsSTTConfig{APIKey: "test-key", URL: url, SampleRate: 16000}).StreamService
 }
 
 // TestTurnsAFailedFirstConnectIsRetriedInTheBackground checks a connection

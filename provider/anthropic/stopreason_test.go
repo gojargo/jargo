@@ -102,7 +102,7 @@ func convoOf(text string) *frames.LLMContext {
 
 // runTurn runs convo through a service in a pipeline, against a stub answering
 // with handle, and returns the service and what the turn pushed and logged.
-func runTurn(t *testing.T, convo *frames.LLMContext, handle http.HandlerFunc) (*Service, streamedTurn) {
+func runTurn(t *testing.T, convo *frames.LLMContext, handle http.HandlerFunc) (*LLMService, streamedTurn) {
 	t.Helper()
 	srv := httptest.NewServer(handle)
 	t.Cleanup(srv.Close)

@@ -68,7 +68,7 @@ func (c *capture) names() []string {
 // newTestService builds a service wired to a sink and started, so that frames it
 // pushes are recorded. The session is never opened: these tests drive the
 // message handler directly, which is where the server's messages become frames.
-func newTestService(t *testing.T) (*Service, *capture) {
+func newTestService(t *testing.T) (*LLMService, *capture) {
 	t.Helper()
 	s, sink, _ := newTestServiceBothWays(t)
 	return s, sink
@@ -77,7 +77,7 @@ func newTestService(t *testing.T) (*Service, *capture) {
 // newTestServiceBothWays builds a service with a sink on each side, since what
 // the user said travels towards the user aggregator, which sits before the
 // service, while the model's own output travels on.
-func newTestServiceBothWays(t *testing.T) (*Service, *capture, *capture) {
+func newTestServiceBothWays(t *testing.T) (*LLMService, *capture, *capture) {
 	t.Helper()
 	s := New(Config{APIKey: "k", Model: "m"})
 	// Setting the service up opens its session, so it gets one that is never

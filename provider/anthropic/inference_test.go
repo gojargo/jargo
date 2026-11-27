@@ -68,7 +68,7 @@ func TestRunInferenceAnswersOnce(t *testing.T) {
 // TestServiceRunsOneShotInferences checks the service satisfies the interface a
 // summarizer or a judge asks for.
 func TestServiceRunsOneShotInferences(t *testing.T) {
-	var _ llm.Inferencer = (*anthropic.Service)(nil)
+	var _ llm.Inferencer = (*anthropic.LLMService)(nil)
 }
 
 // TestRunInferenceSendsTheServiceInstructionAndTools checks an inference given

@@ -15,7 +15,7 @@ import (
 
 // runningService runs a service for srv in a pipeline, returning the worker and
 // a channel closed when the run ends.
-func runningService(t *testing.T, srv *recordingSession) (*Service, *pipeline.Worker, <-chan struct{}) {
+func runningService(t *testing.T, srv *recordingSession) (*LLMService, *pipeline.Worker, <-chan struct{}) {
 	t.Helper()
 	s := New(Config{APIKey: "k", BaseURL: wsURL(srv)})
 	w := pipeline.NewWorker(pipeline.New(s), pipeline.WorkerConfig{})

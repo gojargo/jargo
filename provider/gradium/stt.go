@@ -190,6 +190,11 @@ func setIf[T any](o *settings.Opt[T], v *T) {
 	}
 }
 
+// STTService is the Gradium speech-to-text service NewSTT builds.
+type STTService struct {
+	*stt.StreamService
+}
+
 // NewSTT builds a Gradium streaming STT service.
 //
 // It transcribes English unless the configuration names another language. Set
@@ -199,7 +204,15 @@ func setIf[T any](o *settings.Opt[T], v *T) {
 // stopped, the server is flushed and the text gathered finalizes into the
 // transcript. With EnableTurnDetection the server's end-pointing signal drives
 // the turns instead, and the VAD is left to the turn strategies.
-func NewSTT(cfg STTConfig) *stt.StreamService {
+func NewSTT(cfg STTConfig) *STTService {
+	s := &STTService{}
+	s.StreamService = buildSTT(cfg, stt.WithSelf(s))
+	return s
+}
+
+// buildSTT builds the service NewSTT returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildSTT(cfg STTConfig, opts ...stt.Option) *stt.StreamService {
 	if cfg.URL == "" {
 		cfg.URL = defaultSTTURL
 	}
@@ -213,7 +226,7 @@ func NewSTT(cfg STTConfig) *stt.StreamService {
 		cfg.Language = language.English
 	}
 	c := newSTTConnector(cfg)
-	svc := stt.NewStream("GradiumSTT", c, cfg.SampleRate)
+	svc := stt.NewStream("GradiumSTT", c, cfg.SampleRate, opts...)
 	svc.Events().Register(EventTurnStart, false)
 	svc.Events().Register(EventTurnEnd, false)
 	c.svc = svc

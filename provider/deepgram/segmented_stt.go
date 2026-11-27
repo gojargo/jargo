@@ -98,6 +98,11 @@ type SegmentedSTTConfig struct {
 // Validate reports whether the configuration is usable.
 func (c SegmentedSTTConfig) Validate() error { return validate.Struct(c) }
 
+// SegmentedSTTService is the Deepgram speech-to-text service NewSegmentedSTT builds.
+type SegmentedSTTService struct {
+	*stt.SegmentService
+}
+
 // NewSegmentedSTT builds a Deepgram speech-to-text service on the pre-recorded
 // API (POST /v1/listen) rather than a streaming WebSocket. It is segmented: the
 // VAD upstream delimits each utterance, and each one is transcribed with one
@@ -106,11 +111,19 @@ func (c SegmentedSTTConfig) Validate() error { return validate.Struct(c) }
 //
 // Settings are read for every request, so an update applies from the next
 // segment.
-func NewSegmentedSTT(cfg SegmentedSTTConfig) *stt.SegmentService {
+func NewSegmentedSTT(cfg SegmentedSTTConfig) *SegmentedSTTService {
+	s := &SegmentedSTTService{}
+	s.SegmentService = buildSegmentedSTT(cfg, stt.WithSelf(s))
+	return s
+}
+
+// buildSegmentedSTT builds the service NewSegmentedSTT returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildSegmentedSTT(cfg SegmentedSTTConfig, opts ...stt.Option) *stt.SegmentService {
 	t := newSegmentedTranscriber(cfg)
 	// The transcriber builds its frames with the service's help: the user they
 	// are attributed to, the processing metrics, the speaker runs.
-	t.svc = stt.NewSegmentRunner("DeepgramSegmentedSTT", t, cfg.SampleRate)
+	t.svc = stt.NewSegmentRunner("DeepgramSegmentedSTT", t, cfg.SampleRate, opts...)
 	return t.svc
 }
 

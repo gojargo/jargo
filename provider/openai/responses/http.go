@@ -17,8 +17,8 @@ import (
 	"github.com/gojargo/jargo/service/llm/adapter"
 )
 
-// HTTPService streams a Responses turn over one request.
-type HTTPService struct {
+// HTTPLLMService streams a Responses turn over one request.
+type HTTPLLMService struct {
 	*llm.Base
 	cfg Config
 	// live is what an LLMUpdateSettingsFrame may change while the pipeline runs.
@@ -57,7 +57,7 @@ type HTTPVariant struct {
 // NewHTTPLLM builds a Responses LLM service that streams over a request per
 // turn. Prefer NewLLM: the WebSocket service holds one connection open and
 // sends only what is new each turn.
-func NewHTTPLLM(cfg Config) *HTTPService {
+func NewHTTPLLM(cfg Config) *HTTPLLMService {
 	if cfg.BaseURL == "" {
 		cfg.BaseURL = defaultBaseURL
 	}
@@ -71,11 +71,11 @@ func NewHTTPLLM(cfg Config) *HTTPService {
 // from OpenAI's in the ways v describes. Unlike NewHTTPLLM it leaves an empty
 // Model empty, so a server that can choose the model itself is not sent
 // OpenAI's default.
-func NewHTTPVariantLLM(cfg Config, v HTTPVariant) *HTTPService {
+func NewHTTPVariantLLM(cfg Config, v HTTPVariant) *HTTPLLMService {
 	if cfg.BaseURL == "" {
 		cfg.BaseURL = defaultBaseURL
 	}
-	s := &HTTPService{cfg: cfg, live: newLLMSettings(cfg), http: &http.Client{}, variant: v}
+	s := &HTTPLLMService{cfg: cfg, live: newLLMSettings(cfg), http: &http.Client{}, variant: v}
 	s.Base = llm.New(v.Name, s)
 	s.Base.SetModel(cfg.Model)
 	s.SetSystemInstruction(cfg.Instructions)
@@ -84,19 +84,19 @@ func NewHTTPVariantLLM(cfg Config, v HTTPVariant) *HTTPService {
 }
 
 // Generate streams a completion, emitting each text delta.
-func (s *HTTPService) Generate(ctx context.Context, convo *frames.LLMContext, emit llm.Emit) error {
+func (s *HTTPLLMService) Generate(ctx context.Context, convo *frames.LLMContext, emit llm.Emit) error {
 	return s.run(ctx, convo, textSink{emit: emit}, false)
 }
 
 // GenerateWithTools streams a completion, reporting text and any tool calls the
 // model requests. It implements llm.ToolGenerator.
-func (s *HTTPService) GenerateWithTools(ctx context.Context, convo *frames.LLMContext, sink llm.Sink) error {
+func (s *HTTPLLMService) GenerateWithTools(ctx context.Context, convo *frames.LLMContext, sink llm.Sink) error {
 	return s.run(ctx, convo, sink, true)
 }
 
 // RunInference answers the conversation once, off to the side of the pipeline:
 // no streaming, no frames, just the text. It implements llm.Inferencer.
-func (s *HTTPService) RunInference(
+func (s *HTTPLLMService) RunInference(
 	ctx context.Context, convo *frames.LLMContext, opts llm.InferenceOptions,
 ) (string, error) {
 	opts.ResponseSchema = s.CheckResponseSchema(ctx, opts.ResponseSchema)
@@ -110,11 +110,11 @@ func (s *HTTPService) RunInference(
 }
 
 // LLMAdapter implements llm.AdapterHolder.
-func (s *HTTPService) LLMAdapter() llm.BuiltinToolHolder { return &s.adapter }
+func (s *HTTPLLMService) LLMAdapter() llm.BuiltinToolHolder { return &s.adapter }
 
 // encode renders a request for the wire: the thinking default, Extra over the
 // modeled fields, then the variant's edits.
-func (s *HTTPService) encode(cfg Config, req request) ([]byte, error) {
+func (s *HTTPLLMService) encode(cfg Config, req request) ([]byte, error) {
 	if s.variant.ThinkingDefault == nil && s.variant.Request == nil {
 		return cfg.encode(req, s)
 	}
@@ -139,16 +139,16 @@ func (s *HTTPService) encode(cfg Config, req request) ([]byte, error) {
 }
 
 // SupportsResponseSchema implements llm.ResponseSchemaSupporter.
-func (s *HTTPService) SupportsResponseSchema() bool { return true }
+func (s *HTTPLLMService) SupportsResponseSchema() bool { return true }
 
 // ModelSupportsResponseSchema implements llm.ResponseSchemaSupporter. OpenAI
 // models before gpt-4o-mini and gpt-4o-2024-08-06 cannot enforce a schema.
-func (s *HTTPService) ModelSupportsResponseSchema(model string) bool {
+func (s *HTTPLLMService) ModelSupportsResponseSchema(model string) bool {
 	return chat.ModelSupportsResponseSchema(model)
 }
 
 // run issues one turn and feeds its event stream to the state machine.
-func (s *HTTPService) run(ctx context.Context, convo *frames.LLMContext, sink llm.Sink, withTools bool) error {
+func (s *HTTPLLMService) run(ctx context.Context, convo *frames.LLMContext, sink llm.Sink, withTools bool) error {
 	cfg := requestConfig(s.Base, s.cfg, s.live)
 	reqBody, err := cfg.newRequest(
 		&s.adapter, convo, adapter.Options{SystemInstruction: s.SystemInstruction()}, withTools,
@@ -189,7 +189,7 @@ func (s *HTTPService) run(ctx context.Context, convo *frames.LLMContext, sink ll
 
 // consume feeds a response's event stream to the state machine, through the
 // variant's filter when it has one.
-func (s *HTTPService) consume(ctx context.Context, r io.Reader, state *streamState) error {
+func (s *HTTPLLMService) consume(ctx context.Context, r io.Reader, state *streamState) error {
 	handle := func(data []byte) error {
 		ev, ok := decodeEvent(data)
 		if !ok {
@@ -228,7 +228,7 @@ func (s *HTTPService) consume(ctx context.Context, r io.Reader, state *streamSta
 }
 
 // reportUsage forwards the turn's token accounting, when usage metrics are on.
-func (s *HTTPService) reportUsage(ctx context.Context, state *streamState) {
+func (s *HTTPLLMService) reportUsage(ctx context.Context, state *streamState) {
 	if state.usage == nil || !s.UsageMetricsEnabled() {
 		return
 	}
@@ -242,4 +242,4 @@ func (s *HTTPService) reportUsage(ctx context.Context, state *streamState) {
 // ClassifyError implements processor.ErrorClassifier: a content filter's
 // refusal is content the provider refused, not the permanent invalid request
 // its status says.
-func (s *HTTPService) ClassifyError(err error) errclass.Category { return apierror.Classify(err) }
+func (s *HTTPLLMService) ClassifyError(err error) errclass.Category { return apierror.Classify(err) }

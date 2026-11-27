@@ -92,12 +92,12 @@ func createTTS(name string) *tts.Base {
 			APIKey:         os.Getenv("ELEVENLABS_API_KEY"),
 			VoiceID:        os.Getenv("ELEVENLABS_VOICE_ID"),
 			WordTimestamps: true,
-		})
+		}).Base
 	}
 	return cartesia.NewTTS(cartesia.Config{
 		APIKey:  os.Getenv("CARTESIA_API_KEY"),
 		VoiceID: "86e30c1d-714b-4074-a1f2-1cb6b552fb49",
-	})
+	}).Base
 }
 
 func runBot(ctx context.Context, t transport.Transport, args runner.Arguments) error {

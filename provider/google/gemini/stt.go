@@ -39,12 +39,25 @@ type STTConfig struct {
 // Validate reports whether the configuration is usable.
 func (c STTConfig) Validate() error { return validate.Struct(c) }
 
+// STTService is the Gemini speech-to-text service NewSTT builds.
+type STTService struct {
+	*stt.SegmentService
+}
+
 // NewSTT builds a Google batch Speech-to-Text service. It is segmented: a turn
 // detector upstream delimits each utterance, which is transcribed in one
 // request. Streaming recognition needs gRPC and is not supported.
-func NewSTT(cfg STTConfig) *stt.SegmentService {
+func NewSTT(cfg STTConfig) *STTService {
+	s := &STTService{}
+	s.SegmentService = buildSTT(cfg, stt.WithSelf(s))
+	return s
+}
+
+// buildSTT builds the service NewSTT returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildSTT(cfg STTConfig, opts ...stt.Option) *stt.SegmentService {
 	t := &sttTranscriber{cfg: cfg, http: &http.Client{}}
-	return stt.NewSegment("GoogleSTT", t, cfg.SampleRate)
+	return stt.NewSegment("GoogleSTT", t, cfg.SampleRate, opts...)
 }
 
 type sttTranscriber struct {
