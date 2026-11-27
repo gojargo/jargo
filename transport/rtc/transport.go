@@ -466,8 +466,8 @@ func (in *inputTransport) readLoop(ctx context.Context) {
 // queuedFrames is how far the writer may run ahead of the sender. It has to be
 // more than one: the sender takes whatever is queued at the instant it comes
 // round, so a queue that only ever holds the frame being waited on leaves no
-// slack, and any hesitation upstream — a goroutine not scheduled promptly, work
-// done downstream between chunks — arrives too late and gets a frame of silence
+// slack, and any hesitation upstream (a goroutine not scheduled promptly, work
+// done downstream between chunks) arrives too late and gets a frame of silence
 // spliced into the middle of speech instead. The cushion is small enough that
 // bot-speaking state stays close to what is actually playing.
 const queuedFrames = 8
@@ -480,7 +480,7 @@ const starvationFrames = 10
 // gapTracker accounts for the silence the sender emits. Only silence that real
 // audio resumes after is a fault: the writer fell behind and a word was chopped.
 // Silence that nothing resumes is the talker having stopped, which is why a run
-// stays pending until it is known which one it was — counting it on sight charges
+// stays pending until it is known which one it was. Counting it on sight charges
 // every utterance for its own ending.
 type gapTracker struct {
 	silence int64
@@ -519,14 +519,14 @@ func (g *gapTracker) quiet() {
 // connection's audio track at real time.
 //
 // The sender goroutine owns the clock and writes on every frame boundary for as
-// long as the session lasts, falling back to silence whenever nothing is queued
-// — the same thing the local audio transport does in its playback callback, and
-// what a device's pull callback forces on you. That is what keeps RTP timestamps
+// long as the session lasts, falling back to silence whenever nothing is queued.
+// The local audio transport does the same thing in its playback callback, and a
+// device's pull callback forces it on you. That is what keeps RTP timestamps
 // honest: they advance one frame per packet whatever the wall clock did, so a
 // sender that goes quiet during a gap and resumes leaves the audio after it
 // timestamped as though the gap never happened. A receiver schedules playout from
 // those timestamps, reads that as delay, conceals by repeating the last frame,
-// then compresses once packets bunch up again — stuttered and clipped words. With
+// then compresses once packets bunch up again: stuttered and clipped words. With
 // the sender writing every frame, elapsed frames and elapsed time cannot diverge.
 type outputTransport struct {
 	*transport.BaseOutput
@@ -728,7 +728,7 @@ func (out *outputTransport) waitDrained(ctx context.Context) {
 // sendLoop writes one frame on every frame boundary until the session ends,
 // sending queued audio when there is any and silence when there is not.
 //
-// The schedule comes from a fixed origin — frames sent times the frame duration —
+// The schedule comes from a fixed origin (frames sent times the frame duration)
 // rather than from a ticker, which coalesces the ticks it misses and would let
 // the stream fall permanently behind the wall clock while its timestamps claimed
 // otherwise. Running late here instead sends back to back until the count catches

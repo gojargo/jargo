@@ -1,7 +1,7 @@
 // Package tracing wires OpenTelemetry tracing into a jargo voice agent.
 //
 // The service processors emit spans through the global tracer, so
-// instrumentation costs nothing until a TracerProvider is installed — without
+// instrumentation costs nothing until a TracerProvider is installed: without
 // one, Tracer returns a no-op. Call Init at startup to export spans over OTLP,
 // and let the task trace the session so the conversation, its turns and the STT,
 // LLM and TTS calls of each turn nest under a single trace:
@@ -51,7 +51,7 @@ type Config struct {
 	// Insecure sends over plain HTTP instead of HTTPS.
 	Insecure bool
 	// SampleRatio is the head-sampling ratio in (0,1]. Zero (or less) always
-	// samples — jargo traces are low-volume, one trace per session.
+	// samples: jargo traces are low-volume, one trace per session.
 	SampleRatio float64
 }
 
@@ -139,7 +139,7 @@ const (
 // SetTTSUsage records one synthesis's billable usage on the span in ctx: the
 // provider model and the number of characters handed to it. Characters are
 // counted in runes rather than bytes, because that is the unit TTS providers
-// bill in — an accented character is one character, not the two bytes it
+// bill in: an accented character is one character, not the two bytes it
 // occupies in UTF-8.
 func SetTTSUsage(ctx context.Context, model string, characters int) {
 	setUsage(ctx, "tts", model, usageDetails("characters", int64(characters)))
@@ -147,8 +147,8 @@ func SetTTSUsage(ctx context.Context, model string, characters int) {
 
 // SetSTTUsage records billable transcription usage on the span in ctx: the
 // provider model and the duration of audio sent for transcription. The unit is
-// milliseconds because usage values have to be whole numbers — a fractional one
-// is discarded — and rounding to whole seconds would throw away most of a short
+// milliseconds because usage values have to be whole numbers (a fractional one
+// is discarded) and rounding to whole seconds would throw away most of a short
 // turn. Configure the model's price per millisecond accordingly: a rate quoted
 // per minute is that rate divided by 60000.
 func SetSTTUsage(ctx context.Context, model string, audio time.Duration) {

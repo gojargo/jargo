@@ -187,7 +187,7 @@ func TestNewParamsKeepsTheCachedPrefixStableAcrossRecall(t *testing.T) {
 	}
 }
 
-// Recall still has to reach the model — it just travels outside the breakpoint.
+// Recall still has to reach the model; it just travels outside the breakpoint.
 func TestNewParamsStillSendsRecall(t *testing.T) {
 	s := NewLLM(Config{})
 	convo := frames.NewLLMContext("you are a companion")

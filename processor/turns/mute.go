@@ -10,7 +10,7 @@ import (
 // ShouldMute is called for every frame (so the strategy can track state) and
 // returns the muted state as of that frame. The UserTurnProcessor OR-reduces all
 // strategies and, while muted, drops the user-input frames before they reach
-// turn detection — so the user can neither barge in nor pollute the context at
+// turn detection, so the user can neither barge in nor pollute the context at
 // the wrong moment. Strategies are driven only from the processor (under its
 // mute mutex) and need no locking of their own.
 type MuteStrategy interface {

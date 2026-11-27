@@ -7,9 +7,9 @@ import (
 	"github.com/gojargo/jargo/expressive"
 )
 
-// TextFrame is a chunk of text flowing through the pipeline — emitted by LLM
-// services and consumed by aggregators, TTS services and more. It is a data
-// frame.
+// TextFrame is a chunk of text flowing through the pipeline. It is emitted by
+// LLM services and consumed by aggregators, TTS services and more. It is a
+// data frame.
 type TextFrame struct {
 	BaseDataFrame
 	// Text is the text content.
@@ -147,8 +147,8 @@ func (f *TTSTextFrame) String() string {
 }
 
 // TTSSpeakFrame carries fixed text for the TTS service to speak directly,
-// bypassing the LLM and the TTS sentence aggregator — the way to make the bot
-// say a set phrase (a greeting, an acknowledgement). It is a data frame.
+// bypassing the LLM and the TTS sentence aggregator. It is the way to make the
+// bot say a set phrase (a greeting, an acknowledgement). It is a data frame.
 type TTSSpeakFrame struct {
 	BaseDataFrame
 	// Text is the exact text to speak.

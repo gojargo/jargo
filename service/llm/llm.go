@@ -3,8 +3,8 @@
 // lifecycle and brackets the streamed response as an LLMFullResponseStartFrame,
 // a stream of LLMTextFrames, and an LLMFullResponseEndFrame.
 //
-// This keeps every provider down to the part that differs — turning a
-// conversation into a stream of text deltas — while the frame contract lives in
+// This keeps every provider down to the part that differs (turning a
+// conversation into a stream of text deltas) while the frame contract lives in
 // one place.
 //
 // A service that also supports tool calling implements ToolGenerator. When the
@@ -131,8 +131,8 @@ func AsCompletionTimeout(ctx context.Context, err error) error {
 
 // ToolGenerator is implemented by services that support tool calling. It streams
 // text to sink.Text and reports each tool call the model requests to sink.Tool.
-// It returns when the model's turn completes — either a final text answer or a
-// request to call tools — or when ctx is canceled.
+// It returns when the model's turn completes (either a final text answer or a
+// request to call tools) or when ctx is canceled.
 type ToolGenerator interface {
 	GenerateWithTools(ctx context.Context, convo *frames.LLMContext, sink Sink) error
 }
@@ -1607,7 +1607,7 @@ func (s sink) Tool(c frames.ToolCall) error { return s.tool(c) }
 
 // runWithTools runs one tool-capable inference: it streams text and, when the
 // model requests tools, dispatches each call to its handler and emits the
-// function-call frames. It does not loop — the assistant aggregator commits the
+// function-call frames. It does not loop. The assistant aggregator commits the
 // results to the context and re-triggers generation, so the next inference reads a
 // context whose tool calls are balanced. The base writes nothing to the context.
 func (b *Base) runWithTools(ctx context.Context, convo *frames.LLMContext, tg ToolGenerator) error {

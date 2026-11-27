@@ -157,8 +157,8 @@ func TestUsesLatestUserMessage(t *testing.T) {
 	}
 }
 
-// TestSkipsToolResultTurns checks a tool-result message — stored under the user
-// role but not something a person said — is not fed to the chain as input.
+// TestSkipsToolResultTurns checks a tool-result message (stored under the user
+// role but not something a person said) is not fed to the chain as input.
 func TestSkipsToolResultTurns(t *testing.T) {
 	c := frames.NewLLMContext("")
 	c.AddUserMessage("weather in Paris?")
@@ -221,7 +221,7 @@ func TestEmptyTokensSkipped(t *testing.T) {
 	}
 }
 
-// TestChainErrorIsReported checks a failing chain surfaces as a pipeline error —
+// TestChainErrorIsReported checks a failing chain surfaces as a pipeline error
 // and that the response is still closed, so downstream stages are not left
 // waiting for an end frame that never comes.
 func TestChainErrorIsReported(t *testing.T) {

@@ -11,8 +11,8 @@ import (
 // strategyEnv is the shared environment the controller hands each strategy: the
 // single mutex that serializes ALL turn state (controller + every strategy), the
 // session context, and the callbacks a strategy uses to signal decisions and
-// push frames. Every callback and every Trigger* method runs with mu held — the
-// controller's Process and all timer callbacks acquire mu first — so strategies
+// push frames. Every callback and every Trigger* method runs with mu held (the
+// controller's Process and all timer callbacks acquire mu first), so strategies
 // need no locking of their own.
 type strategyEnv struct {
 	mu *sync.Mutex

@@ -15,7 +15,7 @@ import "time"
 // region, network or self-hosted instance makes its own latency, re-measure and
 // pass the result as the TTFSP99 field of the service's config.
 //
-// A turn-based service — one whose server defines the turn boundary — has no
+// A turn-based service (one whose server defines the turn boundary) has no
 // meaningful TTFS: there is no separate wait between the speech ending and the
 // transcript to measure. Those report SupportsTTFS false rather than a value.
 const (

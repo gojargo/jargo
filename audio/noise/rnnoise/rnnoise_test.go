@@ -61,7 +61,7 @@ func TestDenoiseBuffersPartialFrame(t *testing.T) {
 func TestDenoiseResamplesOtherRate(t *testing.T) {
 	f, ctx := startFilter(t, 16000)
 
-	// 160 samples at 16 kHz upsamples to 480 at 48 kHz — one frame. The up- and
+	// 160 samples at 16 kHz upsamples to 480 at 48 kHz: one frame. The up- and
 	// down-resamplers have some warm-up latency, so feed enough chunks to clear
 	// it and require audio to eventually flow.
 	var total int

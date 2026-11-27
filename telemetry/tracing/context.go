@@ -85,7 +85,7 @@ func (c *Context) ConversationID() string {
 
 // Parent returns ctx re-parented to the span a service span should hang from:
 // the turn being spoken, or the conversation when no turn is open. Everything
-// else about ctx — its deadline, its cancellation, its values — is left as it
+// else about ctx (its deadline, its cancellation, its values) is left as it
 // was, so a caller can start its span from the returned context and go on using
 // it for the work the span covers.
 //

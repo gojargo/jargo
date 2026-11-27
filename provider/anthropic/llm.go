@@ -55,8 +55,8 @@ func requestOptions(cfg Config, extra ...option.RequestOption) []option.RequestO
 }
 
 // NewLLMWithOptions builds an Anthropic LLM service named name with extra SDK
-// request options appended. It backs alternative Anthropic backends — such as
-// Amazon Bedrock or Google Vertex — that authorize and address requests through
+// request options appended. It backs alternative Anthropic backends (such as
+// Amazon Bedrock or Google Vertex) that authorize and address requests through
 // an SDK option rather than an API key.
 func NewLLMWithOptions(name string, cfg Config, extra ...option.RequestOption) *Service {
 	s := &Service{

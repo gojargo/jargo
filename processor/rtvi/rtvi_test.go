@@ -56,7 +56,7 @@ func TestUserTranscriptionJSON(t *testing.T) {
 
 // TestProcessorHandshakeAndTranscript drives the RTVI processor in a pipeline:
 // a client-ready message must produce a bot-ready, and a TranscriptionFrame must
-// produce a user-transcription — both as OutputTransportMessageUrgentFrames.
+// produce a user-transcription, both as OutputTransportMessageUrgentFrames.
 func TestProcessorHandshakeAndTranscript(t *testing.T) {
 	out := make(chan rtvi.Message, 8)
 	proc := rtvi.NewProcessor()

@@ -1,5 +1,5 @@
-// Package frames defines the Frame type and the core frame categories — system,
-// data and control — that flow through a jargo pipeline.
+// Package frames defines the Frame type and the core frame categories (system,
+// data and control) that flow through a jargo pipeline.
 //
 // # Categories
 //
@@ -34,7 +34,7 @@
 // synchronized. Exactly one goroutine owns a frame at a time: a processor may
 // read and mutate a frame until it pushes the frame onward, and must not touch
 // it afterwards. Do not mutate a frame that is being pushed in both directions
-// at once — the two ends run on separate goroutines, so a shared frame must be
+// at once: the two ends run on separate goroutines, so a shared frame must be
 // treated as read-only by both.
 //
 // [LLMContext] is the exception. It is a long-lived aggregate shared by the
@@ -74,8 +74,8 @@ func formatPTS(f Frame) string {
 // mutable state and are passed as pointers.
 //
 // The interface is deliberately narrow: identity is all a pipeline needs to
-// route, log and correlate a frame. The optional per-frame state — presentation
-// timestamp, metadata, transport source and destination, broadcast sibling id —
+// route, log and correlate a frame. The optional per-frame state (presentation
+// timestamp, metadata, transport source and destination, broadcast sibling id)
 // lives on [BaseFrame] and is reached through Base. Those accessors are also
 // promoted onto every concrete frame, so a caller holding a concrete type can
 // keep calling them directly.

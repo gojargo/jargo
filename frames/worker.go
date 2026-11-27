@@ -2,7 +2,7 @@ package frames
 
 import "fmt"
 
-// The worker frames ask the pipeline worker — the Task — to change the run's
+// The worker frames ask the pipeline worker (the Task) to change the run's
 // lifecycle. A processor deep in the pipeline has no handle on the Task, so it
 // pushes one of these instead and the Task converts it into the corresponding
 // pipeline-wide frame: EndWorkerFrame becomes an EndFrame, CancelWorkerFrame a

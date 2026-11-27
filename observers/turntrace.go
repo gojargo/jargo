@@ -55,7 +55,7 @@ func NewTurnTrace(cfg TurnTraceConfig) *TurnTrace {
 
 // OnPushFrame implements processor.Observer. The conversation span opens on the
 // StartFrame rather than with the first turn, so whatever a bot does before the
-// user speaks — a greeting, a flow initializing — is part of the conversation.
+// user speaks (a greeting, a flow initializing) is part of the conversation.
 func (o *TurnTrace) OnPushFrame(data processor.FramePushed) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -97,8 +97,8 @@ func (o *TurnTrace) startConversation(id string) {
 }
 
 // EndConversation closes the conversation span, and any turn still open with it.
-// The task calls it when the pipeline has stopped. A nil observer — a task that
-// is not tracing — has nothing to close.
+// The task calls it when the pipeline has stopped. A nil observer (a task that
+// is not tracing) has nothing to close.
 func (o *TurnTrace) EndConversation() {
 	if o == nil {
 		return

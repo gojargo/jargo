@@ -144,7 +144,7 @@ func TestBaseRunsToolLoop(t *testing.T) {
 		t.Fatalf("handler args = %q, want %q", gotArgs, `{"location":"Paris"}`)
 	}
 	// The aggregator is the sole writer; the turn is recorded as user, assistant
-	// tool-use, tool result, assistant reply — with every tool call balanced.
+	// tool-use, tool result, assistant reply. Every tool call is balanced.
 	msgs := convo.Messages()
 	if len(msgs) != 4 {
 		t.Fatalf("context messages = %+v, want 4", msgs)
@@ -362,7 +362,7 @@ func toolCallsBalanced(convo *frames.LLMContext) bool {
 }
 
 // endsWithToolResult reports whether the last context message carries tool
-// results — true once the aggregator has committed the turn's results.
+// results, which holds once the aggregator has committed the turn's results.
 func endsWithToolResult(convo *frames.LLMContext) bool {
 	msgs := convo.Messages()
 	return len(msgs) > 0 && len(msgs[len(msgs)-1].ToolResults) > 0

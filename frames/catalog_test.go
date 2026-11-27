@@ -50,8 +50,8 @@ type catalogEntry struct {
 	label string
 	cat   category
 	build func() frames.Frame
-	// wantString, when set, must appear in the frame's String output — used for
-	// the frames whose String renders their payload.
+	// wantString, when set, must appear in the frame's String output. It is used
+	// for the frames whose String renders their payload.
 	wantString string
 	// uninterruptible marks frames that must survive a barge-in.
 	uninterruptible bool

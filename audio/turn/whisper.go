@@ -40,8 +40,8 @@ var (
 
 // featureWorkspace bundles the FFT and scratch buffers one log-mel extraction
 // needs. A gonum FFT holds mutable work buffers and is not safe for concurrent
-// use, so each computeLogMel call borrows a workspace from the pool — one per
-// concurrent turn analysis — rather than sharing a global.
+// use, so each computeLogMel call borrows a workspace from the pool (one per
+// concurrent turn analysis) rather than sharing a global.
 type featureWorkspace struct {
 	fft      *fourier.FFT
 	windowed []float64    // windowed frame, length nFFT
@@ -204,10 +204,10 @@ func reflectPad(x []float64, pad int) []float64 {
 }
 
 // framePower computes the power spectrum of the frame starting at the given
-// offset in the reflect-padded signal. A constant frame — common, since most of
-// the fixed 8-second window is silence padding that normalization turns into a
-// single repeated value — has power c^2 * |DFT(hann)|^2, so the full DFT is
-// skipped for it.
+// offset in the reflect-padded signal. A constant frame has power
+// c^2 * |DFT(hann)|^2, so the full DFT is skipped for it. Such frames are
+// common, since most of the fixed 8-second window is silence padding that
+// normalization turns into a single repeated value.
 func (ws *featureWorkspace) framePower(padded []float64, start int, power *[numFreqs]float64) {
 	c := padded[start]
 	constant := true

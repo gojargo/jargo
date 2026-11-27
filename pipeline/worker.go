@@ -1550,8 +1550,8 @@ func (t *Worker) sinkPush(ctx context.Context, f frames.Frame, _ processor.Direc
 		return t.advanceFlushProbe(ctx, probe, true)
 	}
 
-	// A worker frame pushed downstream — the documented default, so frames queued
-	// ahead of it are processed first — has now reached the end. Send a fresh
+	// A worker frame pushed downstream (the documented default, so frames queued
+	// ahead of it are processed first) has now reached the end. Send a fresh
 	// instance back upstream so it arrives at the source, which converts it into
 	// the pipeline-wide frame.
 	if back := workerFrameEcho(f); back != nil {

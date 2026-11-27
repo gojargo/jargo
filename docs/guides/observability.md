@@ -223,8 +223,8 @@ defer shutdown(ctx)
 task := pipeline.NewWorker(pipe, pipeline.WorkerConfig{
 	EnableTracing:  true,
 	ConversationID: sessionID, // empty generates one
-	// Attributes on the conversation span, which is the root of the trace — where
-	// a backend's own keys go (a session id, a user id, tags).
+	// Attributes on the conversation span, which is the root of the trace. This
+	// is where a backend's own keys go (a session id, a user id, tags).
 	AdditionalSpanAttributes: []attribute.KeyValue{
 		attribute.String("langfuse.session.id", sessionID),
 		attribute.String("langfuse.user.id", userID),
@@ -245,8 +245,8 @@ conversation                       conversation.id, conversation.type
 
 So a slow turn can be opened up stage by stage: STT finalize → LLM first token →
 TTS first audio. That breakdown is the fastest way to find which provider is
-costing you the latency, and the turn span carries the number that matters most —
-`turn.user_bot_latency_seconds` — beside it.
+costing you the latency, and the turn span carries the number that matters most,
+`turn.user_bot_latency_seconds`, beside it.
 
 Turn spans come from the turn tracking the task runs for them; set
 `EnableTurnTracking` to `false` to trace the conversation and its service calls

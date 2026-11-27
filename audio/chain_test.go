@@ -119,9 +119,9 @@ func TestChainStart(t *testing.T) {
 }
 
 // TestChainStopIsBestEffort checks every filter gets stopped even when an
-// earlier one fails, so a single bad filter cannot leak the others' resources —
-// and that the failure is still reported rather than masked by the successes
-// that follow it.
+// earlier one fails, so a single bad filter cannot leak the others' resources.
+// It also checks the failure is still reported rather than masked by the
+// successes that follow it.
 func TestChainStopIsBestEffort(t *testing.T) {
 	a := &fake{stopErr: errBoom}
 	b := &fake{}

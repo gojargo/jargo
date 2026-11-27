@@ -61,8 +61,8 @@ func BenchmarkSmartTurnInference(b *testing.B) {
 // TestSmartTurnSchedulerProbe measures how much a normal goroutine is delayed
 // while N goroutines run inference concurrently, each on its own session (the
 // one-session-per-stream production shape). It is the tool for deciding whether
-// the purego backend's inability to hand off a P during a native call — unlike
-// cgo — starves the rest of the process, and at what concurrency. Run it under
+// the purego backend's inability to hand off a P during a native call (unlike
+// cgo) starves the rest of the process, and at what concurrency. Run it under
 // both build configs and compare the hb_max column.
 func TestSmartTurnSchedulerProbe(t *testing.T) {
 	if !onnxrt.Available() {

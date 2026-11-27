@@ -131,7 +131,7 @@ func runConversation(t *testing.T, convo *frames.LLMContext, syn tts.Synthesizer
 
 // TestWordTimestampsFullUtteranceRecordsOriginalForm proves the assistant
 // context records the whole sentence in its original written form once it is
-// spoken in full — the transformed span maps back to "$42.50".
+// spoken in full: the transformed span maps back to "$42.50".
 func TestWordTimestampsFullUtteranceRecordsOriginalForm(t *testing.T) {
 	convo := frames.NewLLMContext("system")
 	syn := &fakeTimedSynth{rate: 24000, words: wordsFor(24000)}
@@ -188,7 +188,7 @@ func messageText(msgs []frames.Message) string {
 	return msgs[0].Text
 }
 
-// plainSynth is a Synthesizer with no word timings — the pre-existing contract.
+// plainSynth is a Synthesizer with no word timings (the pre-existing contract).
 type plainSynth struct {
 	rate  int
 	chunk []byte

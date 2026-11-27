@@ -54,7 +54,7 @@ func Int64(shape []int64, data []int64) Tensor { return Tensor{Shape: shape, I64
 type Options struct {
 	// IntraOpThreads caps ONNX Runtime's intra-op thread pool. 0 leaves the
 	// runtime default (roughly one thread per core). When many small models run
-	// concurrently — one session per stream — the default oversubscribes the
+	// concurrently (one session per stream), the default oversubscribes the
 	// machine badly (streams × cores threads); 1 keeps each Run on its caller.
 	IntraOpThreads int
 }

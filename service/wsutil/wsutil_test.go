@@ -47,8 +47,8 @@ func echoServer(t *testing.T, got *http.Header) *httptest.Server {
 	return srv
 }
 
-// TestDialSendsHeaders checks the vendor headers a provider supplies — in
-// practice its API key — reach the handshake.
+// TestDialSendsHeaders checks the vendor headers a provider supplies (in
+// practice its API key) reach the handshake.
 func TestDialSendsHeaders(t *testing.T) {
 	var seen http.Header
 	srv := echoServer(t, &seen)

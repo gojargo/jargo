@@ -4,7 +4,7 @@
 // predicts turn completion from the audio of the user's turn, as the default.
 //
 // Unlike a voice activity detector, which reacts to silence, a turn analyzer
-// listens to the shape of speech — intonation, trailing words — to tell a
+// listens to the shape of speech (intonation, trailing words) to tell a
 // mid-sentence pause from a finished thought. The turntaking package feeds it
 // the user's audio and asks it, when speech stops, whether the turn is over.
 package turn

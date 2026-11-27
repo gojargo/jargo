@@ -1,7 +1,7 @@
 //go:build !cgo
 
 // The pure-Go backend: selected by a CGO_ENABLED=0 build. It binds the ONNX
-// Runtime C API directly with ebitengine/purego — no cgo, no C toolchain — and
+// Runtime C API directly with ebitengine/purego (no cgo, no C toolchain) and
 // dlopen's the same shared library at run time.
 //
 // The ONNX Runtime C API is not a flat symbol table: you Dlsym exactly one

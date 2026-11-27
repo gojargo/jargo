@@ -191,7 +191,8 @@ func (f *filter) resetResamplersLocked() {
 
 // Filter denoises pcm. It resamples to 48 kHz, processes every complete 480-sample
 // frame (buffering any remainder for the next call), resamples back to the input
-// rate, and returns the result — empty when no whole frame was available yet.
+// rate, and returns the result. The result is empty when no whole frame was
+// available yet.
 func (f *filter) Filter(_ context.Context, pcm []byte) ([]byte, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

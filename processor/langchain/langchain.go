@@ -1,5 +1,5 @@
-// Package langchain bridges an external "chain" — any streaming text generator,
-// such as a LangChain-style runnable or a custom agent — into a jargo pipeline.
+// Package langchain bridges an external "chain" (any streaming text generator,
+// such as a LangChain-style runnable or a custom agent) into a jargo pipeline.
 // The Processor takes the latest user message from the LLM context, invokes the
 // chain, and streams its output downstream as an LLM response, so a chain can
 // stand in for a jargo LLM service.
@@ -24,7 +24,7 @@ type Chain func(ctx context.Context, input string, emit func(token string) error
 // Processor runs a Chain in place of an LLM service. On each LLM context frame
 // it extracts the latest user message, invokes the chain, and brackets the
 // streamed tokens with the LLM response start/end frames so the rest of the
-// pipeline — assistant aggregation, TTS — treats it exactly like an LLM.
+// pipeline (assistant aggregation, TTS) treats it exactly like an LLM.
 type Processor struct {
 	*processor.Base
 	chain Chain

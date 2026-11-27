@@ -4,8 +4,8 @@
 // SegmentService for batch providers that transcribe a whole utterance at once
 // (delimited by a turn detector upstream).
 //
-// A concrete provider supplies only the part that differs — a Connector that
-// opens a session, or a Transcriber that transcribes one segment — while the
+// A concrete provider supplies only the part that differs (a Connector that
+// opens a session, or a Transcriber that transcribes one segment) while the
 // frame contract and lifecycle live here.
 package stt
 

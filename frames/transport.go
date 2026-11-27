@@ -3,7 +3,7 @@ package frames
 import "fmt"
 
 // InputTransportMessageFrame carries an application message received by a
-// transport from the client — for example an RTVI message off a WebRTC data
+// transport from the client, for example an RTVI message off a WebRTC data
 // channel. It is a system frame so it is handled with priority and in order.
 type InputTransportMessageFrame struct {
 	BaseSystemFrame

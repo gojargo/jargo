@@ -5,7 +5,7 @@ package turns
 // These are in-package because a strategy only signals through the unexported
 // strategyEnv the controller attaches; driving them from turns_test would mean
 // standing up a whole pipeline to observe a switch statement. The pipeline-level
-// behavior is covered by turns_test.go — this file covers the decision logic.
+// behavior is covered by turns_test.go; this file covers the decision logic.
 
 import (
 	"context"
@@ -261,7 +261,7 @@ func TestMinWordsStartTurnStartedClearsBotSpeaking(t *testing.T) {
 	}
 	s.TurnStarted()
 
-	// No BotStoppedSpeakingFrame yet — the flag must already be clear.
+	// No BotStoppedSpeakingFrame yet. The flag must already be clear.
 	spy.send(s, transcript("yes"))
 	if spy.starts() != 2 {
 		t.Errorf("starts = %d, want 2: one word should suffice after a turn opened", spy.starts())

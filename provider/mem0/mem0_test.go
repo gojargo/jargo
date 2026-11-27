@@ -219,7 +219,7 @@ func TestMemorySearchesOncePerUserMessage(t *testing.T) {
 	got := searchQueries(queries())
 	want := []string{"where did I put my keys?", "and my glasses?"}
 	if !slices.Equal(got, want) {
-		t.Errorf("searched for %q, want %q — one search per user message", got, want)
+		t.Errorf("searched for %q, want %q: one search per user message", got, want)
 	}
 }
 

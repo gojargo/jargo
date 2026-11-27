@@ -16,7 +16,7 @@ import (
 
 // Tests for the frames that mutate the shared LLM context. Each must do two
 // things: apply the change to the context, and reach downstream. The second half
-// is what a realtime (speech-to-speech) service depends on — it generates
+// is what a realtime (speech-to-speech) service depends on: it generates
 // continuously and never re-reads the context, so a change made only on the
 // context object would never reach the model.
 

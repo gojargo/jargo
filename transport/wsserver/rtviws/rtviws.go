@@ -89,7 +89,7 @@ func (*Serializer) Deserialize(data []byte) (frames.Frame, error) {
 	in, err := rtvi.ParseIncoming(data)
 	if err != nil || in.Label != rtvi.MessageLabel {
 		// Malformed or non-RTVI payloads carry no frame and are dropped, per the
-		// wsserver.Serializer contract — not an error.
+		// wsserver.Serializer contract, rather than reported as an error.
 		return nil, nil //nolint:nilnil,nilerr // dropping a non-RTVI message is intentional
 	}
 	if in.Type == TypeRawAudio {

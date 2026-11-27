@@ -359,7 +359,7 @@ type SpeechTimeoutConfig struct {
 }
 
 // SpeechTimeoutStop ends a turn purely on silence timers after the VAD reports
-// the user stopped — no model. It is the model-free default stop strategy.
+// the user stopped, with no model. It is the model-free default stop strategy.
 type SpeechTimeoutStop struct {
 	StopStrategyBase
 	userSpeechTimeout time.Duration

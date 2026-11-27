@@ -4,7 +4,7 @@ package onnxrt
 //
 // Most of this package is FFI: purego symbol lookup into libonnxruntime, unsafe
 // pointer arithmetic, and a cgo alternative behind a build tag. Exercising that
-// needs the shared library present, which CI does not guarantee — a test that
+// needs the shared library present, which CI does not guarantee. A test that
 // skips when it is missing buys nothing, and one that fakes the library tests
 // the fake. So what is covered here is the logic that is genuinely independent
 // of the runtime: locating the library, the session wrapper's lifecycle, and the
@@ -61,7 +61,7 @@ func (f *fakeSession) counts() (runs, closes int) {
 }
 
 // TestLibraryPathFromEnv checks an operator-supplied path is used when it points
-// at a real file, and rejected with a useful error when it does not — a typo in
+// at a real file, and rejected with a useful error when it does not. A typo in
 // JARGO_ONNXRUNTIME_LIB must not silently fall back to the default name and load
 // some other runtime.
 func TestLibraryPathFromEnv(t *testing.T) {
@@ -161,7 +161,7 @@ func TestSessionRun(t *testing.T) {
 }
 
 // TestSessionClose checks closing is idempotent and releases the backend exactly
-// once — a second native close would be a double free.
+// once: a second native close would be a double free.
 func TestSessionClose(t *testing.T) {
 	fake := &fakeSession{}
 	s := &Session{b: fake}

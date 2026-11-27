@@ -31,7 +31,7 @@ type CompatLLMBuilder func(chat.LLMConfig) *chat.LLMService
 // addresses the chat-completions endpoint under the configured base URL, sends a
 // Bearer key, and streams the response back.
 //
-// It deliberately does not assert the provider's own default base URL — that
+// It deliberately does not assert the provider's own default base URL. That
 // constant names a host the tests must never contact. What it does assert is
 // that a configured base URL is honored, which is the half a provider can get
 // wrong without anyone noticing.

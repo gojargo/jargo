@@ -151,7 +151,7 @@ func NewFatalErrorFrame(message string) *FatalErrorFrame {
 	}
 }
 
-// InterruptionFrame interrupts the pipeline — for example when the user starts
+// InterruptionFrame interrupts the pipeline, for example when the user starts
 // speaking, to cancel in-progress bot output. It can be pushed by any
 // processor. It is a system frame.
 type InterruptionFrame struct {

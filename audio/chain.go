@@ -7,7 +7,7 @@ import (
 )
 
 // Chain applies several Filters in sequence, composing multiple input-audio
-// stages — noise reduction, gating, conditioning — into one Filter that a
+// stages (noise reduction, gating, conditioning) into one Filter that a
 // transport can use through Params.AudioInFilter.
 type Chain struct {
 	filters []Filter

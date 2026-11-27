@@ -19,7 +19,7 @@ const (
 )
 
 // Detect returns the per-channel sample index of the first sustained audible
-// onset in pcm — 16-bit signed little-endian samples, numChannels interleaved —
+// onset in pcm (16-bit signed little-endian samples, numChannels interleaved),
 // or -1 when no confirmed onset is present yet. Feed it a growing buffer as
 // audio streams in and stop once it returns a non-negative index.
 func Detect(pcm []byte, sampleRate, numChannels int) int {

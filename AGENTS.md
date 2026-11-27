@@ -5,7 +5,7 @@ short; the README and `docs/` cover usage in depth.
 
 ## What this is
 
-jargo is a WebRTC-native, audio-first conversational-AI framework for Go — a
+jargo is a WebRTC-native, audio-first conversational-AI framework for Go. It is a
 port of [Pipecat](https://github.com/pipecat-ai/pipecat). Library code lives at
 the module root; runnable bots live in `examples/`.
 
@@ -16,9 +16,9 @@ and the Opus encoder are pure Go, and the native runtimes (ONNX Runtime for
 VAD/turn, RNNoise for denoising) are bound through `ebitengine/purego`, loaded
 at run time from their shared libraries with no C toolchain at build time.
 
-- `go build ./...` — build everything. `CGO_ENABLED=0 go build ./...` is the
+- `go build ./...`: build everything. `CGO_ENABLED=0 go build ./...` is the
   same build; nothing in the tree links C.
-- `go test ./...` — run tests. Add `-race` as CI does.
+- `go test ./...`: run tests. Add `-race` as CI does.
 - The **ONNX Runtime** and **RNNoise** shared libraries are located at run time.
   Point at non-standard installs with `JARGO_ONNXRUNTIME_LIB` and
   `JARGO_RNNOISE_LIB`. The Moonshine STT provider's **libmoonshine** is too; it
@@ -30,8 +30,8 @@ at run time from their shared libraries with no C toolchain at build time.
 
 Formatting and lint are enforced by **golangci-lint** (`.golangci.yml`):
 
-- `golangci-lint run` — the full linter set; CI fails on any finding.
-- `golangci-lint fmt` — apply the configured formatters (`gofmt -s`, `gofumpt`,
+- `golangci-lint run`: the full linter set; CI fails on any finding.
+- `golangci-lint fmt`: apply the configured formatters (`gofmt -s`, `gofumpt`,
   `goimports`). Code must be clean under all three.
 
 Everything above is a one-liner and stays here. Anything longer lives in the
@@ -119,4 +119,4 @@ with the same name collide in user code. So:
 
 ## Security
 
-Report vulnerabilities privately — see [`SECURITY.md`](SECURITY.md).
+Report vulnerabilities privately, as described in [`SECURITY.md`](SECURITY.md).

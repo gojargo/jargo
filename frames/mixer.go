@@ -16,7 +16,7 @@ type MixerControlBase struct{ BaseControlFrame }
 
 func (*MixerControlBase) isMixerControlFrame() {}
 
-// MixerUpdateSettingsFrame updates the mixer's settings — for example to change
+// MixerUpdateSettingsFrame updates the mixer's settings, for example to change
 // the background track or adjust its volume. The Settings are interpreted by the
 // mixer implementation.
 type MixerUpdateSettingsFrame struct {

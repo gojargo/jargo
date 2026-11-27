@@ -23,7 +23,7 @@ const stallGap = 700 * time.Millisecond
 // TestOutputTimelineSurvivesAStall is the property the transport exists to hold:
 // RTP timestamps have to measure elapsed time, not packets sent.
 //
-// The source here does what a real one does at a sentence boundary — sends
+// The source here does what a real one does at a sentence boundary: sends
 // audio, stops for a while, then resumes. A sender that goes quiet during the
 // pause and picks up where it left off timestamps the second burst as though the
 // pause never happened, and the receiver reads that as delay: it conceals by

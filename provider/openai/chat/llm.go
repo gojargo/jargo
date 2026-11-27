@@ -34,7 +34,7 @@ const (
 // "unset"; a nil value is omitted from the request, leaving the API default.
 type LLMConfig struct {
 	// APIKey is the API key. It is not marked required because OpenAI-compatible
-	// endpoints vary — some (e.g. a local Ollama) need none — so the caller
+	// endpoints vary and some (e.g. a local Ollama) need none, so the caller
 	// supplies it when the endpoint requires one.
 	APIKey string
 	// BaseURL overrides the API base (e.g. an OpenAI-compatible endpoint).

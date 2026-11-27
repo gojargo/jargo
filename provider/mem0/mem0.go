@@ -10,8 +10,8 @@
 //	mem := mem0.NewMemory(mem0.Config{Host: "http://localhost:8000", UserID: caller})
 //	pipeline.New(input, stt, agg.User(), mem, llm, tts, output, agg.Assistant())
 //
-// Point Host at a mem0 REST server — self-hosted, or the managed API with an
-// APIKey — and scope memories to a caller with UserID. Memory is best-effort:
+// Point Host at a mem0 REST server (self-hosted, or the managed API with an
+// APIKey) and scope memories to a caller with UserID. Memory is best-effort:
 // search and store failures are logged and never break the conversation.
 package mem0
 

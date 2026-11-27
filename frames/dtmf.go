@@ -38,7 +38,7 @@ func (e KeypadEntry) Valid() bool {
 	}
 }
 
-// InputDTMFFrame is a DTMF keypress received from the transport — for example a
+// InputDTMFFrame is a DTMF keypress received from the transport, for example a
 // phone caller pressing a key. It is a system frame so it is delivered with
 // priority and in order.
 type InputDTMFFrame struct {

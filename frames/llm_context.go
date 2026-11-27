@@ -350,8 +350,8 @@ func (c *LLMContext) SystemParts() (stable, volatile string) {
 	return c.system, c.recall
 }
 
-// SetRecall sets transient retrieved context — typically long-term memories
-// surfaced by a memory service — that is folded into the system prompt for
+// SetRecall sets transient retrieved context (typically long-term memories
+// surfaced by a memory service) that is folded into the system prompt for
 // subsequent generations, replacing any previous value. The text is used
 // verbatim, so include any framing (e.g. a "recalled memories" header) in it. A
 // memory processor refreshes it each turn; pass "" to clear it.
@@ -629,7 +629,7 @@ func (f *LLMContextFrame) String() string {
 
 // LLMRunFrame instructs the LLM service to process the current context and
 // generate a response. Queue it to make the bot speak first at the start of a
-// session, or to re-run after editing the context. It carries no data — the
+// session, or to re-run after editing the context. It carries no data. The
 // user aggregator runs its current shared context. It is a data frame.
 type LLMRunFrame struct {
 	BaseDataFrame
@@ -703,9 +703,9 @@ func (f *LLMSetToolChoiceFrame) String() string {
 
 // LLMMessagesUpdateFrame replaces the conversation messages in the shared
 // context, in contrast to LLMMessagesAppendFrame which adds to them. Use it to
-// swap the conversation wholesale — restoring a saved session, or resetting the
-// conversation without rebuilding the pipeline. It is a data frame, so the
-// replacement is ordered against the surrounding conversation.
+// swap the conversation wholesale, for example when restoring a saved session
+// or resetting the conversation without rebuilding the pipeline. It is a data
+// frame, so the replacement is ordered against the surrounding conversation.
 type LLMMessagesUpdateFrame struct {
 	BaseDataFrame
 	// Messages replaces the context's current messages.

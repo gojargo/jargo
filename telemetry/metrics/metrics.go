@@ -1,5 +1,5 @@
-// Package metrics exports jargo's service measurements — time-to-first-byte,
-// processing time, LLM token usage and TTS characters — as OpenTelemetry metrics
+// Package metrics exports jargo's service measurements (time-to-first-byte,
+// processing time, LLM token usage and TTS characters) as OpenTelemetry metrics
 // over OTLP. It is the aggregate, fleet-level counterpart to the per-turn
 // frames.MetricsFrame the services emit in-band (and the RTVI metrics messages
 // the client sees).

@@ -11,7 +11,7 @@
 // By default the user turn ends when the STT service finalizes a transcription.
 // With WithTurnTaking, the turn instead ends when a turntaking.Detector reports
 // end-of-turn (a UserStoppedSpeakingFrame), gated on having a finalized
-// transcript — so a Smart Turn model, not STT endpointing, decides when the bot
+// transcript, so a Smart Turn model, not STT endpointing, decides when the bot
 // responds. Add the turntaking.Detector right after the input transport:
 //
 //	pipeline.New(input, detector, stt, agg.User(), llm, tts, output, agg.Assistant())

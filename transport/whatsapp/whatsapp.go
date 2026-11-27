@@ -4,7 +4,7 @@
 // WebRTC answer with the Pion transport (transport/rtc) and accepting the
 // call over the Graph API, and closes the media on a "terminate" event.
 //
-// The media transport is the standard Pion WebRTC transport — the connected
+// The media transport is the standard Pion WebRTC transport: the connected
 // *rtc.Connection handed to the OnCall callback is wrapped with
 // rtc.NewTransport to build the pipeline, exactly like the /offer examples.
 package whatsapp

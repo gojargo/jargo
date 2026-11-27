@@ -1,6 +1,6 @@
 // Package audiobuffer records a conversation's audio. A Processor taps the audio
-// flowing through the pipeline — the user's InputAudioRawFrames and the bot's
-// Output/TTS audio — keeps the two tracks time-aligned by padding silence for
+// flowing through the pipeline (the user's InputAudioRawFrames and the bot's
+// Output/TTS audio), keeps the two tracks time-aligned by padding silence for
 // wall-clock gaps, and delivers the recording through callbacks: a merged mix
 // (mono) or interleaved stereo (user left, bot right), and the separate tracks.
 //

@@ -334,7 +334,7 @@ func (c *call) expect(t *testing.T) message {
 }
 
 // ready blocks until the transport has begun reading the socket, which the task's
-// own StartFrame triggers — the test must not queue a second one, or the input
+// own StartFrame triggers. The test must not queue a second one, or the input
 // starts a competing read loop.
 func (c *call) ready(t *testing.T) {
 	t.Helper()
@@ -391,7 +391,7 @@ func params() wsserver.Params {
 }
 
 // TestSetupRunsBeforeReading checks the serializer is configured from the
-// StartFrame before any socket traffic is deserialized — it is where a provider
+// StartFrame before any socket traffic is deserialized: it is where a provider
 // learns the sample rate it must encode at.
 func TestSetupRunsBeforeReading(t *testing.T) {
 	ser := &testSerializer{}
@@ -722,7 +722,7 @@ func TestClientDisconnectClosesDone(t *testing.T) {
 }
 
 // TestDoneClosedOnce checks Done is closed exactly once even when the client
-// disconnects and the pipeline stops — a double close would panic.
+// disconnects and the pipeline stops. A double close would panic.
 func TestDoneClosedOnce(t *testing.T) {
 	c := dial(t, &testSerializer{}, params())
 

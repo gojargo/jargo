@@ -42,8 +42,8 @@ type DTMFAggregatorConfig struct {
 }
 
 // DTMFAggregator collects the DTMF keys received from the transport into a string
-// and emits it downstream as a TranscriptionFrame — so an LLM can react to the
-// entered sequence — when the terminator key is pressed or the idle timeout
+// and emits it downstream as a TranscriptionFrame (so an LLM can react to the
+// entered sequence) when the terminator key is pressed or the idle timeout
 // elapses. It forwards the InputDTMFFrames it sees unchanged.
 type DTMFAggregator struct {
 	*processor.Base

@@ -74,7 +74,7 @@ func ChunkSize(sampleRate int) int {
 // WordTimestamps is an optional interface a Synthesizer may implement to report
 // per-word timing aligned to the audio it produces. When the provider driving a
 // Base implements it, the Base tracks word completion and emits playback-aligned
-// TTSTextFrames that map each spoken word back to its original written form — so
+// TTSTextFrames that map each spoken word back to its original written form, so
 // the assistant context records only what was actually spoken before an
 // interruption, in its written form. A Synthesizer that does not implement this
 // interface is unaffected: the Base pushes text and synthesizes audio exactly as
@@ -190,8 +190,8 @@ type Closer interface {
 
 // Starter is an optional interface a Synthesizer implements when it has setup to
 // do before the first synthesis, such as dialing the connection it will reuse.
-// The Base calls it when the pipeline starts — the counterpart to Closer at
-// teardown — so the cost lands while the transport is still negotiating rather
+// The Base calls it when the pipeline starts (the counterpart to Closer at
+// teardown), so the cost lands while the transport is still negotiating rather
 // than in front of the first thing the bot says. It runs off the frame goroutine.
 // A Synthesizer that does not implement it is unaffected.
 type Starter interface {

@@ -616,7 +616,7 @@ func TestBaseOutputEndFrameDrainsAudio(t *testing.T) {
 		t.Fatal("pipeline did not end")
 	}
 	if got := o.writes.Load(); got != chunks {
-		t.Fatalf("wrote %d/%d chunks — EndFrame cut off queued audio", got, chunks)
+		t.Fatalf("wrote %d/%d chunks: EndFrame cut off queued audio", got, chunks)
 	}
 }
 
@@ -1472,7 +1472,7 @@ func TestBaseOutputInterruptionDiscardsTail(t *testing.T) {
 	}
 	task.QueueFrame(frames.NewInterruptionFrame())
 
-	// The tail must never be written — not even after the debounce window.
+	// The tail must never be written, not even after the debounce window.
 	select {
 	case extra := <-o.writes:
 		t.Fatalf("interruption failed to discard tail: got a %d-byte write", len(extra))
@@ -1502,7 +1502,7 @@ func recvWrite(t *testing.T, o *fakeOutput) []byte {
 
 // TestBaseOutputForwardsWordFramesInOrder checks that a word-aligned
 // TTSTextFrame is forwarded downstream in step with the audio it was queued
-// between — after the preceding audio chunk, before the following one.
+// between: after the preceding audio chunk, before the following one.
 func TestBaseOutputForwardsWordFramesInOrder(t *testing.T) {
 	params := transport.DefaultParams()
 	params.AudioOutSampleRate = 48000 // 1920-byte chunks
@@ -1639,7 +1639,7 @@ func (e *ender) ProcessFrame(ctx context.Context, f frames.Frame, dir processor.
 }
 
 // TestEndWorkerFrameEndsTask checks a processor can end the run gracefully by
-// pushing an EndWorkerFrame upstream — the Task turns it into an EndFrame.
+// pushing an EndWorkerFrame upstream: the Task turns it into an EndFrame.
 func TestEndWorkerFrameEndsTask(t *testing.T) {
 	task := pipeline.NewWorker(pipeline.New(newEnder()), pipeline.WorkerConfig{})
 	runDone := make(chan error, 1)
@@ -1817,8 +1817,8 @@ func TestBaseOutputDoesNotForwardAudioTheTransportDeclined(t *testing.T) {
 
 // TestBaseInputFilteredAudioKeepsItsFrame checks the frame that travels on is
 // the one the transport produced. The filter replaces the audio on it, so what
-// the frame carries about itself — the source it names, the moment it was
-// captured — is not lost with the samples.
+// the frame carries about itself (the source it names, the moment it was
+// captured) is not lost with the samples.
 func TestBaseInputFilteredAudioKeepsItsFrame(t *testing.T) {
 	params := transport.DefaultParams()
 	params.AudioInSampleRate = 48000
