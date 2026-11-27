@@ -268,8 +268,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   aggregator's type and language. `pipeline.BaseSwitcherStrategy` keeps the
   services and the active one, switches on nothing by itself, and gives a
   strategy `SetActiveIfAvailable` to switch with. `classifier.Base` already
-  existed. The compatibility page lists the sealed interfaces and says every
-  other exported interface is frozen.
+  existed.
 
   | Interface | Embed |
   |---|---|

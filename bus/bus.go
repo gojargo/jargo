@@ -10,8 +10,7 @@
 // networked one embeds Bus, overrides Publish for its transport, and calls
 // OnMessageReceived as messages arrive.
 //
-// Experimental: this package may still change in a minor release. See
-// https://gojargo.dev/docs/compatibility/ for what that means.
+// Experimental: this package may still change in a minor release.
 package bus
 
 import (

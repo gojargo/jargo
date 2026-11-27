@@ -15,8 +15,7 @@
 // types named in ForwardMessages cross as well, addressed or not, which is how
 // frames reach a bridged worker in another process.
 //
-// Experimental: this package may still change in a minor release. See
-// https://gojargo.dev/docs/compatibility/ for what that means.
+// Experimental: this package may still change in a minor release.
 package proxy
 
 import (

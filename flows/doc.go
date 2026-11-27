@@ -52,6 +52,5 @@
 // A set of nodes used more than once is written once as a subflow and run from
 // each node that needs it.
 //
-// Experimental: this package may still change in a minor release. See
-// https://gojargo.dev/docs/compatibility/ for what that means.
+// Experimental: this package may still change in a minor release.
 package flows

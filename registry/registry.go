@@ -6,8 +6,7 @@
 // under the runner they belong to, so a local one is told apart from a remote
 // one, and each name is registered at most once.
 //
-// Experimental: this package may still change in a minor release. See
-// https://gojargo.dev/docs/compatibility/ for what that means.
+// Experimental: this package may still change in a minor release.
 package registry
 
 import (

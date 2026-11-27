@@ -7,8 +7,7 @@
 // it while the call is still in flight puts it out of order with the result the
 // model is waiting for. This package holds it back until the call is done.
 //
-// Experimental: this package may still change in a minor release. See
-// https://gojargo.dev/docs/compatibility/ for what that means.
+// Experimental: this package may still change in a minor release.
 package llmworker
 
 import "github.com/gojargo/jargo/workers"
