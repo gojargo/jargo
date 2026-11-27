@@ -120,6 +120,8 @@ func TestFunctionFilterGatesDirection(t *testing.T) {
 	wantText(t, out, "ok") // "block" was dropped, so "ok" arrives first
 }
 
+// Ported from upstream (test_service_switching). After a switch, the new active
+// service receives the frames and the previous one does not.
 func TestServiceSwitcherRouting(t *testing.T) {
 	a := newTagSvc("A:", "")
 	b := newTagSvc("B:", "")
@@ -134,12 +136,19 @@ func TestServiceSwitcherRouting(t *testing.T) {
 	task, out, stop := runCollector(t, sw)
 	defer stop()
 
+	// The switch travels in-band, between the two texts, so it takes effect
+	// exactly between them: switching from outside while "one" is still on its
+	// way to the second service's gate would route "one" there too.
 	task.QueueFrame(frames.NewTextFrame("one"))
-	wantText(t, out, "A:one") // first service is active
-
-	sw.SwitchTo(b)
+	task.QueueFrame(frames.NewManuallySwitchServiceFrame(b))
 	task.QueueFrame(frames.NewTextFrame("two"))
+	wantText(t, out, "A:one") // first service is active
 	wantText(t, out, "B:two") // routed to the new active service
+	select {
+	case extra := <-out:
+		t.Errorf("unexpected downstream text %q", extra)
+	case <-time.After(100 * time.Millisecond):
+	}
 }
 
 func TestServiceSwitcherInBandSwitch(t *testing.T) {
