@@ -31,9 +31,11 @@ const (
 	// eventMedia is the Telnyx message event carrying base64 audio.
 	eventMedia = "media"
 
-	// EncodingPCMU selects G.711 μ-law; EncodingPCMA selects G.711 A-law. These
-	// are Telnyx's media_format.encoding values.
+	// EncodingPCMU selects G.711 μ-law, one of Telnyx's media_format.encoding
+	// values.
 	EncodingPCMU = "PCMU"
+	// EncodingPCMA selects G.711 A-law, one of Telnyx's media_format.encoding
+	// values.
 	EncodingPCMA = "PCMA"
 )
 

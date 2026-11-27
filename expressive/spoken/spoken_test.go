@@ -14,7 +14,7 @@ var laugh = formatter.ReportedSound{TextType: frames.TextTypeExpressionSound, Te
 
 const text = "<<calm>> Hi. [[laugh]] Bye."
 
-func spokenExpression() *spoken.SpokenExpression {
+func spokenExpression() *spoken.Expression {
 	s := spoken.New()
 	s.Add(text, []formatter.ExpressionSpan{
 		{Start: 8, End: 13, Delivery: []string{"calm"}},
@@ -25,7 +25,7 @@ func spokenExpression() *spoken.SpokenExpression {
 }
 
 func checkSpoken(
-	t *testing.T, s *spoken.SpokenExpression, said string, delivery []string, sounds []formatter.ReportedSound,
+	t *testing.T, s *spoken.Expression, said string, delivery []string, sounds []formatter.ReportedSound,
 ) {
 	t.Helper()
 	gotDelivery, ok, gotSounds := s.Spoken(said)

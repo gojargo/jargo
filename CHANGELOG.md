@@ -222,6 +222,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **BREAKING: two more names stop repeating their package.** The linter now
+  checks every exported identifier for a doc comment and for stutter, and these
+  were the last two to fail it.
+
+  | Before | After |
+  |---|---|
+  | `tracing.TracingContext`, `tracing.NewTracingContext` | `tracing.Context`, `tracing.NewContext` |
+  | `spoken.SpokenExpression` | `spoken.Expression` |
+
 - **BREAKING: the providers' plumbing is no longer part of the public API.**
   The Server-Sent Events scanner, the HTTP audio streaming loops and the PCM
   frame yielder only serve the providers in this module, so they move under

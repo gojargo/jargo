@@ -985,7 +985,7 @@ type ttsContext struct {
 	// spoken is the delivery and sounds of the words the provider reports
 	// speaking in this context, created with its first expressive unit. Part of
 	// expressive conversation (alpha).
-	spoken *spoken.SpokenExpression
+	spoken *spoken.Expression
 }
 
 // setTTSContext records what a context carries.

@@ -35,7 +35,7 @@ func tracedService(t *testing.T, cfg Config, traced bool) (*Service, *tracetest.
 	silent := newSilentSession(t)
 	s.connector = apiKeyConnector{baseURL: "ws" + strings.TrimPrefix(silent.URL, "http"), apiKey: "k"}
 	ctx := context.Background()
-	setup := processor.Setup{Clock: clock.NewSystem(), TracingEnabled: traced, Tracing: tracing.NewTracingContext()}
+	setup := processor.Setup{Clock: clock.NewSystem(), TracingEnabled: traced, Tracing: tracing.NewContext()}
 	if err := s.Setup(ctx, setup); err != nil {
 		t.Fatalf("setup: %v", err)
 	}

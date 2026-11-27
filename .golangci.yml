@@ -122,6 +122,11 @@ linters:
         - name: use-any
           severity: warning
           disabled: false
+        # Every exported identifier carries a doc comment that starts with its
+        # name. Stutter is checked too.
+        - name: exported
+          severity: warning
+          disabled: false
     misspell:
       locale: US
   exclusions:

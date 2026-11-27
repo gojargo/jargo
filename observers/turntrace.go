@@ -17,7 +17,7 @@ type TurnTraceConfig struct {
 	// Tracing is the pipeline's tracing context, which the observer writes as
 	// the conversation and its turns begin and end. Required: it is what the
 	// services read to parent their spans to the turn being spoken.
-	Tracing *tracing.TracingContext
+	Tracing *tracing.Context
 	// ConversationID names the conversation; empty generates one.
 	ConversationID string
 	// Attributes are set on the conversation span on top of the ones the

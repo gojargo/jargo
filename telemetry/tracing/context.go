@@ -8,7 +8,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-// TracingContext is the tracing state of one running pipeline: the span the
+// Context is the tracing state of one running pipeline: the span the
 // whole conversation hangs from, and the span of the turn being spoken right
 // now. A task creates one per session and hands it to the processors at setup.
 // The turn observer writes it as the conversation and its turns begin and end;
@@ -16,23 +16,23 @@ import (
 // that no longer holds the frame's context still lands under the turn it
 // belongs to.
 //
-// The zero value is ready to use, and a nil *TracingContext reads as a pipeline
+// The zero value is ready to use, and a nil *Context reads as a pipeline
 // with no tracing: it reports no conversation, no turn, and leaves a parent
 // context alone. Safe for concurrent use.
-type TracingContext struct {
+type Context struct {
 	mu             sync.RWMutex
 	conversation   trace.SpanContext
 	turn           trace.SpanContext
 	conversationID string
 }
 
-// NewTracingContext builds an empty tracing context.
-func NewTracingContext() *TracingContext { return &TracingContext{} }
+// NewContext builds an empty tracing context.
+func NewContext() *Context { return &Context{} }
 
 // SetConversationContext records the conversation span everything else hangs
 // from, along with the id naming that conversation. An invalid span context
 // clears both, which is how a conversation is closed.
-func (c *TracingContext) SetConversationContext(sc trace.SpanContext, id string) {
+func (c *Context) SetConversationContext(sc trace.SpanContext, id string) {
 	if c == nil {
 		return
 	}
@@ -43,7 +43,7 @@ func (c *TracingContext) SetConversationContext(sc trace.SpanContext, id string)
 }
 
 // ConversationContext is the conversation span, invalid when none is open.
-func (c *TracingContext) ConversationContext() trace.SpanContext {
+func (c *Context) ConversationContext() trace.SpanContext {
 	if c == nil {
 		return trace.SpanContext{}
 	}
@@ -54,7 +54,7 @@ func (c *TracingContext) ConversationContext() trace.SpanContext {
 
 // SetTurnContext records the turn being spoken. An invalid span context clears
 // it, which is how a turn is closed.
-func (c *TracingContext) SetTurnContext(sc trace.SpanContext) {
+func (c *Context) SetTurnContext(sc trace.SpanContext) {
 	if c == nil {
 		return
 	}
@@ -64,7 +64,7 @@ func (c *TracingContext) SetTurnContext(sc trace.SpanContext) {
 }
 
 // TurnContext is the span of the turn being spoken, invalid between turns.
-func (c *TracingContext) TurnContext() trace.SpanContext {
+func (c *Context) TurnContext() trace.SpanContext {
 	if c == nil {
 		return trace.SpanContext{}
 	}
@@ -74,7 +74,7 @@ func (c *TracingContext) TurnContext() trace.SpanContext {
 }
 
 // ConversationID names the conversation being traced, empty when none is open.
-func (c *TracingContext) ConversationID() string {
+func (c *Context) ConversationID() string {
 	if c == nil {
 		return ""
 	}
@@ -91,7 +91,7 @@ func (c *TracingContext) ConversationID() string {
 //
 // With neither a turn nor a conversation open, ctx is returned unchanged and the
 // span lands wherever ctx already pointed.
-func (c *TracingContext) Parent(ctx context.Context) context.Context {
+func (c *Context) Parent(ctx context.Context) context.Context {
 	if sc := c.TurnContext(); sc.IsValid() {
 		return trace.ContextWithSpanContext(ctx, sc)
 	}

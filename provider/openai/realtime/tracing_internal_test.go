@@ -26,7 +26,7 @@ func spanRecorder(t *testing.T) *tracetest.SpanRecorder {
 
 // tracedSetup sets a processor up on a traced pipeline.
 func tracedSetup() processor.Setup {
-	return processor.Setup{Clock: clock.NewSystem(), TracingEnabled: true, Tracing: tracing.NewTracingContext()}
+	return processor.Setup{Clock: clock.NewSystem(), TracingEnabled: true, Tracing: tracing.NewContext()}
 }
 
 // tracedService is an offline service with tracing on, and the recorder its

@@ -319,7 +319,7 @@ type Worker struct {
 	observers []processor.Observer
 	// tracing is the session's tracing state, handed to the processors at setup;
 	// nil when the worker is not tracing.
-	tracing *tracing.TracingContext
+	tracing *tracing.Context
 	// turnTrace writes the conversation and turn spans; nil when not tracing.
 	turnTrace *observers.TurnTrace
 	// turnTracking follows the conversation's turns; nil only when turn tracking
@@ -517,7 +517,7 @@ func (t *Worker) buildObservers() {
 	}
 
 	if t.cfg.EnableTracing {
-		t.tracing = tracing.NewTracingContext()
+		t.tracing = tracing.NewContext()
 		t.turnTrace = observers.NewTurnTrace(observers.TurnTraceConfig{
 			Tracing:        t.tracing,
 			ConversationID: t.cfg.ConversationID,
@@ -589,7 +589,7 @@ func (t *Worker) TurnTrace() *observers.TurnTrace { return t.turnTrace }
 // Tracing is the session's tracing state: the conversation span the trace hangs
 // from and the turn being spoken. It is nil unless the task traces, and is what
 // the processors are given at setup so their spans land under the right turn.
-func (t *Worker) Tracing() *tracing.TracingContext { return t.tracing }
+func (t *Worker) Tracing() *tracing.Context { return t.tracing }
 
 // QueueFrame queues a frame to be pushed through the pipeline. The direction is
 // optional and defaults to downstream, which enters at the start of the

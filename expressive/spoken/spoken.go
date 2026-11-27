@@ -7,7 +7,7 @@
 // word covers the text from the end of the word before it, so tags written
 // between two words arrive with the second.
 //
-// [SpokenExpression] keeps the text sent in one audio context, with the
+// [Expression] keeps the text sent in one audio context, with the
 // formatter.ExpressionSpan list formatter.ExpressionFormatter.Format returned
 // for it. Looking up each spoken word's text in it gives the delivery the word
 // is spoken in and the sounds performed before it, which the TTS service
@@ -25,7 +25,7 @@ import (
 	"github.com/gojargo/jargo/expressive/formatter"
 )
 
-// SpokenExpression tells the delivery and sounds of the words a TTS service
+// Expression tells the delivery and sounds of the words a TTS service
 // reports speaking in one audio context.
 //
 // Each of the service's synthesis contexts holds one, so it lasts as long as
@@ -42,7 +42,7 @@ import (
 //
 // It is safe for concurrent use: units are added on the service's frame
 // goroutine and words looked up as its audio plays.
-type SpokenExpression struct {
+type Expression struct {
 	mu    sync.Mutex
 	text  string
 	spans []formatter.ExpressionSpan
@@ -55,13 +55,13 @@ type SpokenExpression struct {
 }
 
 // New builds an empty SpokenExpression.
-func New() *SpokenExpression {
-	return &SpokenExpression{reported: map[int]bool{}}
+func New() *Expression {
+	return &Expression{reported: map[int]bool{}}
 }
 
 // Delivery is the delivery of the text last reported spoken, and false when no
 // text was added.
-func (s *SpokenExpression) Delivery() ([]string, bool) {
+func (s *Expression) Delivery() ([]string, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.text == "" {
@@ -74,7 +74,7 @@ func (s *SpokenExpression) Delivery() ([]string, bool) {
 // reports later, with what each stretch of the unit performs. Units follow one
 // another in the context's text, and the spans are moved to where the unit
 // falls in it.
-func (s *SpokenExpression) Add(unit string, spans []formatter.ExpressionSpan) {
+func (s *Expression) Add(unit string, spans []formatter.ExpressionSpan) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	offset := len(s.text)
@@ -93,7 +93,7 @@ func (s *SpokenExpression) Add(unit string, spans []formatter.ExpressionSpan) {
 // or a whole sentence's from a service without word timestamps. Its delivery
 // is that of its first letter that falls in words, so a delivery tag's own
 // name, such as "warm" in "<<warm>> It's", isn't taken for a word. A sound
-// already reported by [SpokenExpression.SpokenMarkup] isn't reported again,
+// already reported by [Expression.SpokenMarkup] isn't reported again,
 // and one written after the text's last word, such as the laugh in
 // "back [[laugh]]!", is left for the service's markup or the next text to
 // report, since it is performed after the word.
@@ -101,7 +101,7 @@ func (s *SpokenExpression) Add(unit string, spans []formatter.ExpressionSpan) {
 // It returns the delivery, and false when no text was added, and the sounds
 // and pauses performed since the text before it. Text that can't be found
 // keeps the delivery of the text before it.
-func (s *SpokenExpression) Spoken(text string) ([]string, bool, []formatter.ReportedSound) {
+func (s *Expression) Spoken(text string) ([]string, bool, []formatter.ReportedSound) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.text == "" || text == "" {
@@ -129,7 +129,7 @@ func (s *SpokenExpression) Spoken(text string) ([]string, bool, []formatter.Repo
 
 // lastWordIn is where the last letter or digit of words between start and end
 // is, or -1 when there is none.
-func (s *SpokenExpression) lastWordIn(start, end int) int {
+func (s *Expression) lastWordIn(start, end int) int {
 	for i := end; i > start; {
 		r, size := utf8.DecodeLastRuneInString(s.text[start:i])
 		i -= size
@@ -143,7 +143,7 @@ func (s *SpokenExpression) lastWordIn(start, end int) int {
 // soundsBefore reports the sounds and pauses performed since the last text
 // spoken, up to end, and where the next lookup starts. A sound after the text's
 // last word, at lastWord, is left for what follows.
-func (s *SpokenExpression) soundsBefore(end, lastWord int) (int, []formatter.ReportedSound) {
+func (s *Expression) soundsBefore(end, lastWord int) (int, []formatter.ReportedSound) {
 	position := end
 	var sounds []formatter.ReportedSound
 	for i, span := range s.spans {
@@ -164,7 +164,7 @@ func (s *SpokenExpression) soundsBefore(end, lastWord int) (int, []formatter.Rep
 // audio has ended. A sound after the last words, such as the laugh in
 // "Bye [[laugh]]", has no later text to report it, and a service may not
 // report its markup.
-func (s *SpokenExpression) Unreported() []formatter.ReportedSound {
+func (s *Expression) Unreported() []formatter.ReportedSound {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var sounds []formatter.ReportedSound
@@ -189,7 +189,7 @@ func (s *SpokenExpression) Unreported() []formatter.ReportedSound {
 //	s.Spoken("<<warm>> It's")
 //	s.SpokenMarkup()             // "[laughs]" reported as a word: the laugh
 //	s.Spoken("[[laugh]] ^^back") // ["warm", "emphasis"], already reported
-func (s *SpokenExpression) SpokenMarkup() (formatter.ReportedSound, bool) {
+func (s *Expression) SpokenMarkup() (formatter.ReportedSound, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for i, span := range s.spans {
@@ -210,12 +210,12 @@ func (s *SpokenExpression) SpokenMarkup() (formatter.ReportedSound, bool) {
 
 // inWords reports whether the character at i is a letter or digit of words,
 // not of a tag.
-func (s *SpokenExpression) inWords(i int) bool {
+func (s *Expression) inWords(i int) bool {
 	return s.wordsAt(i) != nil
 }
 
 // wordsAt is the span of words the byte at i falls in, or nil.
-func (s *SpokenExpression) wordsAt(i int) *formatter.ExpressionSpan {
+func (s *Expression) wordsAt(i int) *formatter.ExpressionSpan {
 	for j := range s.spans {
 		span := &s.spans[j]
 		if span.Delivery != nil && span.Start <= i && i < span.End {

@@ -125,7 +125,7 @@ type Setup struct {
 	// hangs from and the turn being spoken. Processors parent their spans to it,
 	// so a span raised away from the frame path still lands under the turn it
 	// belongs to. Nil when the pipeline is not traced.
-	Tracing *tracing.TracingContext
+	Tracing *tracing.Context
 	// TracingEnabled reports whether this pipeline is traced, and is what the
 	// processors gate their spans on. It is separate from Tracing being present
 	// because an installed TracerProvider is not on its own a request to trace
@@ -434,7 +434,7 @@ func (b *Base) Clock() clock.Clock { return b.setupState().clock }
 // Tracing returns the session's tracing state, available after Setup. It is nil
 // when the pipeline is not traced, which its methods handle: parent a span with
 // Tracing().Parent(ctx) without checking.
-func (b *Base) Tracing() *tracing.TracingContext { return b.setupState().tracing }
+func (b *Base) Tracing() *tracing.Context { return b.setupState().tracing }
 
 // TracingEnabled reports whether this pipeline is traced. A processor that
 // raises spans of its own opens them through StartSpan, which checks this.
@@ -467,7 +467,7 @@ type setupState struct {
 	enableUsageMetrics    bool
 	observers             []Observer
 	reportOnlyInitialTTFB bool
-	tracing               *tracing.TracingContext
+	tracing               *tracing.Context
 	tracingEnabled        bool
 	running               Running
 }

@@ -75,7 +75,7 @@ func startFrame() processor.FramePushed {
 // tracing context pointing at whichever is current.
 func TestTurnTraceNestsTurnsUnderConversation(t *testing.T) {
 	rec := recordSpans(t)
-	tc := tracing.NewTracingContext()
+	tc := tracing.NewContext()
 	o := observers.NewTurnTrace(observers.TurnTraceConfig{
 		Tracing:        tc,
 		ConversationID: "sess-1",
@@ -154,7 +154,7 @@ func TestTurnTraceNestsTurnsUnderConversation(t *testing.T) {
 // the turn, and says that is what closed it.
 func TestTurnTraceEndsOpenTurn(t *testing.T) {
 	rec := recordSpans(t)
-	tc := tracing.NewTracingContext()
+	tc := tracing.NewContext()
 	o := observers.NewTurnTrace(observers.TurnTraceConfig{Tracing: tc})
 
 	o.OnPushFrame(startFrame())
@@ -177,7 +177,7 @@ func TestTurnTraceEndsOpenTurn(t *testing.T) {
 // longer the current one does not close the turn that replaced it.
 func TestTurnTraceLateTurnEndIgnored(t *testing.T) {
 	rec := recordSpans(t)
-	tc := tracing.NewTracingContext()
+	tc := tracing.NewContext()
 	o := observers.NewTurnTrace(observers.TurnTraceConfig{Tracing: tc})
 
 	o.OnPushFrame(startFrame())
@@ -198,7 +198,7 @@ func TestTurnTraceLateTurnEndIgnored(t *testing.T) {
 // own still gets one.
 func TestTurnTraceGeneratesConversationID(t *testing.T) {
 	recordSpans(t)
-	tc := tracing.NewTracingContext()
+	tc := tracing.NewContext()
 	o := observers.NewTurnTrace(observers.TurnTraceConfig{Tracing: tc})
 
 	o.OnPushFrame(startFrame())
@@ -212,7 +212,7 @@ func TestTurnTraceGeneratesConversationID(t *testing.T) {
 // opens the conversation.
 func TestTurnTraceStartsConversationOnce(t *testing.T) {
 	rec := recordSpans(t)
-	tc := tracing.NewTracingContext()
+	tc := tracing.NewContext()
 	o := observers.NewTurnTrace(observers.TurnTraceConfig{Tracing: tc})
 
 	o.OnPushFrame(startFrame())
@@ -231,7 +231,7 @@ func TestTurnTraceStartsConversationOnce(t *testing.T) {
 // own span, numbered, and all of them hang from the one conversation.
 func TestTurnTraceSpansEveryTurn(t *testing.T) {
 	rec := recordSpans(t)
-	tc := tracing.NewTracingContext()
+	tc := tracing.NewContext()
 	o := observers.NewTurnTrace(observers.TurnTraceConfig{Tracing: tc, ConversationID: "sess-1"})
 
 	o.OnPushFrame(startFrame())
@@ -266,8 +266,8 @@ func TestTurnTraceSpansEveryTurn(t *testing.T) {
 // observer opened it, never to the other one's.
 func TestTurnTraceConcurrentPipelinesIsolated(t *testing.T) {
 	rec := recordSpans(t)
-	build := func(id string) (*observers.TurnTrace, *tracing.TracingContext) {
-		tc := tracing.NewTracingContext()
+	build := func(id string) (*observers.TurnTrace, *tracing.Context) {
+		tc := tracing.NewContext()
 		return observers.NewTurnTrace(observers.TurnTraceConfig{Tracing: tc, ConversationID: id}), tc
 	}
 	a, _ := build("conv-a")
@@ -332,7 +332,7 @@ var _ processor.Observer = (*observers.TurnTrace)(nil)
 // available after the turn has ended, so a service finishing work that belongs
 // to an earlier turn can still parent its span to that turn.
 func TestTurnTraceKeepsEveryTurnContext(t *testing.T) {
-	tc := tracing.NewTracingContext()
+	tc := tracing.NewContext()
 	o := observers.NewTurnTrace(observers.TurnTraceConfig{Tracing: tc})
 
 	if o.CurrentTurnContext().IsValid() {

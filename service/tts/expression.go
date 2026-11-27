@@ -154,7 +154,7 @@ func (b *Base) speakExpression(
 
 // spokenExpression is the delivery and sounds of the words spoken in a context,
 // created with it.
-func (b *Base) spokenExpression(contextID string) *spoken.SpokenExpression {
+func (b *Base) spokenExpression(contextID string) *spoken.Expression {
 	b.audioCtxMu.Lock()
 	defer b.audioCtxMu.Unlock()
 	c, ok := b.ttsContexts[contextID]
@@ -170,7 +170,7 @@ func (b *Base) spokenExpression(contextID string) *spoken.SpokenExpression {
 
 // knownSpokenExpression is what spokenExpression returns for a context that
 // has one already, without creating it.
-func (b *Base) knownSpokenExpression(contextID string) *spoken.SpokenExpression {
+func (b *Base) knownSpokenExpression(contextID string) *spoken.Expression {
 	if contextID == "" {
 		return nil
 	}
@@ -254,7 +254,7 @@ func (b *Base) reportExpression(f frames.Frame) ([]*frames.TTSTextFrame, bool) {
 // reportMarkup reports markup the provider reported as a word: the sound it
 // stands for, or nothing. It returns a frame for each sound or pause performed
 // before it, and whether the frame itself is pushed.
-func (b *Base) reportMarkup(f *frames.TTSTextFrame, s *spoken.SpokenExpression) ([]*frames.TTSTextFrame, bool) {
+func (b *Base) reportMarkup(f *frames.TTSTextFrame, s *spoken.Expression) ([]*frames.TTSTextFrame, bool) {
 	var sound formatter.ReportedSound
 	ok := false
 	if s != nil {
@@ -286,7 +286,7 @@ func (b *Base) reportMarkup(f *frames.TTSTextFrame, s *spoken.SpokenExpression) 
 
 // reportWords gives words the delivery they are spoken in, and returns a frame
 // for each sound or pause performed before them.
-func (b *Base) reportWords(f *frames.TTSTextFrame, s *spoken.SpokenExpression) []*frames.TTSTextFrame {
+func (b *Base) reportWords(f *frames.TTSTextFrame, s *spoken.Expression) []*frames.TTSTextFrame {
 	if s == nil {
 		return nil
 	}

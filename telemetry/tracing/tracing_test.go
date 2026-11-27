@@ -27,7 +27,7 @@ func TestParentPrefersTurn(t *testing.T) {
 	_, turn := tracer.Start(
 		trace.ContextWithSpanContext(context.Background(), conversation.SpanContext()), "turn")
 
-	tc := tracing.NewTracingContext()
+	tc := tracing.NewContext()
 	if got := tc.Parent(context.Background()); trace.SpanContextFromContext(got).IsValid() {
 		t.Fatal("Parent on an empty context should carry no span")
 	}
@@ -59,7 +59,7 @@ func TestParentPrefersTurn(t *testing.T) {
 // caller the rest of its context: a service goes on using it for the work the
 // span covers.
 func TestParentKeepsContextValues(t *testing.T) {
-	tc := tracing.NewTracingContext()
+	tc := tracing.NewContext()
 	tc.SetConversationContext(trace.NewSpanContext(trace.SpanContextConfig{
 		TraceID: trace.TraceID{1},
 		SpanID:  trace.SpanID{2},
@@ -76,7 +76,7 @@ func TestParentKeepsContextValues(t *testing.T) {
 // TestNilTracingContext checks that a pipeline running without tracing can call
 // through without guarding every use.
 func TestNilTracingContext(t *testing.T) {
-	var tc *tracing.TracingContext
+	var tc *tracing.Context
 	ctx := context.Background()
 	tc.SetConversationContext(trace.SpanContext{}, "sess-1")
 	tc.SetTurnContext(trace.SpanContext{})
@@ -92,7 +92,7 @@ func TestNilTracingContext(t *testing.T) {
 // not see each other's spans. Each task creates its own context, and that is
 // what keeps concurrent conversations in separate traces.
 func TestTracingContextsAreIsolated(t *testing.T) {
-	a, b := tracing.NewTracingContext(), tracing.NewTracingContext()
+	a, b := tracing.NewContext(), tracing.NewContext()
 	sc := trace.NewSpanContext(trace.SpanContextConfig{
 		TraceID: trace.TraceID{1}, SpanID: trace.SpanID{2},
 	})
@@ -111,7 +111,7 @@ func TestTracingContextsAreIsolated(t *testing.T) {
 // TestTracingContextClearsTurnOnly checks that closing a turn leaves the
 // conversation open, so the turn after it still has something to hang from.
 func TestTracingContextClearsTurnOnly(t *testing.T) {
-	tc := tracing.NewTracingContext()
+	tc := tracing.NewContext()
 	conversation := trace.NewSpanContext(trace.SpanContextConfig{
 		TraceID: trace.TraceID{1}, SpanID: trace.SpanID{2},
 	})
@@ -135,7 +135,7 @@ func TestTracingContextClearsTurnOnly(t *testing.T) {
 // writes the turn from the frame path while services read it from goroutines of
 // their own, so the race detector has something to check.
 func TestTracingContextConcurrentAccess(t *testing.T) {
-	tc := tracing.NewTracingContext()
+	tc := tracing.NewContext()
 	sc := trace.NewSpanContext(trace.SpanContextConfig{
 		TraceID: trace.TraceID{1}, SpanID: trace.SpanID{2},
 	})

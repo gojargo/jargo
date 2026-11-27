@@ -40,7 +40,7 @@ type realtimeStub struct {
 	*Base
 	t   *testing.T
 	rec *tracetest.SpanRecorder
-	tc  *tracing.TracingContext
+	tc  *tracing.Context
 }
 
 // newRealtimeStub builds a realtime service set up on a pipeline traced or not.
@@ -54,7 +54,7 @@ func newRealtimeStub(t *testing.T, traced bool) *realtimeStub {
 	svc := New("StubRealtime", realtimeStubGen{}, WithContinuousGeneration(), WithRealtimeTracing())
 	svc.SetModel("rt-model")
 	svc.realtime.grace = testGrace
-	tc := tracing.NewTracingContext()
+	tc := tracing.NewContext()
 	ctx := context.Background()
 	if err := svc.Setup(ctx, processor.Setup{Clock: clock.NewSystem(), TracingEnabled: traced, Tracing: tc}); err != nil {
 		t.Fatalf("setup: %v", err)
