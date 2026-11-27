@@ -6,6 +6,7 @@ import (
 
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/provider/openai/chat"
+	"github.com/gojargo/jargo/service/llm"
 	"github.com/gojargo/jargo/service/settings"
 )
 
@@ -51,13 +52,26 @@ type LLMSettings struct {
 	PromptCacheKey settings.Opt[string] `settings:"prompt_cache_key"`
 }
 
+// LLMService is the Smallest AI LLM service NewLLM builds.
+type LLMService struct {
+	*chat.LLMService
+}
+
 // NewLLM builds a Smallest AI LLM service over the Waves API's
 // OpenAI-compatible endpoint, defaulting to Electron.
 //
 // Electron does not support the developer role, so a developer message is sent
 // as a user message. Smallest's source identification header is always sent,
 // over the caller's own headers.
-func NewLLM(cfg LLMConfig) *chat.LLMService {
+func NewLLM(cfg LLMConfig) *LLMService {
+	s := &LLMService{}
+	s.LLMService = buildLLM(cfg, llm.WithSelf(s))
+	return s
+}
+
+// buildLLM builds the service NewLLM returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildLLM(cfg LLMConfig, opts ...llm.Option) *chat.LLMService {
 	compat := cfg.LLMConfig
 	headers := maps.Clone(compat.DefaultHeaders)
 	if headers == nil {
@@ -77,7 +91,7 @@ func NewLLM(cfg LLMConfig) *chat.LLMService {
 		NoDeveloperRole: true,
 		Settings:        live,
 		Request:         live.editRequest,
-	}, compat)
+	}, compat, opts...)
 }
 
 // editRequest adds Electron's prompt cache key to the request when one is set.

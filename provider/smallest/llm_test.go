@@ -18,7 +18,7 @@ import (
 )
 
 // smallestLLM builds the service from the shared OpenAI-compatible config.
-func smallestLLM(cfg chat.LLMConfig) *chat.LLMService {
+func smallestLLM(cfg chat.LLMConfig) *smallest.LLMService {
 	return smallest.NewLLM(smallest.LLMConfig{LLMConfig: cfg})
 }
 
@@ -26,7 +26,7 @@ func smallestLLM(cfg chat.LLMConfig) *chat.LLMService {
 // test_model_can_be_overridden): Electron is the default model, a caller can
 // pick another, and the service is an ordinary OpenAI-compatible one.
 func TestNewLLM(t *testing.T) {
-	providertest.CompatLLM(t, "SmallestLLM", "electron", smallestLLM)
+	providertest.CompatLLM(t, "SmallestLLM", "electron", providertest.Builder(smallestLLM))
 }
 
 // capturedRequest is one request the stand-in endpoint received.

@@ -8,11 +8,17 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/provider/openai/chat"
+	"github.com/gojargo/jargo/service/llm"
 	"github.com/gojargo/jargo/text"
 )
 
 // noKey is the key sent to an endpoint that takes none, a local NIM.
 const noKey = "not-needed"
+
+// LLMService is the NVIDIA LLM service NewLLM builds.
+type LLMService struct {
+	*chat.LLMService
+}
 
 // NewLLM builds an NVIDIA NIM LLM service.
 //
@@ -25,7 +31,15 @@ const noKey = "not-needed"
 //
 // A local NIM takes no API key, so none is needed when BaseURL points at one.
 // The cloud endpoint requires one, and a warning is logged without it.
-func NewLLM(cfg chat.LLMConfig) *chat.LLMService {
+func NewLLM(cfg chat.LLMConfig) *LLMService {
+	s := &LLMService{}
+	s.LLMService = buildLLM(cfg, llm.WithSelf(s))
+	return s
+}
+
+// buildLLM builds the service NewLLM returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildLLM(cfg chat.LLMConfig, opts ...llm.Option) *chat.LLMService {
 	if cfg.BaseURL == "" {
 		cfg.BaseURL = baseURL
 	}
@@ -42,7 +56,7 @@ func NewLLM(cfg chat.LLMConfig) *chat.LLMService {
 		BaseURL:      baseURL,
 		DefaultModel: defaultModel,
 		StreamFilter: newReasoningFilter,
-	}, cfg)
+	}, cfg, opts...)
 }
 
 // reasoningFilter pushes a response's reasoning as thoughts: a leading

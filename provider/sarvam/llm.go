@@ -9,6 +9,7 @@ import (
 
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/provider/openai/chat"
+	"github.com/gojargo/jargo/service/llm"
 	"github.com/gojargo/jargo/service/settings"
 )
 
@@ -98,6 +99,11 @@ type LLMSettings struct {
 	ReasoningEffort settings.Opt[string] `settings:"reasoning_effort"`
 }
 
+// LLMService is the Sarvam LLM service NewLLM builds.
+type LLMService struct {
+	*chat.LLMService
+}
+
 // NewLLM builds a Sarvam LLM service over its OpenAI-compatible endpoint.
 //
 // The endpoint is chosen by model when BaseURL is empty: /v1 for
@@ -109,7 +115,15 @@ type LLMSettings struct {
 // setting the model does not take. A turn that fails a check is not sent, and
 // is reported as a non-fatal error, so a switcher can fall back to another
 // service.
-func NewLLM(cfg LLMConfig) *chat.LLMService {
+func NewLLM(cfg LLMConfig) *LLMService {
+	s := &LLMService{}
+	s.LLMService = buildLLM(cfg, llm.WithSelf(s))
+	return s
+}
+
+// buildLLM builds the service NewLLM returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildLLM(cfg LLMConfig, opts ...llm.Option) *chat.LLMService {
 	compat := cfg.LLMConfig
 	if compat.Model == "" {
 		compat.Model = defaultLLMModel
@@ -143,7 +157,7 @@ func NewLLM(cfg LLMConfig) *chat.LLMService {
 		Settings:              live,
 		CheckRequest:          live.checkRequest,
 		Request:               live.editRequest,
-	}, compat)
+	}, compat, opts...)
 }
 
 // llmBaseURL is the API base model is served under: /v1 for the models still

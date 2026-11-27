@@ -33,11 +33,11 @@ type LLMService struct {
 
 // NewLLM builds an Anthropic LLM service.
 func NewLLM(cfg Config) *LLMService {
-	return NewLLMWithOptions("AnthropicLLM", cfg)
+	return NewLLMWithOptions("AnthropicLLM", cfg, nil)
 }
 
-// requestOptions builds the SDK client options for cfg, with extra appended.
-func requestOptions(cfg Config, extra ...option.RequestOption) []option.RequestOption {
+// clientOptions builds the SDK client options for cfg, with extra appended.
+func clientOptions(cfg Config, extra ...option.RequestOption) []option.RequestOption {
 	var opts []option.RequestOption
 	if cfg.APIKey != "" {
 		opts = append(opts, option.WithAPIKey(cfg.APIKey))
@@ -54,18 +54,22 @@ func requestOptions(cfg Config, extra ...option.RequestOption) []option.RequestO
 	return append(opts, extra...)
 }
 
-// NewLLMWithOptions builds an Anthropic LLM service named name with extra SDK
-// request options appended. It backs alternative Anthropic backends (such as
-// Amazon Bedrock or Google Vertex) that authorize and address requests through
-// an SDK option rather than an API key.
-func NewLLMWithOptions(name string, cfg Config, extra ...option.RequestOption) *LLMService {
+// NewLLMWithOptions builds an Anthropic LLM service named name with
+// requestOptions, extra SDK request options, appended. It backs alternative
+// Anthropic backends (such as Amazon Bedrock or Google Vertex) that authorize
+// and address requests through an SDK option rather than an API key; opts
+// configure the service base, and a backend with a type of its own passes
+// llm.WithSelf.
+func NewLLMWithOptions(
+	name string, cfg Config, requestOptions []option.RequestOption, opts ...llm.Option,
+) *LLMService {
 	s := &LLMService{
-		client: sdk.NewClient(requestOptions(cfg, extra...)...),
+		client: sdk.NewClient(clientOptions(cfg, requestOptions...)...),
 		live:   newLLMSettings(cfg),
 
 		omitInterleavedThinking: cfg.OmitInterleavedThinkingBeta,
 	}
-	s.Base = llm.New(name, s)
+	s.Base = llm.New(name, s, opts...)
 	s.Base.SetModel(s.live.Model.Or(""))
 	return s
 }

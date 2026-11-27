@@ -5,6 +5,7 @@ import (
 
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/provider/openai/chat"
+	"github.com/gojargo/jargo/service/llm"
 )
 
 // LLMConfig configures a Groq LLM service: everything the OpenAI-compatible
@@ -26,8 +27,21 @@ type LLMConfig struct {
 // Validate reports whether the configuration is usable.
 func (c LLMConfig) Validate() error { return validate.Struct(c) }
 
+// LLMService is the Groq LLM service NewLLM builds.
+type LLMService struct {
+	*chat.LLMService
+}
+
 // NewLLM builds a Groq LLM service.
-func NewLLM(cfg LLMConfig) *chat.LLMService {
+func NewLLM(cfg LLMConfig) *LLMService {
+	s := &LLMService{}
+	s.LLMService = buildLLM(cfg, llm.WithSelf(s))
+	return s
+}
+
+// buildLLM builds the service NewLLM returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildLLM(cfg LLMConfig, opts ...llm.Option) *chat.LLMService {
 	compat := cfg.LLMConfig
 	if cfg.ReasoningEffort != "" {
 		// The reasoning control is Groq's own, so it travels as an extra body
@@ -43,5 +57,5 @@ func NewLLM(cfg LLMConfig) *chat.LLMService {
 		Name:         "GroqLLM",
 		BaseURL:      baseURL,
 		DefaultModel: defaultLLMModel,
-	}, compat)
+	}, compat, opts...)
 }

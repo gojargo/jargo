@@ -75,7 +75,7 @@ func NewLLM(cfg Config) *LLMService {
 // NewShapedLLM builds a Gemini LLM service whose requests are addressed and
 // authorized by shaper. It is the base for deployments that do not use the
 // Gemini API's own URL layout or api-key auth; name is the processor label.
-func NewShapedLLM(name string, shaper RequestShaper, cfg Config) *LLMService {
+func NewShapedLLM(name string, shaper RequestShaper, cfg Config, opts ...llm.Option) *LLMService {
 	if cfg.Model == "" {
 		cfg.Model = defaultModel
 	}
@@ -83,7 +83,7 @@ func NewShapedLLM(name string, shaper RequestShaper, cfg Config) *LLMService {
 		cfg.MaxTokens = defaultMaxTokens
 	}
 	s := &LLMService{cfg: cfg, live: newLLMSettings(cfg), http: &http.Client{}, shaper: shaper}
-	s.Base = llm.New(name, s)
+	s.Base = llm.New(name, s, opts...)
 	s.Base.SetModel(cfg.Model)
 	s.warnIfThinkingBudgetIgnored()
 	return s

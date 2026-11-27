@@ -9,6 +9,7 @@ import (
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/provider/google/gemini"
 	"github.com/gojargo/jargo/provider/google/live"
+	"github.com/gojargo/jargo/service/llm"
 )
 
 // liveBidiPath is the Vertex AI bidirectional-streaming endpoint. Vertex serves
@@ -65,10 +66,23 @@ type S2SConfig struct {
 // Validate reports whether the configuration is usable.
 func (c S2SConfig) Validate() error { return validateConfig(c, c.Credentials) }
 
+// LiveLLMService is the Vertex AI Live speech-to-speech LLM service NewS2S builds.
+type LiveLLMService struct {
+	*live.LLMService
+}
+
 // NewS2S builds a Vertex AI Gemini Live speech-to-speech service. It behaves
 // exactly like the Gemini Live service; only the endpoint, the authorization
 // and the model's resource name differ.
-func NewS2S(cfg S2SConfig) *live.LLMService {
+func NewS2S(cfg S2SConfig) *LiveLLMService {
+	s := &LiveLLMService{}
+	s.LLMService = buildS2S(cfg, llm.WithSelf(s))
+	return s
+}
+
+// buildS2S builds the service NewS2S returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildS2S(cfg S2SConfig, opts ...llm.Option) *live.LLMService {
 	if cfg.Model == "" {
 		cfg.Model = defaultLiveModel
 	}
@@ -103,7 +117,7 @@ func NewS2S(cfg S2SConfig) *live.LLMService {
 		Thinking:                 cfg.Thinking,
 		EnableAffectiveDialog:    cfg.EnableAffectiveDialog,
 		Proactivity:              cfg.Proactivity,
-	})
+	}, opts...)
 }
 
 // The Vertex endpoint decides non-blocking support itself, whatever the model,

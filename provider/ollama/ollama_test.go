@@ -15,7 +15,7 @@ import (
 // TestNewLLM checks the Ollama shim wires the right service name and
 // default model into the shared OpenAI-compatible client.
 func TestNewLLM(t *testing.T) {
-	providertest.CompatLLM(t, "OllamaLLM", "llama2", ollama.NewLLM)
+	providertest.CompatLLM(t, "OllamaLLM", "llama2", providertest.Builder(ollama.NewLLM))
 }
 
 // TestLocalOllamaNeedsNoAPIKey checks a service built with no key still sends a

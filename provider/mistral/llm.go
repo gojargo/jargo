@@ -8,6 +8,11 @@ import (
 	"github.com/gojargo/jargo/service/llm"
 )
 
+// LLMService is the Mistral LLM service NewLLM builds.
+type LLMService struct {
+	*chat.LLMService
+}
+
 // NewLLM builds a Mistral AI LLM service. Mistral speaks the OpenAI
 // chat-completions API, with three departures from it: it has no developer
 // role, it constrains the shape of a conversation (which its adapter settles),
@@ -15,7 +20,15 @@ import (
 // from what it just streamed (see dropAnsweredCalls). It also names the
 // sampling seed differently, and takes fewer of OpenAI's request fields (see
 // mistralRequest).
-func NewLLM(cfg chat.LLMConfig) *chat.LLMService {
+func NewLLM(cfg chat.LLMConfig) *LLMService {
+	s := &LLMService{}
+	s.LLMService = buildLLM(cfg, llm.WithSelf(s))
+	return s
+}
+
+// buildLLM builds the service NewLLM returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildLLM(cfg chat.LLMConfig, opts ...llm.Option) *chat.LLMService {
 	return chat.NewCompatLLM(chat.Compat{
 		Name:            "MistralLLM",
 		BaseURL:         baseURL,
@@ -26,7 +39,7 @@ func NewLLM(cfg chat.LLMConfig) *chat.LLMService {
 		Adapter:               &Adapter{},
 		Base:                  []llm.Option{llm.WithFunctionCallFilter(dropAnsweredCalls)},
 		Request:               mistralRequest,
-	}, cfg)
+	}, cfg, opts...)
 }
 
 // mistralRequest shapes a request the way Mistral takes it. The seed is read

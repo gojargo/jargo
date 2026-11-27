@@ -10,5 +10,5 @@ import (
 // TestNewLLM checks the Crusoe shim wires the right service name and default
 // model into the shared OpenAI-compatible client.
 func TestNewLLM(t *testing.T) {
-	providertest.CompatLLM(t, "CrusoeLLM", "openai/gpt-oss-120b", crusoe.NewLLM)
+	providertest.CompatLLM(t, "CrusoeLLM", "openai/gpt-oss-120b", providertest.Builder(crusoe.NewLLM))
 }

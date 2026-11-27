@@ -15,12 +15,12 @@ import (
 // TestNewLLM checks the DeepSeek shim wires the right service name and
 // default model into the shared OpenAI-compatible client.
 func TestNewLLM(t *testing.T) {
-	providertest.CompatLLM(t, "DeepSeekLLM", "deepseek-flash", compatLLM)
+	providertest.CompatLLM(t, "DeepSeekLLM", "deepseek-flash", providertest.Builder(compatLLM))
 }
 
 // compatLLM builds the service from the shared OpenAI-compatible config alone,
 // which is what the shared assertions are written against.
-func compatLLM(cfg chat.LLMConfig) *chat.LLMService {
+func compatLLM(cfg chat.LLMConfig) *deepseek.LLMService {
 	return deepseek.NewLLM(deepseek.LLMConfig{LLMConfig: cfg})
 }
 

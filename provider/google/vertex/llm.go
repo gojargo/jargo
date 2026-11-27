@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/gojargo/jargo/provider/google/gemini"
+	"github.com/gojargo/jargo/service/llm"
 )
 
 // LLMConfig configures the Vertex AI Gemini LLM service. The generation
@@ -55,12 +56,25 @@ type LLMConfig struct {
 // Validate reports whether the configuration is usable.
 func (c LLMConfig) Validate() error { return validateConfig(c, c.Credentials) }
 
+// LLMService is the Vertex AI LLM service NewLLM builds.
+type LLMService struct {
+	*gemini.LLMService
+}
+
 // NewLLM builds a Vertex AI Gemini LLM service.
-func NewLLM(cfg LLMConfig) *gemini.LLMService { return newLLM(cfg, "") }
+func NewLLM(cfg LLMConfig) *LLMService {
+	s := &LLMService{}
+	s.LLMService = buildLLM(cfg, llm.WithSelf(s))
+	return s
+}
+
+// buildLLM builds the service NewLLM returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildLLM(cfg LLMConfig, opts ...llm.Option) *gemini.LLMService { return newLLM(cfg, "", opts...) }
 
 // newLLM builds the service with its requests sent to host, or to the regional
 // endpoint when host is empty.
-func newLLM(cfg LLMConfig, host string) *gemini.LLMService {
+func newLLM(cfg LLMConfig, host string, opts ...llm.Option) *gemini.LLMService {
 	if cfg.Model == "" {
 		cfg.Model = defaultLLMModel
 	}
@@ -83,7 +97,7 @@ func newLLM(cfg LLMConfig, host string) *gemini.LLMService {
 		RetryOnTimeout:    cfg.RetryOnTimeout,
 		RetryTimeout:      cfg.RetryTimeout,
 		Extra:             cfg.Extra,
-	})
+	}, opts...)
 }
 
 // llmShaper addresses and authorizes generateContent the Vertex way.

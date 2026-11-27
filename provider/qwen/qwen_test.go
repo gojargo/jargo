@@ -10,5 +10,5 @@ import (
 // TestNewLLM checks the Qwen (DashScope) shim wires the right service name and
 // default model into the shared OpenAI-compatible client.
 func TestNewLLM(t *testing.T) {
-	providertest.CompatLLM(t, "QwenLLM", "qwen-plus", qwen.NewLLM)
+	providertest.CompatLLM(t, "QwenLLM", "qwen-plus", providertest.Builder(qwen.NewLLM))
 }

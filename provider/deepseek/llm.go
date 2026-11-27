@@ -3,6 +3,7 @@ package deepseek
 import (
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/provider/openai/chat"
+	"github.com/gojargo/jargo/service/llm"
 )
 
 // ThinkingConfig is DeepSeek's thinking mode configuration.
@@ -34,8 +35,21 @@ type LLMConfig struct {
 // Validate reports whether the configuration is usable.
 func (c LLMConfig) Validate() error { return validate.Struct(c) }
 
+// LLMService is the DeepSeek LLM service NewLLM builds.
+type LLMService struct {
+	*chat.LLMService
+}
+
 // NewLLM builds a DeepSeek LLM service.
-func NewLLM(cfg LLMConfig) *chat.LLMService {
+func NewLLM(cfg LLMConfig) *LLMService {
+	s := &LLMService{}
+	s.LLMService = buildLLM(cfg, llm.WithSelf(s))
+	return s
+}
+
+// buildLLM builds the service NewLLM returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildLLM(cfg LLMConfig, opts ...llm.Option) *chat.LLMService {
 	compat := cfg.LLMConfig
 	// DeepSeek doesn't support these OpenAI parameters.
 	compat.Seed = nil
@@ -60,5 +74,5 @@ func NewLLM(cfg LLMConfig) *chat.LLMService {
 		// Supplies the reasoning_content DeepSeek requires on assistant
 		// messages in thinking mode.
 		Adapter: &Adapter{},
-	}, compat)
+	}, compat, opts...)
 }

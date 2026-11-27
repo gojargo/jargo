@@ -9,6 +9,7 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/gojargo/jargo/provider/anthropic"
+	"github.com/gojargo/jargo/service/llm"
 )
 
 // loadOptions builds the AWS config load options from the static fields. An
@@ -43,10 +44,16 @@ func (c Config) anthropicConfig() anthropic.Config {
 	}
 }
 
+// LLMService is the Amazon Bedrock LLM service NewLLM builds: the Anthropic
+// service, authorized and addressed through Bedrock.
+type LLMService struct {
+	*anthropic.LLMService
+}
+
 // NewLLM builds a Bedrock-backed Anthropic LLM service. It loads AWS
 // configuration (which may read the environment, shared config files or
 // instance metadata), so it takes a context and can fail.
-func NewLLM(ctx context.Context, cfg Config) (*anthropic.LLMService, error) {
+func NewLLM(ctx context.Context, cfg Config) (*LLMService, error) {
 	awsCfg, err := awsconfig.LoadDefaultConfig(ctx, cfg.loadOptions()...)
 	if err != nil {
 		return nil, err
@@ -56,7 +63,9 @@ func NewLLM(ctx context.Context, cfg Config) (*anthropic.LLMService, error) {
 
 // newLLM builds the service from a loaded AWS config. extra is appended after
 // the Bedrock option, which is how a test points the service at a stub.
-func newLLM(cfg Config, awsCfg aws.Config, extra ...option.RequestOption) *anthropic.LLMService {
-	opts := append([]option.RequestOption{bedrock.WithConfig(awsCfg)}, extra...)
-	return anthropic.NewLLMWithOptions("BedrockLLM", cfg.anthropicConfig(), opts...)
+func newLLM(cfg Config, awsCfg aws.Config, extra ...option.RequestOption) *LLMService {
+	s := &LLMService{}
+	reqOpts := append([]option.RequestOption{bedrock.WithConfig(awsCfg)}, extra...)
+	s.LLMService = anthropic.NewLLMWithOptions("BedrockLLM", cfg.anthropicConfig(), reqOpts, llm.WithSelf(s))
+	return s
 }

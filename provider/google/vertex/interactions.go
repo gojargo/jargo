@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/gojargo/jargo/provider/google/interactions"
+	"github.com/gojargo/jargo/service/llm"
 )
 
 // InteractionsLLMConfig configures the Gemini Interactions LLM service on Vertex
@@ -44,16 +45,29 @@ type InteractionsLLMConfig struct {
 // Validate reports whether the configuration is usable.
 func (c InteractionsLLMConfig) Validate() error { return validateConfig(c, c.Credentials) }
 
+// InteractionsLLMService is the Vertex AI LLM service NewInteractionsLLM builds.
+type InteractionsLLMService struct {
+	*interactions.LLMService
+}
+
 // NewInteractionsLLM builds the Gemini Interactions LLM service on Vertex AI. It
 // is the same service as interactions.NewLLM, authorized with Google Cloud
 // credentials and sent to a Vertex AI project.
-func NewInteractionsLLM(cfg InteractionsLLMConfig) *interactions.LLMService {
-	return newInteractionsLLM(cfg, "")
+func NewInteractionsLLM(cfg InteractionsLLMConfig) *InteractionsLLMService {
+	s := &InteractionsLLMService{}
+	s.LLMService = buildInteractionsLLM(cfg, llm.WithSelf(s))
+	return s
+}
+
+// buildInteractionsLLM builds the service NewInteractionsLLM returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildInteractionsLLM(cfg InteractionsLLMConfig, opts ...llm.Option) *interactions.LLMService {
+	return newInteractionsLLM(cfg, "", opts...)
 }
 
 // newInteractionsLLM builds the service with its requests sent to host, or to
 // the location's endpoint when host is empty.
-func newInteractionsLLM(cfg InteractionsLLMConfig, host string) *interactions.LLMService {
+func newInteractionsLLM(cfg InteractionsLLMConfig, host string, opts ...llm.Option) *interactions.LLMService {
 	if cfg.Model == "" {
 		cfg.Model = defaultLLMModel
 	}
@@ -78,7 +92,7 @@ func newInteractionsLLM(cfg InteractionsLLMConfig, host string) *interactions.LL
 		RetryOnTimeout:    cfg.RetryOnTimeout,
 		RetryTimeout:      cfg.RetryTimeout,
 		Extra:             cfg.Extra,
-	})
+	}, opts...)
 }
 
 // interactionsShaper addresses and authorizes the Interactions API the Vertex

@@ -5,6 +5,7 @@ import (
 
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/provider/openai/chat"
+	"github.com/gojargo/jargo/service/llm"
 )
 
 // LLMConfig configures a Together AI LLM service: everything the
@@ -29,8 +30,21 @@ type LLMConfig struct {
 // Validate reports whether the configuration is usable.
 func (c LLMConfig) Validate() error { return validate.Struct(c) }
 
+// LLMService is the Together AI LLM service NewLLM builds.
+type LLMService struct {
+	*chat.LLMService
+}
+
 // NewLLM builds a Together AI LLM service.
-func NewLLM(cfg LLMConfig) *chat.LLMService {
+func NewLLM(cfg LLMConfig) *LLMService {
+	s := &LLMService{}
+	s.LLMService = buildLLM(cfg, llm.WithSelf(s))
+	return s
+}
+
+// buildLLM builds the service NewLLM returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildLLM(cfg LLMConfig, opts ...llm.Option) *chat.LLMService {
 	compat := cfg.LLMConfig
 	// The reasoning controls are Together's own, so they travel as extra body
 	// fields. The caller's own Extra wins key by key, as it does over every
@@ -51,5 +65,5 @@ func NewLLM(cfg LLMConfig) *chat.LLMService {
 		BaseURL:         baseURL,
 		DefaultModel:    defaultModel,
 		NoDeveloperRole: true,
-	}, compat)
+	}, compat, opts...)
 }

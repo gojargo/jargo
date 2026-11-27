@@ -100,7 +100,7 @@ func quote(s string) string {
 }
 
 // newService builds a service for cfg that talks to srv.
-func newService(srv *sarvamServer, cfg sarvam.LLMConfig) *chat.LLMService {
+func newService(srv *sarvamServer, cfg sarvam.LLMConfig) *sarvam.LLMService {
 	cfg.APIKey = "test-key"
 	cfg.BaseURL = srv.URL
 	return sarvam.NewLLM(cfg)
@@ -209,7 +209,7 @@ func runTurn(t *testing.T, svc *chat.LLMService, convo *frames.LLMContext) []*fr
 func refusedTurn(t *testing.T, cfg sarvam.LLMConfig, convo *frames.LLMContext, want string) {
 	t.Helper()
 	srv := newSarvamServer(t)
-	reported := runTurn(t, newService(srv, cfg), convo)
+	reported := runTurn(t, newService(srv, cfg).LLMService, convo)
 
 	if len(reported) != 1 || !strings.Contains(reported[0].Error, want) {
 		t.Errorf("errors = %v, want one saying %q", reported, want)
@@ -564,7 +564,7 @@ func TestRunInferenceReportsARefusedRequest(t *testing.T) {
 	cfg := withModel("sarvam-105b-conversations")
 	cfg.ReasoningEffort = "high"
 	svc := newService(srv, cfg)
-	reported := reportedErrors(svc)
+	reported := reportedErrors(svc.LLMService)
 
 	got, err := svc.RunInference(t.Context(), hello(), llm.InferenceOptions{})
 	if err != nil || got != "" {
@@ -603,7 +603,7 @@ func TestTheServersErrorIsSurfaced(t *testing.T) {
 		t.Helper()
 		srv := newSarvamServer(t)
 		srv.failWith(http.StatusBadRequest, `{"error":{"message":`+quote(message)+`}}`)
-		return newService(srv, withModel("sarvam-105b"))
+		return newService(srv, withModel("sarvam-105b")).LLMService
 	}
 
 	t.Run("one-shot", func(t *testing.T) {

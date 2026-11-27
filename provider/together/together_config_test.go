@@ -34,11 +34,11 @@ func TestNewServices(t *testing.T) {
 // TestNewLLM checks the Together AI OpenAI-compatible LLM shim wires the right
 // service name and default model into the shared client.
 func TestNewLLM(t *testing.T) {
-	providertest.CompatLLM(t, "TogetherLLM", "zai-org/GLM-5.2", compatLLM)
+	providertest.CompatLLM(t, "TogetherLLM", "zai-org/GLM-5.2", providertest.Builder(compatLLM))
 }
 
 // compatLLM builds the service from the shared OpenAI-compatible config alone,
 // which is what the shared assertions are written against.
-func compatLLM(cfg chat.LLMConfig) *chat.LLMService {
+func compatLLM(cfg chat.LLMConfig) *together.LLMService {
 	return together.NewLLM(together.LLMConfig{LLMConfig: cfg})
 }

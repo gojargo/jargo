@@ -10,6 +10,7 @@
 package providertest
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -20,11 +21,25 @@ import (
 	"github.com/gojargo/jargo/errclass"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/provider/openai/chat"
+	"github.com/gojargo/jargo/service/llm"
 )
 
-// CompatLLMBuilder builds an OpenAI-compatible LLM service from a config, i.e.
-// the NewLLM function every compatible provider exposes.
-type CompatLLMBuilder func(chat.LLMConfig) *chat.LLMService
+// CompatService is what the checks need from an OpenAI-compatible LLM service.
+// Every compatible provider's own service type satisfies it.
+type CompatService interface {
+	Name() string
+	Generate(ctx context.Context, convo *frames.LLMContext, emit llm.Emit) error
+}
+
+// CompatLLMBuilder builds an OpenAI-compatible LLM service from a config. Wrap
+// a provider's NewLLM with Builder to get one.
+type CompatLLMBuilder func(chat.LLMConfig) CompatService
+
+// Builder adapts build, a provider's NewLLM returning the provider's own service
+// type, to a CompatLLMBuilder.
+func Builder[S CompatService](build func(chat.LLMConfig) S) CompatLLMBuilder {
+	return func(cfg chat.LLMConfig) CompatService { return build(cfg) }
+}
 
 // CompatLLM checks that build produces a usable OpenAI-compatible LLM service:
 // it is named wantName, defaults to wantModel, lets a caller override the model,

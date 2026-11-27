@@ -8,6 +8,7 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/internal/validate"
 	"github.com/gojargo/jargo/provider/openai/responses"
+	"github.com/gojargo/jargo/service/llm"
 )
 
 const (
@@ -80,6 +81,11 @@ func (c AgentConfig) Validate() error {
 	return nil
 }
 
+// AgentLLMService is the Perplexity LLM service NewAgentLLM builds.
+type AgentLLMService struct {
+	*responses.HTTPLLMService
+}
+
 // NewAgentLLM builds a service for Perplexity's Agent API.
 //
 // The Agent API answers questions with web search, using models from
@@ -92,7 +98,15 @@ func (c AgentConfig) Validate() error {
 // its lowest-latency configuration, with the model in place of the preset's
 // own, and logs that it did for each model. Answers can carry citation markers
 // such as "[1]".
-func NewAgentLLM(cfg AgentConfig) *responses.HTTPLLMService {
+func NewAgentLLM(cfg AgentConfig) *AgentLLMService {
+	s := &AgentLLMService{}
+	s.HTTPLLMService = buildAgentLLM(cfg, llm.WithSelf(s))
+	return s
+}
+
+// buildAgentLLM builds the service NewAgentLLM returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildAgentLLM(cfg AgentConfig, opts ...llm.Option) *responses.HTTPLLMService {
 	model := cfg.Model
 	switch {
 	case cfg.PresetModel:
@@ -120,7 +134,7 @@ func NewAgentLLM(cfg AgentConfig) *responses.HTTPLLMService {
 		Request:         cfg.editRequest,
 		Events:          withoutServerToolCalls,
 		Usage:           cacheCreationTokens,
-	})
+	}, opts...)
 }
 
 // applyThinkingDefault sends the "fast" preset when no preset or reasoning is

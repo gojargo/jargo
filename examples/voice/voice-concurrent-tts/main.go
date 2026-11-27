@@ -34,7 +34,6 @@ import (
 	"github.com/gojargo/jargo/provider/openai/realtime"
 	"github.com/gojargo/jargo/runner"
 	"github.com/gojargo/jargo/service/llm"
-	"github.com/gojargo/jargo/service/tts"
 	"github.com/gojargo/jargo/transport"
 	"github.com/gojargo/jargo/transport/wsserver"
 	"github.com/gojargo/jargo/transport/wsserver/evalws"
@@ -86,18 +85,18 @@ func ttsName(body json.RawMessage) string {
 	return b.TTS
 }
 
-func createTTS(name string) *tts.Base {
+func createTTS(name string) processor.Processor {
 	if name == "elevenlabs" {
 		return elevenlabs.NewRealtimeTTS(elevenlabs.RealtimeTTSConfig{
 			APIKey:         os.Getenv("ELEVENLABS_API_KEY"),
 			VoiceID:        os.Getenv("ELEVENLABS_VOICE_ID"),
 			WordTimestamps: true,
-		}).Base
+		})
 	}
 	return cartesia.NewTTS(cartesia.Config{
 		APIKey:  os.Getenv("CARTESIA_API_KEY"),
 		VoiceID: "86e30c1d-714b-4074-a1f2-1cb6b552fb49",
-	}).Base
+	})
 }
 
 func runBot(ctx context.Context, t transport.Transport, args runner.Arguments) error {

@@ -34,11 +34,11 @@ func TestNewServices(t *testing.T) {
 // TestNewLLM checks the Groq OpenAI-compatible LLM shim wires the right
 // service name and default model into the shared client.
 func TestNewLLM(t *testing.T) {
-	providertest.CompatLLM(t, "GroqLLM", "openai/gpt-oss-120b", compatLLM)
+	providertest.CompatLLM(t, "GroqLLM", "openai/gpt-oss-120b", providertest.Builder(compatLLM))
 }
 
 // compatLLM builds the service from the shared OpenAI-compatible config alone,
 // which is what the shared assertions are written against.
-func compatLLM(cfg chat.LLMConfig) *chat.LLMService {
+func compatLLM(cfg chat.LLMConfig) *groq.LLMService {
 	return groq.NewLLM(groq.LLMConfig{LLMConfig: cfg})
 }

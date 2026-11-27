@@ -42,31 +42,31 @@ func TestDeveloperRoleRoster(t *testing.T) {
 		role string
 	}{
 		// Baseten's message roles are system, user, assistant and tool.
-		{"baseten", baseten.NewLLM, chat.RoleUser},
+		{"baseten", Builder(baseten.NewLLM), chat.RoleUser},
 		// Cerebras maps the developer role to its own developer instruction
 		// layer, which sits above user instructions in the prompt hierarchy, so
 		// the message is sent as written.
-		{"cerebras", cerebras.NewLLM, chat.RoleDeveloper},
-		{"crusoe", crusoe.NewLLM, chat.RoleUser},
-		{"deepseek", deepseekLLM, chat.RoleUser},
-		{"mistral", mistral.NewLLM, chat.RoleUser},
-		{"nebius", nebius.NewLLM, chat.RoleUser},
-		{"ollama", ollama.NewLLM, chat.RoleUser},
-		{"openrouter", openrouter.NewLLM, chat.RoleUser},
+		{"cerebras", Builder(cerebras.NewLLM), chat.RoleDeveloper},
+		{"crusoe", Builder(crusoe.NewLLM), chat.RoleUser},
+		{"deepseek", Builder(deepseekLLM), chat.RoleUser},
+		{"mistral", Builder(mistral.NewLLM), chat.RoleUser},
+		{"nebius", Builder(nebius.NewLLM), chat.RoleUser},
+		{"ollama", Builder(ollama.NewLLM), chat.RoleUser},
+		{"openrouter", Builder(openrouter.NewLLM), chat.RoleUser},
 		//nolint:staticcheck // the deprecated Sonar service is still shipped, so still tested
-		{"qwen", qwen.NewLLM, chat.RoleUser},
-		{"sambanova", sambanova.NewLLM, chat.RoleUser},
-		{"sarvam", sarvamLLM, chat.RoleUser},
+		{"qwen", Builder(qwen.NewLLM), chat.RoleUser},
+		{"sambanova", Builder(sambanova.NewLLM), chat.RoleUser},
+		{"sarvam", Builder(sarvamLLM), chat.RoleUser},
 		// Electron does not support the developer role.
-		{"smallest", smallestLLM, chat.RoleUser},
-		{"together", togetherLLM, chat.RoleUser},
+		{"smallest", Builder(smallestLLM), chat.RoleUser},
+		{"together", Builder(togetherLLM), chat.RoleUser},
 
-		{"openai", chat.NewLLM, chat.RoleDeveloper},
-		{"fireworks", fireworks.NewLLM, chat.RoleDeveloper},
-		{"groq", groqLLM, chat.RoleDeveloper},
-		{"novita", novita.NewLLM, chat.RoleDeveloper},
-		{"nvidia", nvidia.NewLLM, chat.RoleDeveloper},
-		{"grok", grok.NewLLM, chat.RoleDeveloper},
+		{"openai", Builder(chat.NewLLM), chat.RoleDeveloper},
+		{"fireworks", Builder(fireworks.NewLLM), chat.RoleDeveloper},
+		{"groq", Builder(groqLLM), chat.RoleDeveloper},
+		{"novita", Builder(novita.NewLLM), chat.RoleDeveloper},
+		{"nvidia", Builder(nvidia.NewLLM), chat.RoleDeveloper},
+		{"grok", Builder(grok.NewLLM), chat.RoleDeveloper},
 	}
 
 	for _, p := range roster {
@@ -140,31 +140,31 @@ func contentTexts(raw json.RawMessage) []string {
 
 // togetherLLM builds a Together service from the shared config alone, since the
 // roster sends every provider the same one and Together's own config wraps it.
-func togetherLLM(cfg chat.LLMConfig) *chat.LLMService {
+func togetherLLM(cfg chat.LLMConfig) *together.LLMService {
 	return together.NewLLM(together.LLMConfig{LLMConfig: cfg})
 }
 
 // deepseekLLM builds a DeepSeek service from the shared config alone, since the
 // roster sends every provider the same one and DeepSeek's own config wraps it.
-func deepseekLLM(cfg chat.LLMConfig) *chat.LLMService {
+func deepseekLLM(cfg chat.LLMConfig) *deepseek.LLMService {
 	return deepseek.NewLLM(deepseek.LLMConfig{LLMConfig: cfg})
 }
 
 // sarvamLLM builds a Sarvam service from the shared config alone, since the
 // roster sends every provider the same one and Sarvam's own config wraps it.
-func sarvamLLM(cfg chat.LLMConfig) *chat.LLMService {
+func sarvamLLM(cfg chat.LLMConfig) *sarvam.LLMService {
 	return sarvam.NewLLM(sarvam.LLMConfig{LLMConfig: cfg})
 }
 
 // smallestLLM builds a Smallest AI service from the shared config alone, since
 // the roster sends every provider the same one and Smallest's own config wraps
 // it.
-func smallestLLM(cfg chat.LLMConfig) *chat.LLMService {
+func smallestLLM(cfg chat.LLMConfig) *smallest.LLMService {
 	return smallest.NewLLM(smallest.LLMConfig{LLMConfig: cfg})
 }
 
 // groqLLM builds a Groq service from the shared config alone, since the roster
 // sends every provider the same one and Groq's own config wraps it.
-func groqLLM(cfg chat.LLMConfig) *chat.LLMService {
+func groqLLM(cfg chat.LLMConfig) *groq.LLMService {
 	return groq.NewLLM(groq.LLMConfig{LLMConfig: cfg})
 }

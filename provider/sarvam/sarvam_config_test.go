@@ -40,9 +40,10 @@ func TestNewServices(t *testing.T) {
 // TestNewLLM checks the Sarvam OpenAI-compatible LLM shim wires the right
 // service name and default model into the shared client.
 func TestNewLLM(t *testing.T) {
-	providertest.CompatLLM(t, "SarvamLLM", "sarvam-105b", func(cfg chat.LLMConfig) *chat.LLMService {
+	build := func(cfg chat.LLMConfig) *sarvam.LLMService {
 		return sarvam.NewLLM(sarvam.LLMConfig{LLMConfig: cfg})
-	})
+	}
+	providertest.CompatLLM(t, "SarvamLLM", "sarvam-105b", providertest.Builder(build))
 }
 
 // TestConfigValidateLLM pins which LLMConfig fields the provider requires: an

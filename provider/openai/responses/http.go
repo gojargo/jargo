@@ -71,12 +71,12 @@ func NewHTTPLLM(cfg Config) *HTTPLLMService {
 // from OpenAI's in the ways v describes. Unlike NewHTTPLLM it leaves an empty
 // Model empty, so a server that can choose the model itself is not sent
 // OpenAI's default.
-func NewHTTPVariantLLM(cfg Config, v HTTPVariant) *HTTPLLMService {
+func NewHTTPVariantLLM(cfg Config, v HTTPVariant, opts ...llm.Option) *HTTPLLMService {
 	if cfg.BaseURL == "" {
 		cfg.BaseURL = defaultBaseURL
 	}
 	s := &HTTPLLMService{cfg: cfg, live: newLLMSettings(cfg), http: &http.Client{}, variant: v}
-	s.Base = llm.New(v.Name, s)
+	s.Base = llm.New(v.Name, s, opts...)
 	s.Base.SetModel(cfg.Model)
 	s.SetSystemInstruction(cfg.Instructions)
 	warnIfReasoningUnsupported(v.Name, cfg)

@@ -230,7 +230,7 @@ func New(cfg Config) *LLMService {
 // NewWithConnector builds a Gemini Live service that dials through conn. It is
 // the base for deployments that do not use the Gemini API's own endpoint or
 // api-key auth; name is the processor label.
-func NewWithConnector(name string, conn Connector, cfg Config) *LLMService {
+func NewWithConnector(name string, conn Connector, cfg Config, opts ...llm.Option) *LLMService {
 	if cfg.Model == "" {
 		cfg.Model = defaultModel
 	}
@@ -256,7 +256,7 @@ func NewWithConnector(name string, conn Connector, cfg Config) *LLMService {
 	// what the model calls. It generates continuously rather than being run by a
 	// conversation arriving, which is what the first option says. Its replies
 	// and function calls are traced from the frames it pushes.
-	s.Base = llm.New(name, s, llm.WithContinuousGeneration(), llm.WithRealtimeTracing())
+	s.Base = llm.New(name, s, append([]llm.Option{llm.WithContinuousGeneration(), llm.WithRealtimeTracing()}, opts...)...)
 	s.SetModel(cfg.Model)
 	// The configured instruction is the base prompt the base composes the
 	// instruction the session is set up with from.

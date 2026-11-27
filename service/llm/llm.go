@@ -247,6 +247,15 @@ func WithTimeout(d time.Duration) RegisterOption {
 // Option configures an LLM Base at construction.
 type Option func(*Base)
 
+// WithSelf names the service type that embeds the service gen belongs to: the
+// value the pipeline runs, and the one frames, observers and service switchers
+// know the service by. A provider whose constructor returns its own type around
+// another provider's service passes that value. Without it, or with nil, gen is
+// the service.
+func WithSelf(self processor.Processor) Option {
+	return func(b *Base) { b.wrapper = self }
+}
+
 // WithFunctionCallTimeout bounds how long any tool call may take before it is
 // given up on. A call that overruns reports no result of its own, which records
 // it as completed and leaves generation to whatever comes next rather than
@@ -521,6 +530,9 @@ type Base struct {
 	// cleanups are the resources registered tools work through, released when
 	// the service is cleaned up. See toolcleanup.go.
 	cleanups toolCleanups
+
+	// wrapper is the service type WithSelf named, nil when gen is the service.
+	wrapper processor.Processor
 }
 
 // New builds an LLM Base named name driven by gen. The concrete service passes
@@ -544,6 +556,9 @@ func New(name string, gen Generator, opts ...Option) *Base {
 	var self processor.Processor = b
 	if p, ok := gen.(processor.Processor); ok {
 		self = p
+	}
+	if b.wrapper != nil {
+		self = b.wrapper
 	}
 	b.Base = service.New(name, self)
 	b.gate = newSpeculationGate(b.Name())

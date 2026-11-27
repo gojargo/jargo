@@ -20,6 +20,7 @@ import (
 	"github.com/gojargo/jargo/internal/validate"
 	openairealtime "github.com/gojargo/jargo/provider/openai/realtime"
 	"github.com/gojargo/jargo/provider/openai/realtime/protocol"
+	"github.com/gojargo/jargo/service/llm"
 )
 
 // TokenProvider supplies a Microsoft Entra ID bearer token, for the
@@ -57,8 +58,21 @@ type Config struct {
 // Validate reports whether the configuration is usable.
 func (c Config) Validate() error { return validate.Struct(c) }
 
+// LLMService is the Azure OpenAI Realtime LLM service New builds.
+type LLMService struct {
+	*openairealtime.LLMService
+}
+
 // New builds an Azure OpenAI Realtime service.
-func New(cfg Config) *openairealtime.LLMService {
+func New(cfg Config) *LLMService {
+	s := &LLMService{}
+	s.LLMService = buildLLM(cfg, llm.WithSelf(s))
+	return s
+}
+
+// buildLLM builds the service New returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildLLM(cfg Config, opts ...llm.Option) *openairealtime.LLMService {
 	if strings.Contains(cfg.BaseURL, "api-version=") {
 		// The preview surface rejects the session configuration and names its
 		// events differently, so it fails partway through a connection that opens
@@ -73,7 +87,7 @@ func New(cfg Config) *openairealtime.LLMService {
 		SessionProperties:    cfg.SessionProperties,
 		StartAudioPaused:     cfg.StartAudioPaused,
 		UserAudioPrerollSecs: cfg.UserAudioPrerollSecs,
-	})
+	}, opts...)
 	conn.model = svc.Model()
 	return svc
 }

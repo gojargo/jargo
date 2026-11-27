@@ -20,6 +20,7 @@ import (
 	"github.com/gojargo/jargo/language"
 	"github.com/gojargo/jargo/provider/kokoro"
 	"github.com/gojargo/jargo/provider/moonshine"
+	"github.com/gojargo/jargo/provider/ollama"
 	"github.com/gojargo/jargo/provider/openai/chat"
 	"github.com/gojargo/jargo/service/llm"
 	"github.com/gojargo/jargo/service/stt"
@@ -122,9 +123,9 @@ func judgeEvalConfig(t *testing.T, block string) *JudgeEvalConfig {
 // modelOf is the model an LLM service builds with.
 func modelOf(t *testing.T, inf llm.Inferencer) string {
 	t.Helper()
-	s, ok := inf.(*chat.LLMService)
+	s, ok := inf.(interface{ Model() string })
 	if !ok {
-		t.Fatalf("got a %T, want a chat LLM service", inf)
+		t.Fatalf("got a %T, want an LLM service reporting its model", inf)
 	}
 	return s.Model()
 }
@@ -146,7 +147,7 @@ func TestTheDefaultJudgeClassifiesAndExplainsWithOneLLM(t *testing.T) {
 	if modelOf(t, c.LLM()) != DefaultOllamaJudgeModel {
 		t.Fatalf("model = %q", modelOf(t, c.LLM()))
 	}
-	settings, _ := c.LLM().(*chat.LLMService).Settings().(*chat.LLMSettings)
+	settings, _ := c.LLM().(*ollama.LLMService).Settings().(*chat.LLMSettings)
 	if settings == nil || settings.Extra["reasoning_effort"] != "none" {
 		t.Fatalf("settings = %+v, want the default extras", settings)
 	}

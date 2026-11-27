@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"maps"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -248,7 +249,7 @@ func NewLLM(cfg LLMConfig) *LLMService {
 
 // NewCompatLLM builds an LLM service for an OpenAI-compatible endpoint
 // described by c.
-func NewCompatLLM(c Compat, cfg LLMConfig) *LLMService {
+func NewCompatLLM(c Compat, cfg LLMConfig, opts ...llm.Option) *LLMService {
 	if cfg.BaseURL == "" {
 		cfg.BaseURL = c.BaseURL
 	}
@@ -288,7 +289,7 @@ func NewCompatLLM(c Compat, cfg LLMConfig) *LLMService {
 		checkRequest:     c.CheckRequest,
 		editRequest:      c.Request,
 	}
-	s.Base = llm.New(c.Name, s, c.Base...)
+	s.Base = llm.New(c.Name, s, append(slices.Clone(c.Base), opts...)...)
 	s.Base.SetModel(cfg.Model)
 	return s
 }

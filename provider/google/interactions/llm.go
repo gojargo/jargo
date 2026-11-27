@@ -89,7 +89,7 @@ func NewLLM(cfg Config) *LLMService {
 // NewShapedLLM builds an Interactions LLM service whose requests are addressed
 // and authorized by shaper. It is the base for deployments that do not use the
 // Gemini API's own URL or api-key auth; name is the processor label.
-func NewShapedLLM(name string, shaper RequestShaper, cfg Config) *LLMService {
+func NewShapedLLM(name string, shaper RequestShaper, cfg Config, opts ...llm.Option) *LLMService {
 	if cfg.Model == "" {
 		cfg.Model = defaultModel
 	}
@@ -103,7 +103,7 @@ func NewShapedLLM(name string, shaper RequestShaper, cfg Config) *LLMService {
 		shaper:            shaper,
 		warnedUnsupported: map[string]bool{},
 	}
-	s.Base = llm.New(name, s)
+	s.Base = llm.New(name, s, opts...)
 	s.Base.SetModel(cfg.Model)
 	return s
 }

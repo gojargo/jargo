@@ -487,7 +487,7 @@ func LLMServiceFromConfig(cfg *LLMServiceConfig, where string) (llm.Inferencer, 
 // `reasoning_effort: none` reaches a thinking model. The default model comes
 // with the extras it needs (DefaultOllamaJudgeExtra); a named model gets only
 // the extras asked for.
-func OllamaService(cfg *LLMServiceConfig) *chat.LLMService {
+func OllamaService(cfg *LLMServiceConfig) *ollama.LLMService {
 	extra := cfg.Extra
 	if extra == nil {
 		extra = map[string]any{}

@@ -314,7 +314,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `HTTPTTSService`, `NewSegmentedSTT` a `SegmentedSTTService`). A provider can
   now gain a method of its own in a minor release without changing what its
   constructor returns, and the type names match the service names a Pipecat user
-  knows, minus the provider prefix. The LLM services that were named plain
+  knows, minus the provider prefix. The LLM providers built on another
+  provider's service do the same: `groq.NewLLM` and the other OpenAI-compatible
+  providers return their own `LLMService` around `*chat.LLMService`,
+  `bedrock.NewLLM` a `*bedrock.LLMService` around the Anthropic one, and the
+  Vertex AI constructors a `*vertex.LLMService`, `*vertex.InteractionsLLMService`
+  and `*vertex.LiveLLMService`. `azure/realtime.New` returns a
+  `*realtime.LLMService` of its own, and `perplexity.NewAgentLLM` a
+  `*perplexity.AgentLLMService`. The LLM services that were named plain
   `Service` follow the same rule:
 
   | Before | After |
@@ -331,12 +338,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
   The type a constructor returns is also the processor the pipeline runs:
   `tts.New`, `stt.NewStream`, `stt.NewSegment` and `stt.NewSegmentRunner` take
-  `tts.WithSelf` / `stt.WithSelf`, naming the type that embeds them, the way
-  `llm.New` already takes the service as its generator. Frames, observers and
+  `tts.WithSelf` / `stt.WithSelf`, naming the type that embeds them, and
+  `llm.New` takes `llm.WithSelf` for a type wrapping another provider's service.
+  The shared builders pass the option through: `chat.NewCompatLLM`,
+  `gemini.NewShapedLLM`, `interactions.NewShapedLLM`, `live.NewWithConnector`,
+  `realtime.NewWithConnector` and `responses.NewHTTPVariantLLM` take
+  `...llm.Option`, and `anthropic.NewLLMWithOptions` now takes its SDK request
+  options as a slice, followed by `...llm.Option`. Frames, observers and
   service switchers know the service by that value. A service written outside
   jargo can do the same; the custom-service guide shows how. The eval harness
   takes any segmented STT service (`eval.SegmentedSTT`) and any TTS service
-  (`eval.TTSService`) instead of the base types.
+  (`eval.TTSService`) instead of the base types, and `eval.OllamaService`
+  returns an `*ollama.LLMService`.
 
 - **BREAKING: one name for each observer type, and one shape for a frame
   predicate.** The `pipeline` package re-exported the observer types that live

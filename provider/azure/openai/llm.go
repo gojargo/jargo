@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/gojargo/jargo/provider/openai/chat"
+	"github.com/gojargo/jargo/service/llm"
 )
 
 // shaper addresses and authorizes requests the Azure OpenAI way.
@@ -20,8 +21,21 @@ func (shaper) Authorize(req *http.Request, apiKey string) {
 	req.Header.Set("api-key", apiKey)
 }
 
+// LLMService is the Azure OpenAI LLM service NewLLM builds.
+type LLMService struct {
+	*chat.LLMService
+}
+
 // NewLLM builds an Azure OpenAI LLM service.
-func NewLLM(cfg Config) *chat.LLMService {
+func NewLLM(cfg Config) *LLMService {
+	s := &LLMService{}
+	s.LLMService = buildLLM(cfg, llm.WithSelf(s))
+	return s
+}
+
+// buildLLM builds the service NewLLM returns, registering the
+// service opts names as the processor the pipeline runs.
+func buildLLM(cfg Config, opts ...llm.Option) *chat.LLMService {
 	apiVersion := cfg.APIVersion
 	if apiVersion == "" {
 		apiVersion = defaultAPIVersion
@@ -38,5 +52,5 @@ func NewLLM(cfg Config) *chat.LLMService {
 		BaseURL:      base,
 		DefaultModel: cfg.Deployment,
 		Shaper:       shaper{apiVersion: apiVersion},
-	}, llmCfg)
+	}, llmCfg, opts...)
 }

@@ -87,7 +87,7 @@ func TestBedrockSendsNoInterleavedThinkingBeta(t *testing.T) {
 	srv, sent := bedrockStub(t)
 	svc := newLLM(Config{Model: "us.anthropic.claude-sonnet-4-5-v1:0"}, staticAWS(),
 		option.WithBaseURL(srv.URL), option.WithMaxRetries(0))
-	runAll(t, svc)
+	runAll(t, svc.LLMService)
 
 	got := sent()
 	if len(got) != 3 {
@@ -106,8 +106,9 @@ func TestBedrockStubSeesABeta(t *testing.T) {
 	srv, sent := bedrockStub(t)
 	cfg := Config{Model: "us.anthropic.claude-sonnet-4-5-v1:0"}.anthropicConfig()
 	cfg.OmitInterleavedThinkingBeta = false
-	svc := anthropic.NewLLMWithOptions("BedrockLLM", cfg,
-		bedrock.WithConfig(staticAWS()), option.WithBaseURL(srv.URL), option.WithMaxRetries(0))
+	svc := anthropic.NewLLMWithOptions("BedrockLLM", cfg, []option.RequestOption{
+		bedrock.WithConfig(staticAWS()), option.WithBaseURL(srv.URL), option.WithMaxRetries(0),
+	})
 	convo := frames.NewLLMContext("sys")
 	convo.AddUserMessage("hi")
 	if _, err := svc.RunInference(t.Context(), convo, llm.InferenceOptions{}); err != nil {
