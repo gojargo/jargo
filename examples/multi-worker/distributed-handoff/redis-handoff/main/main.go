@@ -6,7 +6,6 @@
 // the example), possibly on other machines, and connect to the same
 // Redis-backed worker bus.
 //
-// The example is a module of its own, so only it depends on a Redis client.
 // From this directory's parent:
 //
 //	DEEPGRAM_API_KEY=… CARTESIA_API_KEY=… \

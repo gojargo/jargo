@@ -430,7 +430,7 @@ seconds after the client connects, with the frame that service takes.
 | [`openai-responses-frontend-filter-incomplete-turns`](multi-worker/llm-with-backend/openai-responses-frontend-filter-incomplete-turns) | `openai-responses-frontend`, with incomplete user turns filtered (`FilterIncompleteUserTurnStrategies`). | Deepgram, OpenAI, Anthropic, Cartesia |
 | [`openai-realtime-frontend`](multi-worker/llm-with-backend/openai-realtime-frontend) | An OpenAI Realtime frontend delegates tool work to a Claude backend worker. | OpenAI, Anthropic |
 | [`gemini-live-frontend`](multi-worker/llm-with-backend/gemini-live-frontend) | A Gemini Live frontend delegates tool work to a Claude backend worker. | Google AI, Anthropic |
-| [`redis-handoff`](multi-worker/distributed-handoff/redis-handoff) | The local handoff split into a transport process and one process per LLM worker, connected by a Redis bus. A module of its own. | Deepgram, OpenAI, Cartesia |
+| [`redis-handoff`](multi-worker/distributed-handoff/redis-handoff) | The local handoff split into a transport process and one process per LLM worker, connected by a Redis bus. | Deepgram, OpenAI, Cartesia |
 | [`remote-proxy-assistant`](multi-worker/remote-proxy-assistant) | A transport process reaches an LLM worker on a remote server through WebSocket proxy workers. | Deepgram, OpenAI, Cartesia |
 
 ## Flows

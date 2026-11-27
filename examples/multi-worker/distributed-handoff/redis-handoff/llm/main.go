@@ -5,7 +5,6 @@
 // attached to the same Redis-backed worker bus as the main worker. Several
 // instances can run on different machines.
 //
-// The example is a module of its own, so only it depends on a Redis client.
 // From this directory's parent:
 //
 //	OPENAI_API_KEY=… go run ./llm greeter -redis-url redis://localhost:6379

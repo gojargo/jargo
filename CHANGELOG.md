@@ -222,6 +222,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **BREAKING: the Redis bus is part of the main module.**
+  `github.com/gojargo/jargo/bus/network/redis` was a Go module of its own; it is
+  now a package of `github.com/gojargo/jargo`, at the same import path. A
+  program that never imports it never compiles its Redis client either, so the
+  separate module saved nothing and cost a release of its own for every change
+  to the core. Drop the `github.com/gojargo/jargo/bus/network/redis` line from
+  your `go.mod`: the package now comes with jargo.
+
 - **BREAKING: two more names stop repeating their package.** The linter now
   checks every exported identifier for a doc comment and for stutter, and these
   were the last two to fail it.
