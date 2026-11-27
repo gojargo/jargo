@@ -66,6 +66,13 @@ COVER_MERGE = awk '/^mode:/ { if (!m) { print; m = 1 } next } \
 # itself ships in, which keeps the two halves of the same project in step.
 ORT_VERSION ?= 1.30.0
 ORT_ARCH ?= $(if $(filter aarch64 arm64,$(shell uname -m)),aarch64,x64)
+# Where deps-onnx fetches the ONNX Runtime from: github, Microsoft's release
+# archive, or nuget, Microsoft's Microsoft.ML.OnnxRuntime package, whose
+# libonnxruntime.so is the same file. nuget while the GitHub release is
+# unavailable (#152). The package is checked against ORT_NUGET_SHA256, which
+# has to change with ORT_VERSION.
+ORT_SOURCE ?= nuget
+ORT_NUGET_SHA256 ?= 30df119bd9164eaa187666d93147448fdd4a9a1a3caf83f1505daf7af2d1c5d2
 NATIVE_DIR ?= $(CURDIR)/.native
 
 # libmoonshine, for the Moonshine STT provider, comes from the moonshine-voice
@@ -306,12 +313,32 @@ require-linux:
 	}
 
 .PHONY: deps-onnx
-deps-onnx: require-linux ## Fetch the ONNX Runtime for VAD and turn detection
+deps-onnx: require-linux ## Fetch the ONNX Runtime for VAD and turn detection (ORT_SOURCE=github|nuget)
 	@mkdir -p $(NATIVE_DIR)
-	curl -fsSL -o $(NATIVE_DIR)/ort.tgz \
-		"https://github.com/microsoft/onnxruntime/releases/download/v$(ORT_VERSION)/onnxruntime-linux-$(ORT_ARCH)-$(ORT_VERSION).tgz"
-	tar -xzf $(NATIVE_DIR)/ort.tgz -C $(NATIVE_DIR) --strip-components=1
-	@rm -f $(NATIVE_DIR)/ort.tgz
+	@case "$(ORT_SOURCE)" in github|nuget) ;; *) echo "ORT_SOURCE must be github or nuget" >&2; exit 1 ;; esac
+	@if [[ "$(ORT_SOURCE)" == github ]]; then \
+		set -eux; \
+		curl -fsSL -o $(NATIVE_DIR)/ort.tgz \
+			"https://github.com/microsoft/onnxruntime/releases/download/v$(ORT_VERSION)/onnxruntime-linux-$(ORT_ARCH)-$(ORT_VERSION).tgz"; \
+		tar -xzf $(NATIVE_DIR)/ort.tgz -C $(NATIVE_DIR) --strip-components=1; \
+		rm -f $(NATIVE_DIR)/ort.tgz; \
+	else \
+		set -eux; \
+		rid=$$([[ "$(ORT_ARCH)" == aarch64 ]] && echo linux-arm64 || echo linux-x64); \
+		curl -fsSL -o $(NATIVE_DIR)/ort.nupkg \
+			"https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime/$(ORT_VERSION)/microsoft.ml.onnxruntime.$(ORT_VERSION).nupkg"; \
+		echo "$(ORT_NUGET_SHA256)  $(NATIVE_DIR)/ort.nupkg" | sha256sum -c -; \
+		rm -rf $(NATIVE_DIR)/ort-nuget; \
+		unzip -q -o $(NATIVE_DIR)/ort.nupkg 'build/native/include/*' "runtimes/$$rid/native/*" -d $(NATIVE_DIR)/ort-nuget; \
+		mkdir -p $(NATIVE_DIR)/include $(NATIVE_DIR)/lib; \
+		cp $(NATIVE_DIR)/ort-nuget/build/native/include/* $(NATIVE_DIR)/include/; \
+		cp $(NATIVE_DIR)/ort-nuget/runtimes/$$rid/native/libonnxruntime.so $(NATIVE_DIR)/lib/libonnxruntime.so.$(ORT_VERSION); \
+		cp $(NATIVE_DIR)/ort-nuget/runtimes/$$rid/native/libonnxruntime_providers_shared.so $(NATIVE_DIR)/lib/; \
+		chmod 755 $(NATIVE_DIR)/lib/libonnxruntime.so.$(ORT_VERSION) $(NATIVE_DIR)/lib/libonnxruntime_providers_shared.so; \
+		ln -sf libonnxruntime.so.$(ORT_VERSION) $(NATIVE_DIR)/lib/libonnxruntime.so.1; \
+		ln -sf libonnxruntime.so.1 $(NATIVE_DIR)/lib/libonnxruntime.so; \
+		rm -rf $(NATIVE_DIR)/ort-nuget $(NATIVE_DIR)/ort.nupkg; \
+	fi
 	@echo
 	@echo "export JARGO_ONNXRUNTIME_LIB=$(NATIVE_DIR)/lib/libonnxruntime.so"
 
@@ -387,6 +414,7 @@ image-build: ## Build the jargo-build base image for the host platform
 .PHONY: image-runtime
 image-runtime: ## Build the distroless runtime base image for the host platform
 	docker build -f docker/runtime.Dockerfile --build-arg ORT_VERSION=$(ORT_VERSION) \
+		--build-arg ORT_SOURCE=$(ORT_SOURCE) --build-arg ORT_NUGET_SHA256=$(ORT_NUGET_SHA256) \
 		-t jargo:local .
 
 .PHONY: release-snapshot

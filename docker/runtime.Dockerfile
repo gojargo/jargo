@@ -18,22 +18,38 @@
 # ---- collect the native runtime libraries from Debian + the ONNX release ----
 FROM debian:bookworm-slim@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587 AS libs
 ARG ORT_VERSION=1.30.0
+# Where the ONNX Runtime comes from: github, Microsoft's release archive, or
+# nuget, Microsoft's Microsoft.ML.OnnxRuntime package, whose libonnxruntime.so
+# is the same file. nuget while the GitHub release is unavailable (#152); the
+# package is checked against ORT_NUGET_SHA256, which changes with ORT_VERSION.
+ARG ORT_SOURCE=nuget
+ARG ORT_NUGET_SHA256=30df119bd9164eaa187666d93147448fdd4a9a1a3caf83f1505daf7af2d1c5d2
 ARG TARGETARCH=amd64
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        ca-certificates curl wget \
+        ca-certificates curl wget unzip \
         git build-essential autoconf automake libtool \
     && rm -rf /var/lib/apt/lists/*
 RUN set -eux; \
     case "${TARGETARCH}" in \
-      amd64) ort_arch=x64 ;; \
-      arm64) ort_arch=aarch64 ;; \
+      amd64) ort_arch=x64; ort_rid=linux-x64 ;; \
+      arm64) ort_arch=aarch64; ort_rid=linux-arm64 ;; \
       *) echo "unsupported TARGETARCH=${TARGETARCH}" >&2; exit 1 ;; \
     esac; \
-    curl -fsSL -o /tmp/ort.tgz \
-      "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-${ort_arch}-${ORT_VERSION}.tgz"; \
-    mkdir -p /opt/ort && tar -xzf /tmp/ort.tgz -C /opt/ort --strip-components=1; \
-    cp -L /opt/ort/lib/libonnxruntime.so /usr/local/lib/libonnxruntime.so
+    case "${ORT_SOURCE}" in \
+      github) \
+        curl -fsSL -o /tmp/ort.tgz \
+          "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-${ort_arch}-${ORT_VERSION}.tgz"; \
+        mkdir -p /opt/ort && tar -xzf /tmp/ort.tgz -C /opt/ort --strip-components=1; \
+        cp -L /opt/ort/lib/libonnxruntime.so /usr/local/lib/libonnxruntime.so ;; \
+      nuget) \
+        curl -fsSL -o /tmp/ort.nupkg \
+          "https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime/${ORT_VERSION}/microsoft.ml.onnxruntime.${ORT_VERSION}.nupkg"; \
+        echo "${ORT_NUGET_SHA256}  /tmp/ort.nupkg" | sha256sum -c -; \
+        unzip -q /tmp/ort.nupkg "runtimes/${ort_rid}/native/libonnxruntime.so" -d /opt/ort; \
+        cp /opt/ort/runtimes/${ort_rid}/native/libonnxruntime.so /usr/local/lib/libonnxruntime.so ;; \
+      *) echo "ORT_SOURCE must be github or nuget" >&2; exit 1 ;; \
+    esac
 # RNNoise is not packaged in Debian; build it from source so the purego denoiser
 # can dlopen it at run time. Only the resulting .so is copied into the final image.
 RUN set -eux; \

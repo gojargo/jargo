@@ -12,6 +12,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Changed
+
+- **The ONNX Runtime can come from NuGet.** `make deps-onnx` and the runtime
+  image take `ORT_SOURCE`: `github`, Microsoft's release archive, or `nuget`,
+  Microsoft's `Microsoft.ML.OnnxRuntime` package, checked against a pinned
+  SHA-256 (`ORT_NUGET_SHA256`). The package's `libonnxruntime.so` is the same
+  file as the archive's. `nuget` is the default while the GitHub release is
+  unavailable, so the image builds again and CI tests the local models again.
+
 ## [1.0.0] - 2026-11-27
 
 ### Added
