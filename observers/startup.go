@@ -156,7 +156,7 @@ func (o *StartupTiming) OnPipelineSetupStarted(at time.Time) {
 // OnProcessorSetup implements processor.SetupObserver. It records what a
 // processor's setup cost, which is the part of getting ready it spends
 // connecting.
-func (o *StartupTiming) OnProcessorSetup(data processor.SetUp) {
+func (o *StartupTiming) OnProcessorSetup(data processor.SetupTiming) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if o.startupReported {

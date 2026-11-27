@@ -222,6 +222,23 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **BREAKING: one name for each observer type, and one shape for a frame
+  predicate.** The `pipeline` package re-exported the observer types that live
+  in `processor`, so each had two names. Only the `processor` ones remain.
+  `processor.SetUp` sat next to `processor.Setup` with only the case to tell
+  them apart, and is now `processor.SetupTiming`. A frame predicate is a plain
+  `func(frames.Frame) bool` everywhere, and `pipeline.AnyFrame` is a function
+  rather than a variable that could be reassigned. `NewFunctionFilter` takes
+  its direction as an option instead of a `*Direction`.
+
+  | Before | After |
+  |---|---|
+  | `pipeline.Observer`, `pipeline.ProcessObserver`, `pipeline.FramePushed`, `pipeline.FrameProcessed` | `processor.Observer`, `processor.ProcessObserver`, `processor.FramePushed`, `processor.FrameProcessed` |
+  | `pipeline.StartedObserver` | `processor.PipelineStartedObserver` |
+  | `processor.SetUp` | `processor.SetupTiming` |
+  | `pipeline.FrameFilter`, `processor.FilterFunc`, `processor.FrameMatcher` | `func(frames.Frame) bool` |
+  | `processor.NewFunctionFilter(name, &dir, allow)` | `processor.NewFunctionFilter(name, allow, processor.WithFilterDirection(dir))` |
+
 - **BREAKING: YAML comes from `go.yaml.in/yaml/v3`.** `gopkg.in/yaml.v3` is
   archived and no longer maintained; its maintained successor has the same
   API. The `yaml.Node` values the eval package takes and returns are now

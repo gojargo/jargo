@@ -140,7 +140,7 @@ func (t *Worker) heartbeatPushLoop(ctx context.Context) {
 // is pushed anywhere in the pipeline. It is how the task tells a conversation
 // that has gone quiet from one that is merely between turns.
 type idleObserver struct {
-	match FrameFilter
+	match func(frames.Frame) bool
 	sig   chan<- struct{}
 }
 
@@ -152,7 +152,7 @@ func (o *idleObserver) ObserveEveryPush() bool { return false }
 func (o *idleObserver) OnPushFrame(data processor.FramePushed) {
 	// The StartFrame counts, so the first idle interval is measured from the
 	// pipeline coming up rather than from the task being built.
-	if _, isStart := data.Frame.(*frames.StartFrame); !isStart && !o.match.selects(data.Frame) {
+	if _, isStart := data.Frame.(*frames.StartFrame); !isStart && !selects(o.match, data.Frame) {
 		return
 	}
 	// Activity comes in bursts. A non-blocking send onto a channel holding one

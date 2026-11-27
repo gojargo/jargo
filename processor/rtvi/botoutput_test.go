@@ -10,6 +10,7 @@ import (
 	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
+	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/processor/rtvi"
 )
 
@@ -31,7 +32,7 @@ func outputHarness(
 	// The pipeline ends in a stand-in for the transport's output end: the bot's
 	// output is reported from there, with the timing of what the caller hears.
 	task := pipeline.NewWorker(pipeline.New(proc, newPlayback()), pipeline.WorkerConfig{
-		Observers:               []pipeline.Observer{rtvi.NewObserverWithParams(proc, params)},
+		Observers:               []processor.Observer{rtvi.NewObserverWithParams(proc, params)},
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
 	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {

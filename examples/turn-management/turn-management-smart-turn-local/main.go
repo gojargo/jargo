@@ -22,6 +22,7 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/observers"
 	"github.com/gojargo/jargo/pipeline"
+	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/processor/aggregators"
 	"github.com/gojargo/jargo/provider/cartesia"
 	"github.com/gojargo/jargo/provider/deepgram"
@@ -84,7 +85,7 @@ func runBot(ctx context.Context, t transport.Transport, args runner.Arguments) e
 			EnableUsageMetrics: true,
 		},
 		IdleTimeout: args.Base().PipelineIdleTimeout,
-		Observers: []pipeline.Observer{observers.NewMetricsLog(observers.MetricsLogConfig{
+		Observers: []processor.Observer{observers.NewMetricsLog(observers.MetricsLogConfig{
 			Include: []frames.MetricsData{frames.TurnMetricsData{}},
 		})},
 		ProcessorUnusablePolicy: pipeline.UnusableEnd,

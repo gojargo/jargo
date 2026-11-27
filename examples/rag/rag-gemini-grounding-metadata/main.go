@@ -132,7 +132,7 @@ func runBot(ctx context.Context, t transport.Transport, args runner.Arguments) e
 			EnableUsageMetrics: true,
 		},
 		IdleTimeout:             args.Base().PipelineIdleTimeout,
-		Observers:               []pipeline.Observer{llmSearchLoggerObserver{}},
+		Observers:               []processor.Observer{llmSearchLoggerObserver{}},
 		ProcessorUnusablePolicy: pipeline.UnusableEnd,
 	})
 

@@ -31,7 +31,7 @@ type fakeEnq struct {
 	registry event.Registry
 	mu       sync.Mutex
 	queued   []frames.Frame
-	filter   pipeline.FrameFilter
+	filter   func(frames.Frame) bool
 }
 
 func newFakeEnq() *fakeEnq {
@@ -63,7 +63,7 @@ func (e *fakeEnq) QueueFrames(fs []frames.Frame, _ ...processor.Direction) {
 
 func (e *fakeEnq) Events() *event.Registry { return &e.registry }
 
-func (e *fakeEnq) SetReachedDownstreamFilter(f pipeline.FrameFilter) {
+func (e *fakeEnq) SetReachedDownstreamFilter(f func(frames.Frame) bool) {
 	e.mu.Lock()
 	e.filter = f
 	e.mu.Unlock()

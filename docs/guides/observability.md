@@ -20,7 +20,7 @@ conversation-level signal.
 
 ```go
 task := pipeline.NewWorker(pipe, pipeline.WorkerConfig{
-    Observers: []pipeline.Observer{
+    Observers: []processor.Observer{
         observers.NewTurnTracking(observers.TurnTrackingConfig{
             OnTurnEnded: func(turn int, d time.Duration, interrupted bool) {
                 slog.Info("turn", "n", turn, "dur", d, "interrupted", interrupted)

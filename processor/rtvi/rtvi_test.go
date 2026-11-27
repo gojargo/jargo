@@ -9,6 +9,7 @@ import (
 	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
+	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/processor/aggregators"
 	"github.com/gojargo/jargo/processor/rtvi"
 )
@@ -61,7 +62,7 @@ func TestProcessorHandshakeAndTranscript(t *testing.T) {
 	proc := rtvi.NewProcessor()
 	task := pipeline.NewWorker(pipeline.New(proc), pipeline.WorkerConfig{
 		// Events are reported by the observer; the processor only carries them.
-		Observers:               []pipeline.Observer{rtvi.NewObserver(proc)},
+		Observers:               []processor.Observer{rtvi.NewObserver(proc)},
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
 	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
@@ -121,7 +122,7 @@ func TestProcessorLifecycleAndFunctionCalls(t *testing.T) {
 	// produced it.
 	task := pipeline.NewWorker(pipeline.New(proc, newPlayback()), pipeline.WorkerConfig{
 		// Events are reported by the observer; the processor only carries them.
-		Observers:               []pipeline.Observer{rtvi.NewObserverWithParams(proc, params)},
+		Observers:               []processor.Observer{rtvi.NewObserverWithParams(proc, params)},
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
 	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {
@@ -273,7 +274,7 @@ func TestTranscriptIsReportedThoughTheAggregatorConsumesIt(t *testing.T) {
 	convo := frames.NewLLMContext("system")
 	pair := aggregators.New(convo)
 	task := pipeline.NewWorker(pipeline.New(proc, pair.User()), pipeline.WorkerConfig{
-		Observers:               []pipeline.Observer{rtvi.NewObserver(proc)},
+		Observers:               []processor.Observer{rtvi.NewObserver(proc)},
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
 	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {

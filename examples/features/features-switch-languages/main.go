@@ -59,12 +59,12 @@ func newSwitchLanguage() (*switchLanguage, error) {
 		VoiceID:  "d4db5fb9-f44b-4bd1-85fa-192e0f0d75f9", // Spanish-speaking Lady
 	})
 
-	downstream := processor.Downstream
+	downstream := processor.WithFilterDirection(processor.Downstream)
 	parallel, err := pipeline.NewParallel(
 		// English
-		[]processor.Processor{processor.NewFunctionFilter("EnglishFilter", &downstream, s.englishFilter), englishTTS},
+		[]processor.Processor{processor.NewFunctionFilter("EnglishFilter", s.englishFilter, downstream), englishTTS},
 		// Spanish
-		[]processor.Processor{processor.NewFunctionFilter("SpanishFilter", &downstream, s.spanishFilter), spanishTTS},
+		[]processor.Processor{processor.NewFunctionFilter("SpanishFilter", s.spanishFilter, downstream), spanishTTS},
 	)
 	if err != nil {
 		return nil, err

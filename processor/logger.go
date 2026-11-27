@@ -17,11 +17,8 @@ import (
 type FrameLogger struct {
 	*Base
 	prefix  string
-	ignored FrameMatcher
+	ignored func(frames.Frame) bool
 }
-
-// FrameMatcher reports whether a frame is one of a set.
-type FrameMatcher func(frames.Frame) bool
 
 // LoggerOption configures a FrameLogger.
 type LoggerOption func(*FrameLogger)
@@ -34,7 +31,7 @@ func WithLoggedPrefix(prefix string) LoggerOption {
 
 // WithIgnoredFrames replaces the frames left unlogged. A nil matcher logs every
 // frame, audio included.
-func WithIgnoredFrames(ignored FrameMatcher) LoggerOption {
+func WithIgnoredFrames(ignored func(frames.Frame) bool) LoggerOption {
 	return func(l *FrameLogger) { l.ignored = ignored }
 }
 

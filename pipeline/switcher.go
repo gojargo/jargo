@@ -132,15 +132,14 @@ func newServiceSwitcherAs(
 	// The filters decide system frames too, so a branch that is gated off stops
 	// hearing the conversation rather than following it in the background. The
 	// lifecycle frames still reach it, so it starts and shuts down with the rest.
-	down, up := processor.Downstream, processor.Upstream
 	branches := make([][]processor.Processor, len(services))
 	for i, svc := range services {
 		branches[i] = []processor.Processor{
-			processor.NewFunctionFilter(fmt.Sprintf("Switch::In%d", i), &down, s.gate(svc),
-				processor.WithFilterSystemFrames()),
+			processor.NewFunctionFilter(fmt.Sprintf("Switch::In%d", i), s.gate(svc),
+				processor.WithFilterDirection(processor.Downstream), processor.WithFilterSystemFrames()),
 			svc,
-			processor.NewFunctionFilter(fmt.Sprintf("Switch::Out%d", i), &up, s.gate(svc),
-				processor.WithFilterSystemFrames()),
+			processor.NewFunctionFilter(fmt.Sprintf("Switch::Out%d", i), s.gate(svc),
+				processor.WithFilterDirection(processor.Upstream), processor.WithFilterSystemFrames()),
 		}
 	}
 
@@ -482,7 +481,7 @@ func (s *ServiceSwitcher) consume(ring *[]uint64, id uint64) bool {
 // A settings update meant for a service that is not in use is not let through
 // here. It is handed to that service directly instead, as a copy of its own, so
 // only one of them travels on through the pipeline.
-func (s *ServiceSwitcher) gate(svc processor.Processor) processor.FilterFunc {
+func (s *ServiceSwitcher) gate(svc processor.Processor) func(frames.Frame) bool {
 	return func(frames.Frame) bool { return s.ActiveService() == svc }
 }
 

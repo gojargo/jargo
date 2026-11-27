@@ -148,7 +148,7 @@ type WorkerConfig struct {
 	// transcription frames a provider-driven pipeline reports instead. The
 	// StartFrame always counts, so the first stretch is measured from the
 	// pipeline coming up.
-	IdleTimeoutFrames FrameFilter
+	IdleTimeoutFrames func(frames.Frame) bool
 	// CancelOnIdleTimeout cancels the worker once the pipeline has gone idle;
 	// nil defaults to true. Setting it false reports the idle pipeline and
 	// leaves it running, and goes on reporting each further stretch of quiet.
@@ -169,12 +169,12 @@ type WorkerConfig struct {
 	// is never called; that is the default because a handler on every frame sits
 	// on the path of everything the pipeline does. Use AnyFrame to watch the
 	// whole stream anyway.
-	ReachedDownstreamFilter FrameFilter
+	ReachedDownstreamFilter func(frames.Frame) bool
 	// ReachedUpstreamFilter selects which frames reaching the start of the
 	// pipeline are reported. Nil selects nothing. See ReachedDownstreamFilter.
-	ReachedUpstreamFilter FrameFilter
+	ReachedUpstreamFilter func(frames.Frame) bool
 	// Observers watch every frame reaching either end of the pipeline.
-	Observers []Observer
+	Observers []processor.Observer
 	// EnableTurnTracking follows the conversation's turns; nil defaults to true.
 	// It applies whether or not the worker traces, since where the turns fell is
 	// worth knowing either way; see Worker.TurnTracking. Tracing hangs off it, so
@@ -316,7 +316,7 @@ type Worker struct {
 
 	// observers are the caller's, plus the ones the worker registers itself to
 	// track and trace turns.
-	observers []Observer
+	observers []processor.Observer
 	// tracing is the session's tracing state, handed to the processors at setup;
 	// nil when the worker is not tracing.
 	tracing *tracing.TracingContext
@@ -335,8 +335,8 @@ type Worker struct {
 	// The filters select which frames reaching either end of the pipeline are
 	// reported, and start out as the ones WorkerConfig carries.
 	reachedMu         sync.Mutex
-	reachedDownFilter FrameFilter
-	reachedUpFilter   FrameFilter
+	reachedDownFilter func(frames.Frame) bool
+	reachedUpFilter   func(frames.Frame) bool
 
 	// monitors is the scope the worker's background goroutines run in, heartbeats
 	// is the queue the sink hands each arriving heartbeat to for the monitor to
@@ -500,7 +500,7 @@ func NewWorker(pipe processor.Processor, cfg WorkerConfig) *Worker {
 // and, when the worker traces, the turn tracing plus the turn tracking and
 // latency measurement that feed it.
 func (t *Worker) buildObservers() {
-	t.observers = append([]Observer(nil), t.cfg.Observers...)
+	t.observers = append([]processor.Observer(nil), t.cfg.Observers...)
 	if t.cfg.IdleTimeout > 0 {
 		t.observers = append(t.observers, &idleObserver{
 			match: t.cfg.IdleTimeoutFrames,
@@ -548,7 +548,7 @@ func (t *Worker) buildObservers() {
 // AddObserver registers an observer while the pipeline runs, for something built
 // after the task that wants to watch the frames going by. It watches from here
 // on; what already happened is not replayed.
-func (t *Worker) AddObserver(o Observer) {
+func (t *Worker) AddObserver(o processor.Observer) {
 	if o == nil {
 		return
 	}
@@ -561,7 +561,7 @@ func (t *Worker) AddObserver(o Observer) {
 //
 // An observer may remove itself from one of its own callbacks. It cannot wait
 // for itself, so it is told nothing more once that callback returns.
-func (t *Worker) RemoveObserver(o Observer) {
+func (t *Worker) RemoveObserver(o processor.Observer) {
 	if o == nil {
 		return
 	}
@@ -627,7 +627,7 @@ func (t *Worker) runContext() context.Context {
 
 // SetReachedDownstreamFilter replaces the filter selecting which frames reaching
 // the end of the pipeline are reported.
-func (t *Worker) SetReachedDownstreamFilter(f FrameFilter) {
+func (t *Worker) SetReachedDownstreamFilter(f func(frames.Frame) bool) {
 	t.reachedMu.Lock()
 	t.reachedDownFilter = f
 	t.reachedMu.Unlock()
@@ -635,7 +635,7 @@ func (t *Worker) SetReachedDownstreamFilter(f FrameFilter) {
 
 // SetReachedUpstreamFilter replaces the filter selecting which frames reaching
 // the start of the pipeline are reported.
-func (t *Worker) SetReachedUpstreamFilter(f FrameFilter) {
+func (t *Worker) SetReachedUpstreamFilter(f func(frames.Frame) bool) {
 	t.reachedMu.Lock()
 	t.reachedUpFilter = f
 	t.reachedMu.Unlock()
@@ -644,7 +644,7 @@ func (t *Worker) SetReachedUpstreamFilter(f FrameFilter) {
 // AddReachedDownstreamFilter widens the downstream filter to select what f
 // selects as well, so two consumers of the same task can each ask for their own
 // frames without knowing about each other.
-func (t *Worker) AddReachedDownstreamFilter(f FrameFilter) {
+func (t *Worker) AddReachedDownstreamFilter(f func(frames.Frame) bool) {
 	t.reachedMu.Lock()
 	t.reachedDownFilter = Or(t.reachedDownFilter, f)
 	t.reachedMu.Unlock()
@@ -652,7 +652,7 @@ func (t *Worker) AddReachedDownstreamFilter(f FrameFilter) {
 
 // AddReachedUpstreamFilter widens the upstream filter to select what f selects
 // as well. See AddReachedDownstreamFilter.
-func (t *Worker) AddReachedUpstreamFilter(f FrameFilter) {
+func (t *Worker) AddReachedUpstreamFilter(f func(frames.Frame) bool) {
 	t.reachedMu.Lock()
 	t.reachedUpFilter = Or(t.reachedUpFilter, f)
 	t.reachedMu.Unlock()
@@ -665,7 +665,7 @@ func (t *Worker) notifyReachedDownstream(ctx context.Context, f frames.Frame) {
 	filter := t.reachedDownFilter
 	t.reachedMu.Unlock()
 
-	if filter.selects(f) {
+	if selects(filter, f) {
 		t.Call(ctx, EventFrameReachedDownstream, t, f)
 	}
 }
@@ -677,7 +677,7 @@ func (t *Worker) notifyReachedUpstream(ctx context.Context, f frames.Frame) {
 	filter := t.reachedUpFilter
 	t.reachedMu.Unlock()
 
-	if filter.selects(f) {
+	if selects(filter, f) {
 		t.Call(ctx, EventFrameReachedUpstream, t, f)
 	}
 }
@@ -1778,7 +1778,7 @@ func (t *Worker) maybeAddRTVI(pipe processor.Processor, cfg *WorkerConfig) proce
 	if cfg.RTVIObserverParams != nil {
 		observer = rtvi.NewObserverWithParams(t.rtvi, *cfg.RTVIObserverParams)
 	}
-	cfg.Observers = append(append([]Observer(nil), cfg.Observers...), observer)
+	cfg.Observers = append(append([]processor.Observer(nil), cfg.Observers...), observer)
 
 	return New(t.rtvi, pipe)
 }

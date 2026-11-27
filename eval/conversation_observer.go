@@ -49,7 +49,7 @@ type ConversationEndedMessage struct {
 //			data, _ := json.MarshalIndent(m.Conversation, "", "  ")
 //			_ = os.WriteFile("call.conversation.json", data, 0o600)
 //		})
-//	worker := pipeline.NewWorker(p, pipeline.WorkerConfig{Observers: []pipeline.Observer{observer}})
+//	worker := pipeline.NewWorker(p, pipeline.WorkerConfig{Observers: []processor.Observer{observer}})
 type ConversationObserver struct {
 	event.Registry
 

@@ -66,7 +66,7 @@ func newClientWith(t *testing.T, cfg pipeline.WorkerConfig) *client {
 	proc := rtvi.NewProcessor()
 	sk := newSink()
 	out := make(chan rtvi.Message, 16)
-	cfg.Observers = []pipeline.Observer{rtvi.NewObserver(proc)}
+	cfg.Observers = []processor.Observer{rtvi.NewObserver(proc)}
 	cfg.ReachedDownstreamFilter = pipeline.AnyFrame
 	task := pipeline.NewWorker(pipeline.New(proc, sk), cfg)
 	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {

@@ -260,7 +260,7 @@ func collectFrom(t *testing.T, ignore bool) []rtvi.Message {
 	// The branch sits at the end, so what it answers on its own account goes no
 	// further and the only handover of that frame has the branch as its source.
 	task := pipeline.NewWorker(pipeline.New(proc, branch), pipeline.WorkerConfig{
-		Observers:               []pipeline.Observer{obs},
+		Observers:               []processor.Observer{obs},
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
 	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {

@@ -13,6 +13,7 @@ import (
 	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
+	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/processor/aggregators"
 	"github.com/gojargo/jargo/processor/rtvi"
 	"github.com/gojargo/jargo/service/tts"
@@ -446,7 +447,7 @@ func TestLLMTextSpeechToSpeechReplyEndsWithItsLastSentence(t *testing.T) {
 	proc := rtvi.NewProcessor()
 	out := newMessageOutput()
 	task := pipeline.NewWorker(pipeline.New(proc, aggregators.NewLLMText("LLMText"), out), pipeline.WorkerConfig{
-		Observers: []pipeline.Observer{rtvi.NewObserver(proc)},
+		Observers: []processor.Observer{rtvi.NewObserver(proc)},
 	})
 	runDone := make(chan error, 1)
 	go func() { runDone <- task.Run(context.Background()) }()

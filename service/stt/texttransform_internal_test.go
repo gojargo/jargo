@@ -246,7 +246,7 @@ func TestObserversSeeOnlyTheTransformedTranscript(t *testing.T) {
 	s.SetTextTransformers(TextTransformer{TextType: frames.AnyTextType, Transform: maskCard})
 	observer := &transcriptObserver{}
 	worker := pipeline.NewWorker(pipeline.New(s), pipeline.WorkerConfig{
-		Observers:               []pipeline.Observer{observer},
+		Observers:               []processor.Observer{observer},
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
 	started := make(chan struct{})

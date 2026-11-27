@@ -21,6 +21,7 @@ import (
 	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
+	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/processor/rtvi"
 	"github.com/gojargo/jargo/processor/rtvi/spec"
 )
@@ -540,7 +541,7 @@ func newSpecSession(t *testing.T, params *rtvi.ObserverParams) *specSession {
 	// The pipeline ends in a stand-in for the transport's output end, which
 	// the bot's output is reported from.
 	task := pipeline.NewWorker(pipeline.New(proc, newPlayback()), pipeline.WorkerConfig{
-		Observers:               []pipeline.Observer{rtvi.NewObserverWithParams(proc, p)},
+		Observers:               []processor.Observer{rtvi.NewObserverWithParams(proc, p)},
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
 	s := &specSession{t: t, proc: proc, task: task, done: make(chan error, 1)}

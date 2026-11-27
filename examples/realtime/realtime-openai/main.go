@@ -20,6 +20,7 @@ import (
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/observers"
 	"github.com/gojargo/jargo/pipeline"
+	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/processor/aggregators"
 	"github.com/gojargo/jargo/provider/openai/realtime"
 	"github.com/gojargo/jargo/provider/openai/realtime/protocol"
@@ -200,7 +201,7 @@ func runBot(ctx context.Context, t transport.Transport, args runner.Arguments) e
 			EnableUsageMetrics: true,
 		},
 		IdleTimeout:             args.Base().PipelineIdleTimeout,
-		Observers:               []pipeline.Observer{observers.NewTranscriptionLog(observers.TranscriptionLogConfig{})},
+		Observers:               []processor.Observer{observers.NewTranscriptionLog(observers.TranscriptionLogConfig{})},
 		ProcessorUnusablePolicy: pipeline.UnusableEnd,
 	})
 

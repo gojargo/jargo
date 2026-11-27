@@ -170,7 +170,7 @@ an interruption, say) before injecting new work.
 ```go
 worker := pipeline.NewWorker(pipe, pipeline.WorkerConfig{
     ReachedDownstreamFilter: pipeline.AnyFrame,
-    Observers: []pipeline.Observer{
+    Observers: []processor.Observer{
         observers.NewTurnTracking(observers.TurnTrackingConfig{}),
     },
 })

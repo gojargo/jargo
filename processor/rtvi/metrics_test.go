@@ -8,6 +8,7 @@ import (
 	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
+	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/processor/rtvi"
 )
 
@@ -16,7 +17,7 @@ func TestMetricsFrameBecomesMetricsMessage(t *testing.T) {
 	rtviProc := rtvi.NewProcessor()
 	task := pipeline.NewWorker(pipeline.New(rtviProc), pipeline.WorkerConfig{
 		// Events are reported by the observer; the processor only carries them.
-		Observers:               []pipeline.Observer{rtvi.NewObserver(rtviProc)},
+		Observers:               []processor.Observer{rtvi.NewObserver(rtviProc)},
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
 	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {

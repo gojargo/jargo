@@ -41,7 +41,7 @@ func sendTextPushes(t *testing.T, msg *frames.InputTransportMessageFrame, want i
 	off := false
 	task := pipeline.NewWorker(pipeline.New(proc), pipeline.WorkerConfig{
 		EnableRTVI: &off,
-		Observers:  []pipeline.Observer{rec},
+		Observers:  []processor.Observer{rec},
 	})
 	done := make(chan error, 1)
 	go func() { done <- task.Run(t.Context()) }()

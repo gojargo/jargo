@@ -141,7 +141,7 @@ func TestTheRoomConnectionsAreTimedByAnObserver(t *testing.T) {
 	rec := newConnectedRecorder()
 	w := pipeline.NewWorker(pipeline.New(tr.Input(), rec), pipeline.WorkerConfig{
 		IdleTimeout: -1,
-		Observers:   []pipeline.Observer{o},
+		Observers:   []processor.Observer{o},
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

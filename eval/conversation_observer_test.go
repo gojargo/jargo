@@ -108,7 +108,7 @@ func TestConversationObserverTheAggregatorsTurnsReachTheConversationThroughAPipe
 	event.On(pair.Assistant().Events(), aggregators.EventAssistantTurnStopped,
 		func(context.Context, aggregators.AssistantTurnStopped) { signal(assistantDone) })
 	worker := pipeline.NewWorker(pipeline.New(pair.User(), pair.Assistant()), pipeline.WorkerConfig{
-		Observers: []pipeline.Observer{observer},
+		Observers: []processor.Observer{observer},
 	})
 	started := make(chan struct{}, 1)
 	event.On(worker.Events(), pipeline.EventPipelineStarted,

@@ -261,7 +261,7 @@ func (p *observerProxy) pushedFrames() int {
 }
 
 // OnProcessorSetup implements processor.SetupObserver.
-func (p *observerProxy) OnProcessorSetup(data processor.SetUp) { p.send(data) }
+func (p *observerProxy) OnProcessorSetup(data processor.SetupTiming) { p.send(data) }
 
 // OnProcessFrame implements processor.ProcessObserver.
 func (p *observerProxy) OnProcessFrame(data processor.FrameProcessed) { p.send(data) }
@@ -344,7 +344,7 @@ func (w *observerWorker) deliver(data any) {
 		if po, ok := w.observer.(processor.ProcessObserver); ok {
 			po.OnProcessFrame(d)
 		}
-	case processor.SetUp:
+	case processor.SetupTiming:
 		if so, ok := w.observer.(processor.SetupObserver); ok {
 			so.OnProcessorSetup(d)
 		}

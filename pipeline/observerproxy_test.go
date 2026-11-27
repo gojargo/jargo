@@ -46,7 +46,7 @@ func (o *pushRecorder) recorded() []textPush {
 }
 
 // runThroughThree sends one text frame through three processors in a row.
-func runThroughThree(t *testing.T, observers ...pipeline.Observer) []string {
+func runThroughThree(t *testing.T, observers ...processor.Observer) []string {
 	t.Helper()
 	names := []string{"first", "second", "third"}
 	procs := make([]processor.Processor, 0, len(names))

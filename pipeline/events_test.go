@@ -136,7 +136,7 @@ func TestPipelineErrorReportsBothKinds(t *testing.T) {
 // TestReachedFilterSelectsFrames checks the filter decides what the reached
 // handler hears, and that an unset filter reports nothing at all.
 func TestReachedFilterSelectsFrames(t *testing.T) {
-	collect := func(filter pipeline.FrameFilter) []frames.Frame {
+	collect := func(filter func(frames.Frame) bool) []frames.Frame {
 		var (
 			mu   sync.Mutex
 			seen []frames.Frame
@@ -577,7 +577,7 @@ func TestASlowObserverDoesNotHoldUpThePipeline(t *testing.T) {
 	arrived := make(chan struct{})
 	var once sync.Once
 	task := pipeline.NewWorker(pipeline.New(newEcho()), pipeline.WorkerConfig{
-		Observers:               []pipeline.Observer{slow},
+		Observers:               []processor.Observer{slow},
 		ReachedDownstreamFilter: pipeline.FrameTypes(&frames.TextFrame{}),
 	})
 	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, _ frames.Frame) {
@@ -646,7 +646,7 @@ func TestAnObserverFarBehindLosesNothing(t *testing.T) {
 	keeping := &slowObserver{}
 
 	task := pipeline.NewWorker(pipeline.New(newEcho()), pipeline.WorkerConfig{
-		Observers: []pipeline.Observer{stalled, keeping},
+		Observers: []processor.Observer{stalled, keeping},
 	})
 
 	done := runTask(t, task)
@@ -690,7 +690,7 @@ func TestAddObserverWhileRunning(t *testing.T) {
 func TestRemoveObserverStopsReporting(t *testing.T) {
 	watching := &slowObserver{}
 	task := pipeline.NewWorker(pipeline.New(newEcho()), pipeline.WorkerConfig{
-		Observers: []pipeline.Observer{watching},
+		Observers: []processor.Observer{watching},
 	})
 
 	done := runTask(t, task)
@@ -715,7 +715,7 @@ func TestRemoveObserverStopsReporting(t *testing.T) {
 func TestRemoveObserverAfterTheRun(t *testing.T) {
 	watching := &slowObserver{}
 	task := pipeline.NewWorker(pipeline.New(newEcho()), pipeline.WorkerConfig{
-		Observers: []pipeline.Observer{watching},
+		Observers: []processor.Observer{watching},
 	})
 
 	done := runTask(t, task)
@@ -764,7 +764,7 @@ func (o *startedObserver) counts() (starts, texts, early int) {
 func TestPipelineStartedReachesObservers(t *testing.T) {
 	watching := &startedObserver{}
 	task := pipeline.NewWorker(pipeline.New(newEcho()), pipeline.WorkerConfig{
-		Observers: []pipeline.Observer{watching},
+		Observers: []processor.Observer{watching},
 	})
 
 	done := runTask(t, task)

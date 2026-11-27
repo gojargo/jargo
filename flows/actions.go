@@ -64,7 +64,7 @@ type Watcher interface {
 	// Events is where the handler for the frames reaching the end of the
 	// pipeline is attached.
 	Events() *event.Registry
-	SetReachedDownstreamFilter(f pipeline.FrameFilter)
+	SetReachedDownstreamFilter(f func(frames.Frame) bool)
 }
 
 // actionManager registers and runs a flow's actions.

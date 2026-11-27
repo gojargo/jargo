@@ -124,7 +124,7 @@ func buildAudioBot(in, out processor.Processor) *pipeline.Worker {
 		rtviProc, in, newFakeAudioSTT(), agg.User(), newFakeLLM(), out, agg.Assistant(),
 	), pipeline.WorkerConfig{
 		// The observer reports pipeline events; the processor carries them.
-		Observers: []pipeline.Observer{rtvi.NewObserver(rtviProc)},
+		Observers: []processor.Observer{rtvi.NewObserver(rtviProc)},
 		Params: pipeline.Params{
 			AudioInSampleRate: audioRate,
 		},
@@ -144,7 +144,7 @@ func buildSpeakingBot(in, out processor.Processor) *pipeline.Worker {
 		tts.New("fakeTTS", fakeSynth{}), out, agg.Assistant(),
 	), pipeline.WorkerConfig{
 		// The observer reports pipeline events; the processor carries them.
-		Observers: []pipeline.Observer{rtvi.NewObserver(rtviProc)},
+		Observers: []processor.Observer{rtvi.NewObserver(rtviProc)},
 		Params: pipeline.Params{
 			AudioInSampleRate: audioRate,
 		},
@@ -203,7 +203,7 @@ func buildSilentBot(in, out processor.Processor) *pipeline.Worker {
 	return pipeline.NewWorker(pipeline.New(
 		rtviProc, in, newFakeAudioSTT(), agg.User(), newFakeLLM(), speech, out, agg.Assistant(),
 	), pipeline.WorkerConfig{
-		Observers: []pipeline.Observer{rtvi.NewObserver(rtviProc)},
+		Observers: []processor.Observer{rtvi.NewObserver(rtviProc)},
 		Params: pipeline.Params{
 			AudioInSampleRate: audioRate,
 		},

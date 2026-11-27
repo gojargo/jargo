@@ -117,7 +117,7 @@ func runBot(ctx context.Context, t transport.Transport, args runner.Arguments) e
 			EnableUsageMetrics: true,
 		},
 		IdleTimeout: args.Base().PipelineIdleTimeout,
-		Observers: []pipeline.Observer{
+		Observers: []processor.Observer{
 			customObserver{},
 			observers.NewLLMLog(observers.LLMLogConfig{}),
 			observers.NewDebugLog(observers.DebugLogConfig{

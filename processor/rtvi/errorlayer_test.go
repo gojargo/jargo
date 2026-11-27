@@ -54,7 +54,7 @@ func TestAnErrorTheFailoverAbsorbedIsNotSentToTheClient(t *testing.T) {
 	var mu sync.Mutex
 	var msgs []rtvi.Message
 	task := pipeline.NewWorker(pipeline.New(proc, sw, newPlayback()), pipeline.WorkerConfig{
-		Observers:               []pipeline.Observer{rtvi.NewObserver(proc)},
+		Observers:               []processor.Observer{rtvi.NewObserver(proc)},
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
 	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {

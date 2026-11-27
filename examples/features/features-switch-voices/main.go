@@ -62,17 +62,17 @@ func newSwitchVoices() (*switchVoices, error) {
 		VoiceID: "a0e99841-438c-4a64-b679-ae501e7d6091", // Barbershop Man
 	})
 
-	downstream := processor.Downstream
+	downstream := processor.WithFilterDirection(processor.Downstream)
 	parallel, err := pipeline.NewParallel(
 		// News Lady voice
-		[]processor.Processor{processor.NewFunctionFilter("NewsLadyFilter", &downstream, s.newsLadyFilter), newsLady},
+		[]processor.Processor{processor.NewFunctionFilter("NewsLadyFilter", s.newsLadyFilter, downstream), newsLady},
 		// British Reading Lady voice
 		[]processor.Processor{
-			processor.NewFunctionFilter("BritishLadyFilter", &downstream, s.britishLadyFilter), britishLady,
+			processor.NewFunctionFilter("BritishLadyFilter", s.britishLadyFilter, downstream), britishLady,
 		},
 		// Barbershop Man voice
 		[]processor.Processor{
-			processor.NewFunctionFilter("BarbershopManFilter", &downstream, s.barbershopManFilter), barbershopMan,
+			processor.NewFunctionFilter("BarbershopManFilter", s.barbershopManFilter, downstream), barbershopMan,
 		},
 	)
 	if err != nil {

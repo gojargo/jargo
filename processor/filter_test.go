@@ -22,7 +22,7 @@ type filterRig struct {
 // newFilterRig builds a filter over allow and links a recorder behind it. Every
 // frame the predicate is asked about is recorded too, because upstream consults
 // it even for frames that pass regardless.
-func newFilterRig(t *testing.T, dir *processor.Direction, allow processor.FilterFunc,
+func newFilterRig(t *testing.T, dir *processor.Direction, allow func(frames.Frame) bool,
 	opts ...processor.FilterOption,
 ) *filterRig {
 	t.Helper()
@@ -31,7 +31,10 @@ func newFilterRig(t *testing.T, dir *processor.Direction, allow processor.Filter
 		seen = append(seen, f)
 		return allow(f)
 	}
-	f := processor.NewFunctionFilter("Filter", dir, wrapped, opts...)
+	if dir != nil {
+		opts = append(opts, processor.WithFilterDirection(*dir))
+	}
+	f := processor.NewFunctionFilter("Filter", wrapped, opts...)
 	up, down := newCapture(), newCapture()
 	up.Link(f)
 	f.Link(down)

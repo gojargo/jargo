@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/gojargo/jargo/pipeline"
+	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/processor/rtvi"
 )
 
@@ -70,7 +71,7 @@ func TestWorkerKeepsTheRTVIThePipelineCarries(t *testing.T) {
 	own := rtvi.NewProcessor()
 	w := pipeline.NewWorker(pipeline.New(own, newEcho()), pipeline.WorkerConfig{
 		IdleTimeout: -1,
-		Observers:   []pipeline.Observer{rtvi.NewObserver(own)},
+		Observers:   []processor.Observer{rtvi.NewObserver(own)},
 	})
 	// Adding a second would put one in the frame path twice.
 	if w.RTVI() != own {
@@ -96,7 +97,7 @@ func TestWorkerFindsTheRTVIInsideANestedPipeline(t *testing.T) {
 	inner := pipeline.New(own, newEcho())
 	w := pipeline.NewWorker(pipeline.New(inner), pipeline.WorkerConfig{
 		IdleTimeout: -1,
-		Observers:   []pipeline.Observer{rtvi.NewObserver(own)},
+		Observers:   []processor.Observer{rtvi.NewObserver(own)},
 	})
 	if w.RTVI() != own {
 		t.Error("the worker did not find the RTVI processor nested in the pipeline")

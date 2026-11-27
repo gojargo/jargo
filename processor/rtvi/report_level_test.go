@@ -11,6 +11,7 @@ import (
 	"github.com/gojargo/jargo/event"
 	"github.com/gojargo/jargo/frames"
 	"github.com/gojargo/jargo/pipeline"
+	"github.com/gojargo/jargo/processor"
 	"github.com/gojargo/jargo/processor/rtvi"
 )
 
@@ -36,7 +37,7 @@ func observerHarness(t *testing.T, params rtvi.ObserverParams, queue ...frames.F
 	// the frames carrying the bot's output are reported from there rather than
 	// from the service that produced them.
 	task := pipeline.NewWorker(pipeline.New(proc, newPlayback()), pipeline.WorkerConfig{
-		Observers:               []pipeline.Observer{rtvi.NewObserverWithParams(proc, params)},
+		Observers:               []processor.Observer{rtvi.NewObserverWithParams(proc, params)},
 		ReachedDownstreamFilter: pipeline.AnyFrame,
 	})
 	event.On(&task.Registry, pipeline.EventFrameReachedDownstream, func(_ context.Context, f frames.Frame) {

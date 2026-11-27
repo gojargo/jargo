@@ -6,9 +6,6 @@ import (
 	"github.com/gojargo/jargo/frames"
 )
 
-// FilterFunc reports whether a frame is allowed to pass through a FunctionFilter.
-type FilterFunc func(frames.Frame) bool
-
 // FunctionFilter forwards frames, dropping those a predicate rejects. It runs in
 // direct mode, deciding on the caller's goroutine, and is the building block a
 // ServiceSwitcher uses to gate a branch on or off.
@@ -22,7 +19,7 @@ type FunctionFilter struct {
 	*Base
 	// dir is the direction the predicate decides. A nil direction decides both.
 	dir                *Direction
-	allow              FilterFunc
+	allow              func(frames.Frame) bool
 	filterSystemFrames bool
 }
 
@@ -35,11 +32,16 @@ func WithFilterSystemFrames() FilterOption {
 	return func(f *FunctionFilter) { f.filterSystemFrames = true }
 }
 
-// NewFunctionFilter builds a filter that gates frames using allow. dir is the
-// direction the predicate decides; frames traveling the other way pass through
-// untouched. A nil dir has the predicate decide both directions.
-func NewFunctionFilter(name string, dir *Direction, allow FilterFunc, opts ...FilterOption) *FunctionFilter {
-	f := &FunctionFilter{dir: dir, allow: allow}
+// WithFilterDirection has the predicate decide only frames traveling in dir;
+// frames traveling the other way pass through untouched. Without it the
+// predicate decides both directions.
+func WithFilterDirection(dir Direction) FilterOption {
+	return func(f *FunctionFilter) { f.dir = &dir }
+}
+
+// NewFunctionFilter builds a filter that forwards the frames allow accepts.
+func NewFunctionFilter(name string, allow func(frames.Frame) bool, opts ...FilterOption) *FunctionFilter {
+	f := &FunctionFilter{allow: allow}
 	for _, opt := range opts {
 		opt(f)
 	}

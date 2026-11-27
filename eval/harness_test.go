@@ -129,7 +129,7 @@ func buildFakeBot(in, out processor.Processor) *pipeline.Worker {
 		rtviProc, in, agg.User(), newFakeLLM(), out, agg.Assistant(),
 	), pipeline.WorkerConfig{
 		// The observer reports pipeline events; the processor carries them.
-		Observers: []pipeline.Observer{rtvi.NewObserver(rtviProc)},
+		Observers: []processor.Observer{rtvi.NewObserver(rtviProc)},
 	})
 }
 
@@ -142,7 +142,7 @@ func buildDTMFBot(in, out processor.Processor) *pipeline.Worker {
 	return pipeline.NewWorker(pipeline.New(
 		rtviProc, in, keys, agg.User(), newFakeLLM(), out, agg.Assistant(),
 	), pipeline.WorkerConfig{
-		Observers: []pipeline.Observer{rtvi.NewObserver(rtviProc)},
+		Observers: []processor.Observer{rtvi.NewObserver(rtviProc)},
 	})
 }
 
@@ -1180,7 +1180,7 @@ func buildMarkerBot(in, out processor.Processor) *pipeline.Worker {
 	return pipeline.NewWorker(pipeline.New(
 		rtviProc, in, agg.User(), newMarkerLLM(), out, agg.Assistant(),
 	), pipeline.WorkerConfig{
-		Observers: []pipeline.Observer{rtvi.NewObserver(rtviProc)},
+		Observers: []processor.Observer{rtvi.NewObserver(rtviProc)},
 	})
 }
 

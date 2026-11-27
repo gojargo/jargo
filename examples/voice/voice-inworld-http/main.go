@@ -84,7 +84,7 @@ func runBot(ctx context.Context, t transport.Transport, args runner.Arguments) e
 			EnableMetrics:      true,
 			EnableUsageMetrics: true,
 		},
-		Observers: []pipeline.Observer{
+		Observers: []processor.Observer{
 			observers.NewDebugLog(observers.DebugLogConfig{
 				Frames: []observers.DebugFrameFilter{{
 					Frame:    &frames.TTSTextFrame{},

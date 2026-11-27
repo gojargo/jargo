@@ -36,13 +36,14 @@ type FrameProcessed struct {
 	Timestamp time.Duration
 }
 
-// SetUp is one processor having been set up.
+// SetupTiming is the event data for one processor having been set up, handed to
+// an observer's OnProcessorSetup.
 //
 // Processors are set up concurrently and before any frame flows, so this is what
 // a timing observer measures the work a processor does to get ready by. The
 // times are wall-clock readings carrying a monotonic reading, since the pipeline
 // clock is not what these are offsets from.
-type SetUp struct {
+type SetupTiming struct {
 	// Processor is the processor that was set up.
 	Processor Processor
 	// StartedAt is when the processor's Setup began.
@@ -52,7 +53,7 @@ type SetUp struct {
 }
 
 // Duration is what the processor's Setup cost.
-func (d SetUp) Duration() time.Duration { return d.FinishedAt.Sub(d.StartedAt) }
+func (d SetupTiming) Duration() time.Duration { return d.FinishedAt.Sub(d.StartedAt) }
 
 // Observer watches frames flowing through a pipeline without modifying them, to
 // derive turn, latency or startup metrics, to log the stream, or to report
@@ -123,12 +124,12 @@ type ProcessObserver interface {
 type SetupObserver interface {
 	Observer
 	// OnProcessorSetup reports one processor having been set up.
-	OnProcessorSetup(data SetUp)
+	OnProcessorSetup(data SetupTiming)
 }
 
 // NotifyProcessorSetup reports a processor having been set up to every observer
 // listening for it. A pipeline calls it as each of its processors is set up.
-func NotifyProcessorSetup(observers []Observer, data SetUp) {
+func NotifyProcessorSetup(observers []Observer, data SetupTiming) {
 	for _, o := range observers {
 		if so, ok := o.(SetupObserver); ok {
 			so.OnProcessorSetup(data)

@@ -52,7 +52,7 @@ func TestAnObserverThatPanicsKeepsReceivingFrames(t *testing.T) {
 	o := &raising{}
 	off := false
 	w := pipeline.NewWorker(pipeline.New(p), pipeline.WorkerConfig{
-		Name: "test", IdleTimeout: -1, EnableRTVI: &off, Observers: []pipeline.Observer{o},
+		Name: "test", IdleTimeout: -1, EnableRTVI: &off, Observers: []processor.Observer{o},
 	})
 	done := make(chan struct{})
 	go func() { defer close(done); _ = w.Run(context.Background()) }()

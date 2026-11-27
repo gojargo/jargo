@@ -110,8 +110,8 @@ func TestFunctionFilterGatesDirection(t *testing.T) {
 		tf, ok := f.(*frames.TextFrame)
 		return !ok || tf.Text != "block"
 	}
-	down := processor.Downstream
-	pipe := pipeline.New(processor.NewFunctionFilter("F", &down, allow), newEcho())
+	filter := processor.NewFunctionFilter("F", allow, processor.WithFilterDirection(processor.Downstream))
+	pipe := pipeline.New(filter, newEcho())
 	task, out, stop := runCollector(t, pipe)
 	defer stop()
 

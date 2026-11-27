@@ -61,7 +61,7 @@ func echoBot(in, out processor.Processor) *pipeline.Worker {
 		rtviProc, in, agg.User(), newEchoLLM(), out, agg.Assistant(),
 	), pipeline.WorkerConfig{
 		// The observer reports pipeline events; the processor carries them.
-		Observers: []pipeline.Observer{rtvi.NewObserver(rtviProc)},
+		Observers: []processor.Observer{rtvi.NewObserver(rtviProc)},
 	})
 }
 

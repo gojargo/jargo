@@ -107,7 +107,7 @@ func setupProcessors(
 				p.PushErrorFrame(ctx, ef, true)
 			}
 			t.finish(p)
-			processor.NotifyProcessorSetup(s.Observers, processor.SetUp{
+			processor.NotifyProcessorSetup(s.Observers, processor.SetupTiming{
 				Processor:  p,
 				StartedAt:  startedAt,
 				FinishedAt: time.Now(),

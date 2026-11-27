@@ -121,10 +121,10 @@ func (r *recorder[T]) wait(t *testing.T) {
 
 // runPipeline runs a worker over procs with o watching, queues send through it,
 // then stops it and waits for the run to finish.
-func runPipeline(t *testing.T, o pipeline.Observer, procs []processor.Processor, send ...frames.Frame) {
+func runPipeline(t *testing.T, o processor.Observer, procs []processor.Processor, send ...frames.Frame) {
 	t.Helper()
 	w := pipeline.NewWorker(pipeline.New(procs...), pipeline.WorkerConfig{
-		Observers:   []pipeline.Observer{o},
+		Observers:   []processor.Observer{o},
 		IdleTimeout: -1,
 	})
 	done := make(chan error, 1)
