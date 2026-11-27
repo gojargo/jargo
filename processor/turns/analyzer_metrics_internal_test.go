@@ -70,7 +70,11 @@ func TestTurnAnalyzerVADStopWithoutAPredictionReportsNone(t *testing.T) {
 
 	spy.sendStop(s, frames.NewVADUserStartedSpeakingFrame(0.2, time.Now()))
 	spy.sendStop(s, frames.NewVADUserStoppedSpeakingFrame(0.2, time.Now()))
+	// Under the spy's mutex, as the controller cleans its strategies up: the
+	// safety net's timer runs under it too.
+	spy.mu.Lock()
 	s.Cleanup()
+	spy.mu.Unlock()
 
 	if got := spy.turnMetrics(); len(got) != 0 {
 		t.Errorf("turn metrics %+v were reported with no prediction made", got)
@@ -92,7 +96,11 @@ func TestTurnAnalyzerReportsTheAnalyzersMetrics(t *testing.T) {
 
 	spy.sendStop(s, frames.NewVADUserStartedSpeakingFrame(0.2, time.Now()))
 	spy.sendStop(s, frames.NewVADUserStoppedSpeakingFrame(0.2, time.Now()))
+	// Under the spy's mutex, as the controller cleans its strategies up: the
+	// safety net's timer runs under it too.
+	spy.mu.Lock()
 	s.Cleanup()
+	spy.mu.Unlock()
 
 	got := spy.turnMetrics()
 	if len(got) != 1 {
