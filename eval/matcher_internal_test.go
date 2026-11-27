@@ -679,7 +679,7 @@ func TestCheckFrom(t *testing.T) {
 // A criterion on the expression the bot performed is a judge's to grade, and
 // accumulates what the turn performed.
 func TestAnExpressionCheckIsJudgedAndAggregates(t *testing.T) {
-	if !slices.Contains(JudgeableEvents, EventExpression) {
+	if !slices.Contains(judgeableEvents, EventExpression) {
 		t.Fatal("expression is not judgeable")
 	}
 	judged := Expectation{Event: EventExpression, Eval: "the bot laughs"}

@@ -34,12 +34,12 @@ const (
 	kindLong     = "long"
 )
 
-// TurnCompletionQuestion is the question ClassifierStop puts to its classifier.
+// turnCompletionQuestion is the question ClassifierStop puts to its classifier.
 // The state is the user's turn so far and, when the strategy has the
 // conversation, the assistant's last message.
 //
 //nolint:gochecknoglobals // a fixed question, as the classifier is given it
-var TurnCompletionQuestion = classifier.ChoiceQuestion{
+var turnCompletionQuestion = classifier.ChoiceQuestion{
 	Instructions: "The user is talking to a voice assistant. Their words come from speech " +
 		"recognition, without punctuation, and may have been cut off. Decide whether " +
 		"the user's turn is complete. Complete means conversationally complete, not " +
@@ -53,6 +53,15 @@ var TurnCompletionQuestion = classifier.ChoiceQuestion{
 		{Name: kindLong, Description: "the user needs time to think or asked the assistant to wait, or has " +
 			"only acknowledged the question without answering it"},
 	},
+}
+
+// TurnCompletionQuestion returns the question ClassifierStop puts to its
+// classifier, for a caller that wants to ask the same one elsewhere. The copy
+// is the caller's to change.
+func TurnCompletionQuestion() classifier.ChoiceQuestion {
+	q := turnCompletionQuestion
+	q.Options = slices.Clone(q.Options)
+	return q
 }
 
 // ClassifierStopConfig configures a ClassifierStop strategy.
@@ -329,7 +338,7 @@ func (s *ClassifierStop) startClassification(text string) {
 	go func() {
 		defer cancel()
 		results, err := s.classifier.Choice(ctx, state, []classifier.Named[classifier.ChoiceQuestion]{
-			{Name: turnCompletionQuestionName, Question: TurnCompletionQuestion},
+			{Name: turnCompletionQuestionName, Question: turnCompletionQuestion},
 		})
 		if ctx.Err() != nil && !errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			// Canceled: the user spoke again, or the turn is over.

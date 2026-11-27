@@ -770,8 +770,8 @@ func TestTheFileTypesAreTheOnesGoogleReads(t *testing.T) {
 			t.Fatalf("file types %v lack %s", types, want)
 		}
 	}
-	if len(types) != len(FileTypes) {
-		t.Fatalf("file types = %v, want every one of %v", types, FileTypes)
+	if len(types) != len(supportedFileTypes) {
+		t.Fatalf("file types = %v, want every one of %v", types, supportedFileTypes)
 	}
 }
 

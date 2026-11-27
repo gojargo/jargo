@@ -327,7 +327,7 @@ func expandScenarioPaths(args []string) ([]string, error) {
 		found := len(paths)
 		for _, e := range entries {
 			path := filepath.Join(arg, e.Name())
-			if !e.IsDir() && slices.Contains(eval.ScenarioSuffixes, filepath.Ext(e.Name())) && eval.IsScenarioFile(path) {
+			if !e.IsDir() && slices.Contains(eval.ScenarioSuffixes(), filepath.Ext(e.Name())) && eval.IsScenarioFile(path) {
 				paths = append(paths, path)
 			}
 		}

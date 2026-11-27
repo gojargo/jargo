@@ -14,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -48,11 +49,11 @@ const (
 // errNoClassifier reports a detector given nothing to decide with.
 var errNoClassifier = errors.New("voicemail: a detector needs a classifier")
 
-// Question is the question put to the classifier, with the transcript so far as
-// the state.
+// voicemailQuestion is the question put to the classifier, with the transcript
+// so far as the state.
 //
 //nolint:gochecknoglobals // the question the detector asks, fixed
-var Question = classifier.ChoiceQuestion{
+var voicemailQuestion = classifier.ChoiceQuestion{
 	Instructions: "A bot has placed an outbound phone call. This is what was heard after the " +
 		"call connected. Decide whether a person answered or the call went to " +
 		"voicemail.",
@@ -71,6 +72,14 @@ var Question = classifier.ChoiceQuestion{
 				"currently closed'",
 		},
 	},
+}
+
+// Question returns the question put to the classifier. The copy is the
+// caller's to change.
+func Question() classifier.ChoiceQuestion {
+	q := voicemailQuestion
+	q.Options = slices.Clone(q.Options)
+	return q
 }
 
 // Config configures a Detector.
@@ -291,7 +300,7 @@ func (d *Detector) classify(ctx context.Context, transcript string) {
 	// Any failure is one missed answer; the silence timer must never be left
 	// waiting on a classification that will not come.
 	results, err := d.classifier.Choice(ctx, transcript,
-		[]classifier.Named[classifier.ChoiceQuestion]{{Name: questionName, Question: Question}})
+		[]classifier.Named[classifier.ChoiceQuestion]{{Name: questionName, Question: voicemailQuestion}})
 	if err != nil {
 		slog.WarnContext(ctx, "voicemail: classification failed", "detector", d.Name(), "error", err)
 		return

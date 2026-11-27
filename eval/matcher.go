@@ -171,7 +171,7 @@ func (m *ExpectationMatcher) Match(
 	if exp.Aggregates() {
 		return m.matchAggregating(ctx, exp, deadline, budgetMS, turnIdx, expIdx, since)
 	}
-	if slices.Contains(FunctionCallEvents, exp.Event) {
+	if slices.Contains(functionCallEvents, exp.Event) {
 		// A call expectation holds the set of calls the turn should make; it
 		// completes only when all are found, in any order (a response arriving
 		// does not short-circuit it).

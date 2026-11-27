@@ -654,7 +654,7 @@ func TestClassifierStrategiesNeedAClassifier(t *testing.T) {
 }
 
 func TestTheTurnCompletionQuestionHasTheThreeVerdicts(t *testing.T) {
-	got := TurnCompletionQuestion.OptionNames()
+	got := turnCompletionQuestion.OptionNames()
 	if !reflect.DeepEqual(got, []string{"complete", "short", "long"}) {
 		t.Fatalf("options = %v", got)
 	}

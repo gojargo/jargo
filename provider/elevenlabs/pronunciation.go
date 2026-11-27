@@ -6,18 +6,18 @@ import (
 	"github.com/gojargo/jargo/text"
 )
 
-// PhonemeModels are the models that read SSML <phoneme> tags. ElevenLabs' docs
+// phonemeModels are the models that read SSML <phoneme> tags. ElevenLabs' docs
 // list only eleven_flash_v2; eleven_turbo_v2 reads them too.
 //
 //nolint:gochecknoglobals // the set of models, fixed
-var PhonemeModels = map[string]struct{}{"eleven_flash_v2": {}, "eleven_turbo_v2": {}}
+var phonemeModels = map[string]struct{}{"eleven_flash_v2": {}, "eleven_turbo_v2": {}}
 
 // FormatPronunciation renders a pronunciation as ElevenLabs SSML <phoneme>
 // tags, e.g. <phoneme alphabet="ipa" ph="mɛtˈfɔɹmɪn">Metformin</phoneme>.
 //
 // A phoneme tag holds a single word, so a phrase gets one tag per word and its
 // IPA must have as many words; it reports false when they do not line up. Only
-// the models in PhonemeModels read phoneme tags.
+// eleven_flash_v2 and eleven_turbo_v2 read phoneme tags.
 func FormatPronunciation(word, ipa string) (string, bool) {
 	words := strings.Fields(word)
 	spoken := strings.Fields(text.NormalizeIPA(ipa))
@@ -43,7 +43,7 @@ var (
 
 // supportsPhonemes reports whether model reads phoneme tags.
 func supportsPhonemes(model string) bool {
-	_, ok := PhonemeModels[model]
+	_, ok := phonemeModels[model]
 	return ok
 }
 
@@ -53,7 +53,7 @@ func (s *synthesizer) FormatPronunciation(word, ipa string) (string, bool) {
 }
 
 // SupportsPronunciations implements tts.PronunciationSupporter: phoneme tags are
-// read only with a model in PhonemeModels.
+// read only by eleven_flash_v2 and eleven_turbo_v2.
 func (s *synthesizer) SupportsPronunciations() bool { return supportsPhonemes(s.cfg.Model) }
 
 // FormatPronunciation implements tts.PronunciationFormatter.
@@ -62,7 +62,7 @@ func (s *realtimeSynthesizer) FormatPronunciation(word, ipa string) (string, boo
 }
 
 // SupportsPronunciations implements tts.PronunciationSupporter: phoneme tags are
-// read only with a model in PhonemeModels, and with EnableSSMLParsing on.
+// read only by eleven_flash_v2 and eleven_turbo_v2, and with EnableSSMLParsing on.
 func (s *realtimeSynthesizer) SupportsPronunciations() bool {
 	return supportsPhonemes(s.model()) && s.cfg.EnableSSMLParsing != nil && *s.cfg.EnableSSMLParsing
 }

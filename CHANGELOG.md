@@ -222,6 +222,21 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- **BREAKING: no package-level table a caller could change under the
+  framework.** The question the classifier turn-stop strategy asks, the
+  voicemail detector's question and the eval harness's name tables were
+  exported variables the framework reads while running, so assigning to one,
+  or to an element of one, changed behaviour for every pipeline in the process.
+  Each is now a function returning a copy. The ElevenLabs phoneme model set and
+  the Decisions file type table are no longer exported:
+  `decisions.Classifier.FileTypes` lists the types.
+
+  | Before | After |
+  |---|---|
+  | `turns.TurnCompletionQuestion`, `voicemail.Question` | `turns.TurnCompletionQuestion()`, `voicemail.Question()` |
+  | `eval.CheckFrom`, `eval.FailureKinds`, `eval.FunctionCallEvents`, `eval.JudgeableEvents`, `eval.MarkerKinds`, `eval.PipelineLogCategories`, `eval.PipelineLogLabels`, `eval.ScenarioSuffixes`, `eval.SimulationEndings`, `eval.SimulationMeasures`, `eval.TurnStatuses` | the same names, called |
+  | `elevenlabs.PhonemeModels`, `decisions.FileTypes` | removed |
+
 - **BREAKING: one name for each observer type, and one shape for a frame
   predicate.** The `pipeline` package re-exported the observer types that live
   in `processor`, so each had two names. Only the `processor` ones remain.

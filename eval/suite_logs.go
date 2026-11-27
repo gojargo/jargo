@@ -101,9 +101,9 @@ func CapturePipelineLogs(ctx context.Context, logsDir, prefix, name string, enab
 		sink.mu.Lock()
 		defer sink.mu.Unlock()
 		var sections []string
-		for _, category := range PipelineLogCategories {
+		for _, category := range pipelineLogCategories {
 			if lines := sink.buffers[category]; len(lines) > 0 {
-				sections = append(sections, "===== "+PipelineLogLabels[category]+": "+name+" =====\n\n"+
+				sections = append(sections, "===== "+pipelineLogLabels[category]+": "+name+" =====\n\n"+
 					strings.Join(lines, ""))
 			}
 		}

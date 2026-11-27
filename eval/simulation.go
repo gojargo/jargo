@@ -32,10 +32,10 @@ const (
 	MeasureFunctionCalls = "function_calls"
 )
 
-// SimulationMeasures are what a measured metric can measure.
+// simulationMeasures are what a measured metric can measure.
 //
 //nolint:gochecknoglobals // fixed list, read only
-var SimulationMeasures = []string{MeasureTurns, MeasureDuration, MeasureWords, MeasureLatency, MeasureFunctionCalls}
+var simulationMeasures = []string{MeasureTurns, MeasureDuration, MeasureWords, MeasureLatency, MeasureFunctionCalls}
 
 // SimulationMetric is a quality metric: a judged criterion, or a measure with a
 // range or a call list.
@@ -314,9 +314,9 @@ func parseMetric(item map[string]any, name string, criterion, measure any, path 
 // bound.
 func parseMeasure(item map[string]any, name string, measure any, path string) (SimulationMetric, error) {
 	m, ok := measure.(string)
-	if !ok || !slices.Contains(SimulationMeasures, m) {
+	if !ok || !slices.Contains(simulationMeasures, m) {
 		return SimulationMetric{}, invalidf("%s: metric %s 'measure:' must be one of %s",
-			path, pyRepr(name), strings.Join(SimulationMeasures, ", "))
+			path, pyRepr(name), strings.Join(simulationMeasures, ", "))
 	}
 	if _, set := item["min_score"]; set {
 		return SimulationMetric{}, invalidf("%s: metric %s is measured; it takes a range, not 'min_score:'",

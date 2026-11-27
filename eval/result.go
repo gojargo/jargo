@@ -68,10 +68,10 @@ const (
 	FailureError = "error"
 )
 
-// FailureKinds are the categories of AssertionFailure.Kind.
+// failureKinds are the categories of AssertionFailure.Kind.
 //
 //nolint:gochecknoglobals // fixed list, read only
-var FailureKinds = []string{
+var failureKinds = []string{
 	FailureTimeout, FailureJudgeNo, FailureJudgeContinue, FailureNoJudge, FailureNoContent,
 	FailureTextMismatch, FailureTextPresent, FailureTextUnmatched, FailureMissingFunctionCall,
 	FailureFunctionArgsMismatch, FailureUnexpectedEvent, FailureSendAfterTimeout, FailureBotEnded,
@@ -134,10 +134,10 @@ const (
 	TurnNotRun = "not_run"
 )
 
-// TurnStatuses are the values ScriptTurnResult.Status takes.
+// turnStatuses are the values ScriptTurnResult.Status takes.
 //
 //nolint:gochecknoglobals // fixed list, read only
-var TurnStatuses = []string{TurnPassed, TurnFailed, TurnNotRun}
+var turnStatuses = []string{TurnPassed, TurnFailed, TurnNotRun}
 
 // ExpectationResult is what one expectation of a turn resolved to, pass or
 // fail.
@@ -265,10 +265,10 @@ const (
 	SimulationEndedByError = "error"
 )
 
-// SimulationEndings are the values SimulationResult.EndedBy takes.
+// simulationEndings are the values SimulationResult.EndedBy takes.
 //
 //nolint:gochecknoglobals // fixed list, read only
-var SimulationEndings = []string{
+var simulationEndings = []string{
 	SimulationEndedByEndCall, SimulationEndedByBot, SimulationEndedByMaxTurns,
 	SimulationEndedByMaxDuration, SimulationEndedBySilence, SimulationEndedByError,
 }

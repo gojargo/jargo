@@ -31,11 +31,11 @@ const audioSampleRate = 16000
 // errNoKeyOrClient reports a classifier given neither an API key nor a client.
 var errNoKeyOrClient = errors.New("decisions: a classifier needs an API key or a client")
 
-// FileTypes is every file type the Decisions API reads, by MIME type, and the
+// supportedFileTypes is every file type the Decisions API reads, by MIME type, and the
 // content block it goes in.
 //
 //nolint:gochecknoglobals // a fixed table of what the API reads
-var FileTypes = fileTypes()
+var supportedFileTypes = fileTypes()
 
 func fileTypes() map[string]string {
 	types := map[string]string{"application/pdf": "document"}
@@ -79,7 +79,7 @@ type Config struct {
 // closed in Cleanup; a shared one is left to whoever made it.
 //
 // The Decisions API sees images, hears clips of audio, sent as 16 kHz WAV, and
-// reads files of the types in FileTypes: PDFs, videos, and images and audio in
+// reads files of the types Classifier.FileTypes lists: PDFs, videos, and images and audio in
 // other formats, as bytes or by URL. The inputs follow the state in the order
 // they're given.
 //
@@ -124,7 +124,7 @@ func (c *Classifier) AudioSampleRate() int { return audioSampleRate }
 
 // FileTypes is the file types the Decisions API reads: PDFs, videos, and
 // images and audio in many formats.
-func (c *Classifier) FileTypes() []string { return slices.Sorted(maps.Keys(FileTypes)) }
+func (c *Classifier) FileTypes() []string { return slices.Sorted(maps.Keys(supportedFileTypes)) }
 
 // Setup opens the connection to Google ahead of the first question. A
 // connection that cannot be opened now is only a warning: the first question
@@ -222,7 +222,10 @@ func contentBlock(input classifier.Input) (ordered.Object, error) {
 			{Key: keyMimeType, Value: "audio/wav"},
 		}, nil
 	case classifier.File:
-		block := ordered.Object{{Key: keyType, Value: FileTypes[in.ContentType]}, {Key: keyMimeType, Value: in.ContentType}}
+		block := ordered.Object{
+			{Key: keyType, Value: supportedFileTypes[in.ContentType]},
+			{Key: keyMimeType, Value: in.ContentType},
+		}
 		if in.Data != nil {
 			block.Set(keyData, base64.StdEncoding.EncodeToString(in.Data))
 		} else {

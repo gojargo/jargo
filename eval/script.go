@@ -124,25 +124,25 @@ const (
 //
 //nolint:gochecknoglobals // fixed lookup tables, read only
 var (
-	// JudgeableEvents are the events whose payloads carry bot-generated text a
+	// judgeableEvents are the events whose payloads carry bot-generated text a
 	// judge can sensibly evaluate, including the expression the bot's TTS
 	// performed. An eval: on anything else but a function call (a user
 	// transcript, an interruption signal) draws a warning when the scenario is
 	// loaded: the test controls the user's input, so judging it costs a round
 	// trip and tells you nothing. response is the modality-agnostic name,
 	// resolved to one of the others when the scenario is loaded.
-	JudgeableEvents = []string{EventExpression, EventLLMResponse, EventResponse, EventTTSResponse}
-	// FunctionCallEvents are the events carrying a function call, matched by
+	judgeableEvents = []string{EventExpression, EventLLMResponse, EventResponse, EventTTSResponse}
+	// functionCallEvents are the events carrying a function call, matched by
 	// name and arguments rather than by text: function_call when one starts,
 	// function_call_stopped when it ends.
-	FunctionCallEvents = []string{EventFunctionCall, EventFunctionCallStopped}
-	// MarkerKinds are what a marker: may name on an llm_marker expectation.
+	functionCallEvents = []string{EventFunctionCall, EventFunctionCallStopped}
+	// markerKinds are what a marker: may name on an llm_marker expectation.
 	// The first three are the kinds the turn-completion markers carry;
 	// incomplete accepts short or long; silent is the LLM service's kind for a
 	// reply it dropped as its silent mark.
-	MarkerKinds = []string{MarkerComplete, MarkerShort, MarkerLong, MarkerIncomplete, MarkerSilent}
-	// CheckFrom are the values check_from: may take.
-	CheckFrom = []string{CheckFromPrevious, CheckFromTurnStart}
+	markerKinds = []string{MarkerComplete, MarkerShort, MarkerLong, MarkerIncomplete, MarkerSilent}
+	// checkFromSources are the values check_from: may take.
+	checkFromSources = []string{CheckFromPrevious, CheckFromTurnStart}
 	// vadEvents are the raw VAD speaking events, which the bot reports only when
 	// asked to.
 	vadEvents = []string{EventVADUserStartedSpeaking, EventVADUserStoppedSpeaking}
@@ -388,7 +388,7 @@ func (s *ScriptScenario) RequiredReportLevel() rtvi.FunctionCallReportLevel {
 	needsName := false
 	for _, turn := range s.Turns {
 		for _, exp := range turn.Expect {
-			if !slices.Contains(FunctionCallEvents, exp.Event) {
+			if !slices.Contains(functionCallEvents, exp.Event) {
 				continue
 			}
 			if exp.Eval != "" {
@@ -887,10 +887,10 @@ func parseEval(e map[string]any, event, where string) (*bool, error) {
 		return nil, invalidf("%s: 'eval:' on 'function_call_stopped': a stopped call carries "+
 			"no arguments to judge; put the 'eval:' on the 'function_call' instead", where)
 	}
-	if hasCriterion && !slices.Contains(JudgeableEvents, event) && event != EventFunctionCall {
+	if hasCriterion && !slices.Contains(judgeableEvents, event) && event != EventFunctionCall {
 		slog.Warn(fmt.Sprintf("%s: 'eval:' on event %s; a judge only makes sense on bot-generated text "+
 			"events (%s) and 'function_call'. Will run but is unlikely to be meaningful.",
-			where, pyRepr(event), strings.Join(JudgeableEvents, ", ")))
+			where, pyRepr(event), strings.Join(judgeableEvents, ", ")))
 	}
 
 	v := e["allow_continue"]
@@ -921,9 +921,9 @@ func parseAbsentAndCheckFrom(e map[string]any, where string) (bool, string, erro
 	v, hasCheckFrom := e["check_from"]
 	if hasCheckFrom {
 		s, ok := v.(string)
-		if !ok || !slices.Contains(CheckFrom, s) {
+		if !ok || !slices.Contains(checkFromSources, s) {
 			return false, "", invalidf("%s 'check_from:' must be one of %s, not %s",
-				where, strings.Join(CheckFrom, ", "), pyRepr(v))
+				where, strings.Join(checkFromSources, ", "), pyRepr(v))
 		}
 		checkFrom = s
 	}
@@ -965,8 +965,8 @@ func parseMarkerChecks(e map[string]any, exp *Expectation, where string) error {
 	}
 	if v := e[keyMarker]; v != nil {
 		s, ok := v.(string)
-		if !ok || !slices.Contains(MarkerKinds, s) {
-			return invalidf("%s 'marker:' must be one of %s, not %s", where, strings.Join(MarkerKinds, ", "), pyRepr(v))
+		if !ok || !slices.Contains(markerKinds, s) {
+			return invalidf("%s 'marker:' must be one of %s, not %s", where, strings.Join(markerKinds, ", "), pyRepr(v))
 		}
 		exp.Marker = s
 	}
@@ -1079,7 +1079,7 @@ func parseTextChecks(e map[string]any, exp *Expectation, where string) error {
 // name:/args: shorthand, or nothing, which matches any one call. Nil for other
 // events.
 func parseFunctionCalls(e map[string]any, event, where string) ([]FunctionCall, error) {
-	if !slices.Contains(FunctionCallEvents, event) {
+	if !slices.Contains(functionCallEvents, event) {
 		return nil, nil
 	}
 	rawCalls := e["calls"]

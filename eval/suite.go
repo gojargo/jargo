@@ -182,25 +182,25 @@ var (
 	errHarnessTimeout = errors.New("harness worker timed out")
 )
 
-// ScenarioSuffixes are what a scenario file may be named, wherever one is
+// scenarioSuffixes are what a scenario file may be named, wherever one is
 // looked for.
 //
 //nolint:gochecknoglobals // fixed set, read only
-var ScenarioSuffixes = []string{".yaml", ".yml"}
+var scenarioSuffixes = []string{".yaml", ".yml"}
 
-// PipelineLogCategories are the log categories, in the order a run's debug log
+// pipelineLogCategories are the log categories, in the order a run's debug log
 // lists them.
 //
 //nolint:gochecknoglobals // fixed set, read only
-var PipelineLogCategories = []string{
+var pipelineLogCategories = []string{
 	PipelineSpeech, PipelineTranscription, PipelineJudge, PipelinePersona, PipelineHarness,
 }
 
-// PipelineLogLabels are the human headings of each category's section in a
+// pipelineLogLabels are the human headings of each category's section in a
 // run's debug log.
 //
 //nolint:gochecknoglobals // fixed set, read only
-var PipelineLogLabels = map[string]string{
+var pipelineLogLabels = map[string]string{
 	PipelineSpeech:        "user speech logs",
 	PipelineTranscription: "bot speech transcription logs",
 	PipelineJudge:         "judge logs",
@@ -764,7 +764,7 @@ func parseRunnerBody(spec any, base, where string) (runnerBody, error) {
 // a file under defaultDir, folder allowed (scripted/greeting). The display
 // name is the bare stem either way.
 func resolveScenario(name, base, defaultDir string) (string, string, error) {
-	if slices.ContainsFunc(ScenarioSuffixes, func(suffix string) bool { return strings.HasSuffix(name, suffix) }) {
+	if slices.ContainsFunc(scenarioSuffixes, func(suffix string) bool { return strings.HasSuffix(name, suffix) }) {
 		path, err := absAgainst(base, name)
 		return strings.TrimSuffix(filepath.Base(name), filepath.Ext(name)), path, err
 	}
